@@ -1,0 +1,106 @@
+import { Injectable } from '@nestjs/common';
+import { Runner, user, assistant, type AgentInputItem } from '@openai/agents';
+import { getRealEstateAgent, type Channel, type TacksharpAgentContext, type Toolset } from 'ai/agents/real-estate-agent.js';
+import { errorMessage, log } from '../common/logger.js';
+import type { SessionMessage } from '../conversation/session.js';
+
+/**
+ * Measurement for one AI turn: how many OpenAI requests, tokens, and how much of the time was
+ * our own tool code rather than the model.
+ */
+export type AiUsageMetrics = {
+  requests?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  perRequest?: Array<{ endpoint?: string; inputTokens: number; outputTokens: number }>;
+  toolCalls?: Array<{ name: string; ms: number }>;
+  toolMs?: number;
+  pureAiMs?: number;
+  firstToolCallMs?: number;
+};
+
+export type LlmRun = {
+  text: string;
+  failed: boolean;
+  aborted: boolean;
+  error?: string;
+  usage: AiUsageMetrics;
+};
+
+const AI_TIMEOUT_MS: Record<Channel, number> = { whatsapp: 45_000, voice: 15_000, web: 45_000 };
+
+/** Thin wrapper around the OpenAI Agents SDK so the engine (and tests) deal with one small interface. */
+@Injectable()
+export class LlmRunner {
+  async run(args: {
+    channel: Channel;
+    toolset: Toolset;
+    context: TacksharpAgentContext;
+    history: SessionMessage[];
+    message: string;
+    maxTurns?: number;
+  }): Promise<LlmRun> {
+    const { channel, context } = args;
+    const items: AgentInputItem[] = args.history.map((m) => (m.role === 'user' ? user(m.content) : assistant(m.content)));
+    items.push(user(args.message));
+
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), AI_TIMEOUT_MS[channel]);
+
+    // One Runner per call, so concurrent calls never mix up each other's timings.
+    const runner = new Runner();
+    const toolStarts = new Map<string, { name: string; startedAt: number }>();
+    const toolCalls: Array<{ name: string; ms: number }> = [];
+    const key = (toolCall: unknown): string => {
+      const t = toolCall as Record<string, unknown>;
+      return typeof t.callId === 'string' ? t.callId : typeof t.id === 'string' ? t.id : 'unknown';
+    };
+    runner.on('agent_tool_start', (_c, _a, tool, details) => {
+      toolStarts.set(key(details.toolCall), { name: tool.name, startedAt: Date.now() });
+    });
+    runner.on('agent_tool_end', (_c, _a, tool, _r, details) => {
+      const started = toolStarts.get(key(details.toolCall));
+      if (started) toolCalls.push({ name: tool.name, ms: Date.now() - started.startedAt });
+    });
+
+    const startedAt = Date.now();
+    let text = '';
+    let failed = false;
+    let error: string | undefined;
+    let usage: { requests?: number; inputTokens?: number; outputTokens?: number; requestUsageEntries?: Array<{ endpoint?: string; inputTokens: number; outputTokens: number }> } | undefined;
+    try {
+      const result = await runner.run(getRealEstateAgent(channel, args.toolset), items, {
+        context,
+        maxTurns: args.maxTurns ?? 4,
+        signal: abort.signal,
+      });
+      text = String(result.finalOutput ?? '').trim();
+      usage = result.runContext?.usage;
+    } catch (e) {
+      failed = true;
+      error = errorMessage(e);
+      log.error('ai.run_failed', { channel, error, aborted: abort.signal.aborted });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const agentMs = Date.now() - startedAt;
+    const toolMs = toolCalls.reduce((s, c) => s + c.ms, 0);
+    return {
+      text,
+      failed,
+      aborted: abort.signal.aborted,
+      error,
+      usage: {
+        requests: usage?.requests,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        perRequest: usage?.requestUsageEntries?.map((r) => ({ endpoint: r.endpoint, inputTokens: r.inputTokens, outputTokens: r.outputTokens })),
+        toolCalls,
+        toolMs,
+        pureAiMs: Math.max(0, agentMs - toolMs),
+        firstToolCallMs: toolStarts.size ? Math.min(...[...toolStarts.values()].map((v) => v.startedAt)) - startedAt : undefined,
+      },
+    };
+  }
+}

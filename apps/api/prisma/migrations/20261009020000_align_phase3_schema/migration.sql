@@ -1,0 +1,4 @@
+-- Phase 3 schema alignment.
+-- The schema changes were already applied to tacksharp_phase3
+-- before migration execution stopped on the existing Property FK.
+-- This migration intentionally contains no SQL.

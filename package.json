@@ -1,0 +1,41 @@
+{
+  "name": "tacksharp",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "npm install && npm run db:generate && npm run build:ai",
+    "build:ai": "npm run build -w packages/ai",
+    "dev": "npm run build:ai && npm run start:dev -w apps/api",
+    "build": "npm run build:ai && npm run build -w apps/api && npm run build -w apps/web",
+    "start": "npm run start:prod -w apps/api",
+    "db:generate": "npm run db:generate -w apps/api",
+    "db:push": "npm run db:push -w apps/api",
+    "seed": "npm run seed -w apps/api",
+    "fix:phones": "npm run fix:phones -w apps/api",
+    "typecheck": "npm run build:ai && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "test": "npm test -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build:web": "npm run build -w apps/web",
+    "start:web": "npm run start -w apps/web",
+    "seed:demo": "npm run seed:demo -w apps/api",
+    "db:migrate:deploy": "npm run db:migrate:deploy -w apps/api",
+    "db:baseline": "npm run db:baseline -w apps/api",
+    "user:create": "npm run user:create -w apps/api --",
+    "verify:live": "npm run verify:live -w apps/api --"
+  },
+  "allowScripts": {
+    "prisma": true,
+    "@prisma/engines": true,
+    "esbuild@0.28.2": true,
+    "msgpackr-extract@3.0.4": true
+  },
+  "devDependencies": {
+    "prisma": "^7.10.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.10.0"
+  }
+}

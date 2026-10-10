@@ -1,0 +1,50 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/
+
+# Prisma
+*.db
+*.db-journal
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Runtime
+*.pid
+dump.rdb
+*.backup-*
+*.bak-*
+*.patch
+*.zip
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
