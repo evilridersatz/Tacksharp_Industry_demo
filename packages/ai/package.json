@@ -7,7 +7,8 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./agents/real-estate-agent.js": "./dist/agents/real-estate-agent.js"
+    "./agents/real-estate-agent.js": "./dist/agents/real-estate-agent.js",
+    "./agents/restaurant-agent.js": "./dist/agents/restaurant-agent.js"
   },
   "scripts": {
     "build": "tsc",

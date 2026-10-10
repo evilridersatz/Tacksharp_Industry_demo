@@ -9,6 +9,8 @@ datasource db {
 model Organization {
   id           String         @id @default(cuid())
   name         String
+  /// real_estate | restaurant. Decides which conversation engine and dashboard the tenant gets.
+  vertical     String         @default("real_estate")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   calls        Call[]
@@ -22,6 +24,11 @@ model Organization {
   SiteVisit    SiteVisit[]
   channels     OrganizationChannel[]
   settings     OrganizationSettings?
+  outlets        Outlet[]
+  menuCategories MenuCategory[]
+  menuItems      MenuItem[]
+  orders         Order[]
+  orderEvents    OrderEvent[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -97,6 +104,7 @@ model Customer {
   followUps      FollowUp[]
   leads          Lead[]
   SiteVisit      SiteVisit[]
+  orders         Order[]
 
   @@unique([organizationId, phone])
   @@index([organizationId])
@@ -276,4 +284,163 @@ model User {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Restaurant vertical (GR Chicken). Prices, availability and totals live here and are only ever
+// computed by the server; the language model never sets them.
+// ---------------------------------------------------------------------------------------------
+
+/// A restaurant outlet that accepts orders.
+model Outlet {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  name               String
+  address            String       @db.Text
+  area               String?
+  phone              String?
+  /// Areas (lower-case names) this outlet delivers to. Empty = pickup only.
+  serviceAreas       Json
+  /// IST "HH:mm".
+  opensAt            String       @default("11:00")
+  closesAt           String       @default("23:00")
+  acceptsPickup      Boolean      @default(true)
+  acceptsDelivery    Boolean      @default(false)
+  deliveryFee        Decimal      @default(0) @db.Decimal(10, 2)
+  minOrderValue      Decimal      @default(0) @db.Decimal(10, 2)
+  /// Accept orders outside opening hours (for testing a demo tenant). Staff still confirm every order.
+  acceptOutsideHours Boolean      @default(false)
+  active             Boolean      @default(true)
+  /// True for placeholder data that has NOT been verified with the client.
+  isDemo             Boolean      @default(false)
+  sortOrder          Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders             Order[]
+
+  @@index([organizationId])
+}
+
+model MenuCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items          MenuItem[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model MenuItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  categoryId     String
+  name           String
+  description    String?      @db.Text
+  price          Decimal      @db.Decimal(10, 2)
+  isVeg          Boolean      @default(false)
+  available      Boolean      @default(true)
+  imageUrl       String?      @db.Text
+  /// Comma-separated other names customers use ("65, chicken sixty five").
+  aliases        String?      @db.Text
+  isDemo         Boolean      @default(false)
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems     OrderItem[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([organizationId, available])
+  @@index([categoryId])
+}
+
+/// A customer order. Created only after the customer explicitly confirmed the server-computed total.
+model Order {
+  id              String       @id @default(cuid())
+  organizationId  String
+  /// Short reference shown to the customer and staff, e.g. GR-7K2Q9X.
+  orderNumber     String
+  customerId      String
+  conversationId  String?
+  outletId        String
+  channel         String
+  /// pickup | delivery
+  fulfilment      String
+  deliveryAddress String?      @db.Text
+  deliveryArea    String?
+  /// pending | confirmed | preparing | ready | out_for_delivery | completed | cancelled
+  status          String       @default("pending")
+  subtotal        Decimal      @db.Decimal(10, 2)
+  deliveryFee     Decimal      @default(0) @db.Decimal(10, 2)
+  total           Decimal      @db.Decimal(10, 2)
+  /// cash_on_delivery | pay_at_outlet. No online payment is integrated.
+  paymentMethod   String
+  /// unpaid | paid. Only staff can mark an order paid.
+  paymentStatus   String       @default("unpaid")
+  /// not_integrated = the order lives only in Tacksharp; staff enter it into the outlet's POS.
+  posStatus       String       @default("not_integrated")
+  /// Same confirmation retried (webhook retry, double tap) -> the same order, never a second one.
+  idempotencyKey  String
+  customerName    String?
+  customerPhone   String?
+  notes           String?      @db.Text
+  isDemo          Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer        Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  outlet          Outlet       @relation(fields: [outletId], references: [id], onDelete: Restrict)
+  items           OrderItem[]
+  events          OrderEvent[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, orderNumber])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([outletId])
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  menuItemId String
+  /// Name and price as charged (snapshot), so later menu edits never change a placed order.
+  name       String
+  unitPrice  Decimal  @db.Decimal(10, 2)
+  quantity   Int
+  lineTotal  Decimal  @db.Decimal(10, 2)
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([menuItemId])
+}
+
+/// Audit trail: order created, status changes, payment changes, who did it.
+model OrderEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  orderId        String
+  /// created | status_changed | payment_changed | note
+  type           String
+  fromStatus     String?
+  toStatus       String?
+  /// "ai" | "system" | "user:<id>"
+  actor          String
+  note           String?      @db.Text
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([organizationId, createdAt])
 }

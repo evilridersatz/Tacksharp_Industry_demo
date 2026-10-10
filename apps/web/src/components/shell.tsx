@@ -17,20 +17,53 @@ import {
   Phone,
   Search,
   Settings,
+  ShoppingBag,
+  UtensilsCrossed,
+  Users,
+  Megaphone,
+  PlugZap,
   X,
 } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
+import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
 import { cx } from './ui';
 
-const NAV = [
+type Badges = { live?: number; handoff?: number; orders?: number };
+type NavGroup = { section: string; items: Array<{ href: string; label: string; icon: typeof LayoutDashboard; badge?: keyof Badges }> };
+
+/** Restaurant tenants (GR Chicken): orders-first navigation. */
+const RESTAURANT_NAV: NavGroup[] = [
+  {
+    section: 'Main',
+    items: [
+      { href: '/', label: 'Overview', icon: LayoutDashboard },
+      { href: '/orders', label: 'Live orders', icon: ShoppingBag, badge: 'orders' },
+      { href: '/conversations', label: 'AI conversations', icon: MessageSquare, badge: 'handoff' },
+      { href: '/customers', label: 'Customers', icon: Users },
+    ],
+  },
+  {
+    section: 'Store',
+    items: [
+      { href: '/menu', label: 'Menu', icon: UtensilsCrossed },
+      { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+    ],
+  },
+  {
+    section: 'Setup',
+    items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }],
+  },
+];
+
+const NAV: NavGroup[] = [
   {
     section: 'Main',
     items: [
       { href: '/', label: 'Dashboard', icon: LayoutDashboard },
       { href: '/leads', label: 'Leads & CRM', icon: Columns3 },
       { href: '/conversations', label: 'Conversations', icon: MessageSquare },
-      { href: '/calls', label: 'Voice calls', icon: Phone, badge: 'live' as const },
+      { href: '/calls', label: 'Voice calls', icon: Phone, badge: 'live' },
       { href: '/performance', label: 'Performance & ROI', icon: BarChart3 },
     ],
   },
@@ -39,7 +72,7 @@ const NAV = [
     items: [
       { href: '/follow-ups', label: 'Follow-ups', icon: ListChecks },
       { href: '/site-visits', label: 'Site visits', icon: CalendarCheck },
-      { href: '/handoffs', label: 'Human handoff', icon: Headset, badge: 'handoff' as const },
+      { href: '/handoffs', label: 'Human handoff', icon: Headset, badge: 'handoff' },
     ],
   },
   {
@@ -62,18 +95,17 @@ function Logo() {
   );
 }
 
-function NavList({ summary, onNavigate }: { summary: Summary | null; onNavigate?: () => void }) {
+function NavList({ nav, badges, onNavigate }: { nav: NavGroup[]; badges: Badges; onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <nav aria-label="Main" className="mt-6 flex flex-col gap-5">
-      {NAV.map((group) => (
+      {nav.map((group) => (
         <div key={group.section}>
           <p className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{group.section}</p>
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => {
               const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
-              const count =
-                item.badge === 'handoff' ? summary?.humanTasksOpen : item.badge === 'live' ? summary?.voice.live : undefined;
+              const count = item.badge ? badges[item.badge] : undefined;
               const Icon = item.icon;
               return (
                 <li key={item.href}>
@@ -92,7 +124,7 @@ function NavList({ summary, onNavigate }: { summary: Summary | null; onNavigate?
                       <span
                         className={cx(
                           'min-w-6 rounded-full px-1.5 py-0.5 text-center text-[11px] font-bold text-white',
-                          item.badge === 'handoff' ? 'bg-rose' : 'bg-violet',
+                          item.badge === 'handoff' ? 'bg-rose' : item.badge === 'orders' ? 'bg-amber' : 'bg-violet',
                         )}
                       >
                         {item.badge === 'live' ? `${count} live` : count}
@@ -131,10 +163,11 @@ function AutomationCard({ summary }: { summary: Summary | null }) {
 }
 
 function UserCard() {
-  const { data: me } = useApi<{ name: string | null; email: string; role: string; organizationName: string }>('/auth/me', 0);
+  const me = useMe();
   const name = me?.name ?? me?.email ?? '…';
   async function logout() {
     await api.post('/auth/logout').catch(() => undefined);
+    forgetMe();
     window.location.href = '/login';
   }
   return (
@@ -155,20 +188,27 @@ function UserCard() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  if (pathname === '/login') return <>{children}</>;
+  // Login and the public website chat have no dashboard chrome (and need no login).
+  if (pathname === '/login' || pathname.startsWith('/chat/')) return <>{children}</>;
   return <Shell>{children}</Shell>;
 }
 
 function Shell({ children }: { children: ReactNode }) {
-  const { data: summary } = useApi<Summary>('/dashboard/summary?days=7', 15_000);
+  const me = useMe();
+  const restaurant = me?.vertical === 'restaurant';
+  const { data: summary } = useApi<Summary>(me && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
+  const { data: overview } = useApi<Overview>(restaurant ? '/restaurant/overview?days=1' : null, 15_000);
   const [open, setOpen] = useState(false);
+  const badges: Badges = restaurant
+    ? { orders: overview?.orders.byStatus.pending, handoff: overview?.handoffsOpen }
+    : { live: summary?.voice.live, handoff: summary?.humanTasksOpen };
 
   const sidebar = (onNavigate?: () => void) => (
     <div className="flex h-full flex-col bg-sidebar px-3 py-5">
       <Logo />
-      <NavList summary={summary} onNavigate={onNavigate} />
+      {me && <NavList nav={restaurant ? RESTAURANT_NAV : NAV} badges={badges} onNavigate={onNavigate} />}
       <div className="mt-auto flex flex-col gap-4 pt-6">
-        <AutomationCard summary={summary} />
+        {me && !restaurant && <AutomationCard summary={summary} />}
         <UserCard />
       </div>
     </div>
@@ -203,7 +243,11 @@ function Shell({ children }: { children: ReactNode }) {
 
 export function PageHeader({ title, crumb, actions }: { title: string; crumb?: string; actions?: ReactNode }) {
   const router = useRouter();
-  const { data: summary } = useApi<Summary>('/dashboard/summary?days=7', 15_000);
+  const me = useMe();
+  const restaurant = me?.vertical === 'restaurant';
+  const { data: summary } = useApi<Summary>(me && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
+  const { data: overview } = useApi<Overview>(restaurant ? '/restaurant/overview?days=1' : null, 15_000);
+  const waiting = restaurant ? overview?.handoffsOpen ?? 0 : summary?.humanTasksOpen ?? 0;
   const [q, setQ] = useState('');
   return (
     <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
@@ -216,7 +260,7 @@ export function PageHeader({ title, crumb, actions }: { title: string; crumb?: s
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
-            router.push(`/leads?q=${encodeURIComponent(q)}`);
+            router.push(`${restaurant ? '/orders' : '/leads'}?q=${encodeURIComponent(q)}`);
           }}
           className="relative"
         >
@@ -224,18 +268,18 @@ export function PageHeader({ title, crumb, actions }: { title: string; crumb?: s
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search leads…"
-            aria-label="Search leads"
+            placeholder={restaurant ? 'Search orders…' : 'Search leads…'}
+            aria-label={restaurant ? 'Search orders' : 'Search leads'}
             className="h-9 w-[220px] rounded-[10px] border border-line bg-white pr-3 pl-9 text-[13px] text-ink placeholder:text-faint"
           />
         </form>
         <Link
-          href="/handoffs"
-          aria-label={`${summary?.humanTasksOpen ?? 0} customers waiting for your team`}
+          href={restaurant ? '/conversations?status=human_handoff' : '/handoffs'}
+          aria-label={`${waiting} customers waiting for your team`}
           className="relative grid size-9 place-items-center rounded-[10px] border border-line bg-white text-body hover:bg-slate-50"
         >
           <Bell className="size-4" />
-          {!!summary?.humanTasksOpen && <span className="absolute top-2 right-2 size-2 rounded-full bg-rose ring-2 ring-white" />}
+          {!!waiting && <span className="absolute top-2 right-2 size-2 rounded-full bg-rose ring-2 ring-white" />}
         </Link>
         {actions}
       </div>

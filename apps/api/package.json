@@ -23,7 +23,8 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:baseline": "bash scripts/db-baseline.sh",
-    "verify:live": "tsx scripts/verify-live.ts"
+    "verify:live": "tsx scripts/verify-live.ts",
+    "seed:gr-chicken": "tsx scripts/seed-gr-chicken.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

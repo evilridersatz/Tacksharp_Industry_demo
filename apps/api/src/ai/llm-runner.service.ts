@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Runner, user, assistant, type AgentInputItem } from '@openai/agents';
+import { Runner, user, assistant, type Agent, type AgentInputItem } from '@openai/agents';
 import { getRealEstateAgent, type Channel, type TacksharpAgentContext, type Toolset } from 'ai/agents/real-estate-agent.js';
 import { errorMessage, log } from '../common/logger.js';
 import type { SessionMessage } from '../conversation/session.js';
@@ -36,9 +36,11 @@ export class LlmRunner {
     channel: Channel;
     toolset: Toolset;
     context: TacksharpAgentContext;
-    history: SessionMessage[];
+    history: Array<Pick<SessionMessage, 'role' | 'content'>>;
     message: string;
     maxTurns?: number;
+    /** Another vertical's agent (e.g. restaurant). Default: the real-estate agent for this channel and toolset. */
+    agent?: Agent<any>;
   }): Promise<LlmRun> {
     const { channel, context } = args;
     const items: AgentInputItem[] = args.history.map((m) => (m.role === 'user' ? user(m.content) : assistant(m.content)));
@@ -69,7 +71,7 @@ export class LlmRunner {
     let error: string | undefined;
     let usage: { requests?: number; inputTokens?: number; outputTokens?: number; requestUsageEntries?: Array<{ endpoint?: string; inputTokens: number; outputTokens: number }> } | undefined;
     try {
-      const result = await runner.run(getRealEstateAgent(channel, args.toolset), items, {
+      const result = await runner.run(args.agent ?? getRealEstateAgent(channel, args.toolset), items, {
         context,
         maxTurns: args.maxTurns ?? 4,
         signal: abort.signal,

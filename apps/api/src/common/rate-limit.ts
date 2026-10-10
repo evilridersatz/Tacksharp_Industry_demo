@@ -23,6 +23,8 @@ export function createRateLimiter(now: () => number = Date.now) {
     if (path.startsWith('/webhooks/') || /^\/voice\/(answer|inbound|turn|hangup|audio\/)/.test(path)) {
       return { name: 'webhook', limit: config.rateLimit.webhookPerMinute, windowMs: 60_000 };
     }
+    // Public website chat: per-IP limit so the open endpoint cannot be used to burn model credits.
+    if (path.startsWith('/public/chat')) return { name: 'public_chat', limit: config.rateLimit.publicChatPerMinute, windowMs: 60_000 };
     if (path === '/health') return { name: 'health', limit: 120, windowMs: 60_000 };
     return { name: 'api', limit: config.rateLimit.apiPerMinute, windowMs: 60_000 };
   }

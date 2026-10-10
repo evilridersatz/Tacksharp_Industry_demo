@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { Bot, Headset, MessageSquare, Phone, Search } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import type { Conversation, Message } from '@/lib/types';
@@ -9,10 +9,25 @@ import { LEAD_STATUS, dateTime, displayName, formatPhone, languageLabel, require
 import { PageHeader } from '@/components/shell';
 import { Avatar, Badge, Button, Card, Empty, ErrorBanner, Field, Segmented, Skeleton, cx } from '@/components/ui';
 import { Thread, Transcript } from '@/components/conversation';
+import { useMe } from '@/lib/restaurant';
+import { RestaurantConversations } from '@/components/restaurant/conversations';
 
 type Channel = 'all' | 'whatsapp' | 'voice';
 
 export default function ConversationsPage() {
+  const me = useMe();
+  if (!me) return <Skeleton className="h-[640px] rounded-[14px]" />;
+  if (me.vertical === 'restaurant') {
+    return (
+      <Suspense>
+        <RestaurantConversations />
+      </Suspense>
+    );
+  }
+  return <RealEstateConversations />;
+}
+
+function RealEstateConversations() {
   const [channel, setChannel] = useState<Channel>('all');
   const [q, setQ] = useState('');
   const [selected, setSelected] = useState<string | null>(null);

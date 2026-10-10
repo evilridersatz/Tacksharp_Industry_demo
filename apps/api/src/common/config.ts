@@ -54,6 +54,7 @@ export const config = {
     loginPerWindow: num('RATE_LIMIT_LOGIN', 10),
     apiPerMinute: num('RATE_LIMIT_API_PER_MIN', 300),
     webhookPerMinute: num('RATE_LIMIT_WEBHOOK_PER_MIN', 1200),
+    publicChatPerMinute: num('RATE_LIMIT_PUBLIC_CHAT_PER_MIN', 40),
   },
 
   /** Run BullMQ workers inside the API process (simplest for local + single Lightsail box). */

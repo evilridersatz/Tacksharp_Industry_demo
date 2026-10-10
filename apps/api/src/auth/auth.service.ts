@@ -29,7 +29,7 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { organization: true } });
     if (!user) throw new UnauthorizedException();
-    return { ...publicUser(user), organizationName: user.organization.name };
+    return { ...publicUser(user), organizationName: user.organization.name, vertical: user.organization.vertical };
   }
 
   async createUser(input: { organizationId: string; email: string; password: string; name?: string; role?: string }) {

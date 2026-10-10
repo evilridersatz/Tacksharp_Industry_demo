@@ -9,9 +9,10 @@ import { LeadsModule } from '../leads/leads.module.js';
 import { PropertiesModule } from '../properties/properties.module.js';
 import { SiteVisitsModule } from '../site-visits/site-visits.module.js';
 import { FollowUpsModule } from '../follow-ups/follow-ups.module.js';
+import { RestaurantModule } from '../restaurant/restaurant.module.js';
 
 @Module({
-  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule],
+  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule, RestaurantModule],
   controllers: [AiController],
   providers: [AiService, ConversationEngine, SessionStore, LlmRunner],
   exports: [AiService],

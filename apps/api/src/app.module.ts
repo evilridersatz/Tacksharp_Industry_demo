@@ -15,6 +15,7 @@ import { MetaLeadsModule } from './webhooks/meta-leads/meta-leads.module.js';
 import { VoiceModule } from './voice/voice.module.js';
 import { WorkersModule } from './workers/workers.module.js';
 import { DashboardModule } from './dashboard/dashboard.module.js';
+import { RestaurantModule } from './restaurant/restaurant.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AppController } from './app.controller.js';
@@ -41,6 +42,7 @@ import { PrivacyController } from './privacy.controller.js';
     VoiceModule,
     WorkersModule,
     DashboardModule,
+    RestaurantModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

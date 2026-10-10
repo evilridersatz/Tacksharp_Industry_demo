@@ -4,7 +4,8 @@ import { config } from '../common/config.js';
 import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
 
-export type ChannelKind = 'whatsapp_phone_number_id' | 'plivo_number' | 'meta_page_id';
+export type ChannelKind = 'whatsapp_phone_number_id' | 'plivo_number' | 'meta_page_id' | 'web_chat_key';
+export type Vertical = 'real_estate' | 'restaurant';
 
 const CACHE_MS = 60_000;
 
@@ -56,9 +57,27 @@ export class TenancyService {
     return organizationId ?? undefined;
   }
 
+  private readonly verticals = new Map<string, { at: number; vertical: Vertical }>();
+
+  /** Which product a tenant runs (real estate lead follow-up or restaurant ordering). Unknown -> real_estate. */
+  async vertical(organizationId: string): Promise<Vertical> {
+    const hit = this.verticals.get(organizationId);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.vertical;
+    try {
+      const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { vertical: true } });
+      const vertical: Vertical = org?.vertical === 'restaurant' ? 'restaurant' : 'real_estate';
+      this.verticals.set(organizationId, { at: Date.now(), vertical });
+      return vertical;
+    } catch (error) {
+      log.error('tenancy.vertical_lookup_failed', { organizationId, error: errorMessage(error) });
+      return 'real_estate';
+    }
+  }
+
   /** Test / admin helper: forget cached lookups after a mapping changes. */
   clearCache() {
     this.cache.clear();
+    this.verticals.clear();
   }
 
   private canonical(kind: ChannelKind, raw: string | null | undefined): string | undefined {

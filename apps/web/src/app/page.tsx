@@ -14,6 +14,8 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { useApi } from '@/lib/api';
+import { useMe } from '@/lib/restaurant';
+import { RestaurantOverview } from '@/components/restaurant/overview';
 import type { ActivityEvent, FollowUp, Summary } from '@/lib/types';
 import {
   CALL_OUTCOME,
@@ -40,6 +42,12 @@ const OUTCOME_COLORS: Record<string, string> = {
 };
 
 export default function DashboardPage() {
+  const me = useMe();
+  if (!me) return <Skeleton className="h-[480px] rounded-[18px]" />;
+  return me.vertical === 'restaurant' ? <RestaurantOverview /> : <RealEstateDashboard />;
+}
+
+function RealEstateDashboard() {
   const [days, setDays] = useState('7');
   const { data: s, error, reload } = useApi<Summary>(`/dashboard/summary?days=${days}`);
   const { data: activity } = useApi<ActivityEvent[]>('/dashboard/activity?limit=12');

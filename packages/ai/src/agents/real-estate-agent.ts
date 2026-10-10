@@ -25,7 +25,7 @@ export * from '../types.js';
  *                             Switches the SDK to the Chat Completions API automatically.
  */
 let configured = false;
-function configureClient() {
+export function configureClient() {
   if (configured) return;
   configured = true;
 
@@ -43,7 +43,7 @@ function configureClient() {
   }
 }
 
-function modelSettings(effort: string | undefined, maxTokens?: number): ModelSettings {
+export function modelSettings(effort: string | undefined, maxTokens?: number): ModelSettings {
   const base: ModelSettings = { parallelToolCalls: true, ...(maxTokens ? { maxTokens } : {}) };
   if (!effort || effort === 'off') return base;
   return {
