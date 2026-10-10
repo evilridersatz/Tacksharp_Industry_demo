@@ -1,5 +1,6 @@
 /**
- * Restaurant (GR Chicken) ordering, DB-backed. Real MySQL test database; the language model is a fake.
+ * GR Chicken offer → WhatsApp order → ready call, DB-backed. Real MySQL test database; WhatsApp,
+ * Plivo, Sarvam and the language model are fakes.
  *
  *   TEST_DB_NAME=tacksharp_test npm test -w apps/api
  * Skipped automatically when TEST_DB_NAME is not set (never runs against your real DB).
@@ -10,56 +11,48 @@ const enabled = Boolean(process.env.TEST_DB_NAME);
 if (enabled) {
   process.env.DB_NAME = process.env.TEST_DB_NAME;
   process.env.DB_HOST ??= '127.0.0.1';
+  process.env.PLIVO_AUTH_ID = 'test';
+  process.env.PLIVO_AUTH_TOKEN = 'test';
+  process.env.PLIVO_FROM_NUMBER = '914400000000';
+  process.env.PUBLIC_BASE_URL = 'https://example.test';
+  process.env.VOICE_CALL_WINDOW_START = '0';
+  process.env.VOICE_CALL_WINDOW_END = '24';
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_BASE_URL;
 }
 
-const ORG_A = 'org_test_restaurant_a';
-const ORG_B = 'org_test_restaurant_b';
+const ORG = 'org_test_gr_a';
+const ORG_B = 'org_test_gr_b';
 let n = 0;
-const sid = () => `test-session-${Date.now()}-${n++}`.padEnd(20, 'x');
 const phone = () => `98${String(Date.now()).slice(-6)}${String(n++ % 100).padStart(2, '0')}`;
+// 10:00 IST, so "saayangaalam 6 mani" is later the same day.
+const NOW = new Date(Date.now());
 
-describe.skipIf(!enabled)('Restaurant ordering (integration)', () => {
-  let prisma: any, engine: any, orders: any, catalog: any, store: any, llmFake: any, tenancy: any, ai: any;
+describe.skipIf(!enabled)('GR Chicken offer + pickup orders (integration)', () => {
+  let prisma: any, engine: any, orders: any, catalog: any, offers: any, ready: any, sender: any, sarvam: any, conversations: any, publicOffers: any;
 
-  async function seedOrg(id: string, name: string, opts: { outlets: number }) {
-    await prisma.organization.upsert({ where: { id }, create: { id, name, vertical: 'restaurant' }, update: { vertical: 'restaurant', name } });
-    const cat = await prisma.menuCategory.upsert({
-      where: { organizationId_name: { organizationId: id, name: 'Mains' } },
-      create: { id: `${id}_mains`, organizationId: id, name: 'Mains' },
-      update: {},
-    });
-    const items = [
-      { key: 'biryani', name: 'Chicken Biryani', price: 220, aliases: 'biryani' },
-      { key: 'soda', name: 'Lime Soda', price: 50, aliases: 'soda' },
-      { key: 'c65', name: 'Chicken 65', price: 180, aliases: '65' },
-      { key: 'sold_out', name: 'Pepper Chicken', price: 200, aliases: 'pepper', available: false },
+  async function seedOrg(id: string) {
+    await prisma.organization.upsert({ where: { id }, create: { id, name: 'GR Chicken', vertical: 'restaurant' }, update: { vertical: 'restaurant' } });
+    const cat = await prisma.menuCategory.upsert({ where: { organizationId_name: { organizationId: id, name: 'Chicken' } }, create: { id: `${id}_cat`, organizationId: id, name: 'Chicken' }, update: {} });
+    const products = [
+      { key: 'broiler', name: 'Broiler Chicken', price: 220, aliases: 'broiler, chicken, kozhi, கோழி', cuts: ['Curry cut', 'Biryani cut', 'Fry cut', 'Whole'] },
+      { key: 'country', name: 'Country Chicken', price: 450, aliases: 'country, nattu kozhi', cuts: ['Curry cut', 'Biryani cut', 'Whole'] },
+      { key: 'boneless', name: 'Boneless Chicken', price: 380, aliases: 'boneless', cuts: [], minQty: 0.25 },
+      { key: 'liver', name: 'Chicken Liver', price: 160, aliases: 'liver', cuts: [], available: false },
     ];
-    for (const it of items) {
-      const rid = `${id}_${it.key}`;
-      const data = { organizationId: id, categoryId: cat.id, name: it.name, price: it.price, aliases: it.aliases, available: it.available ?? true, isDemo: false };
+    for (const p of products) {
+      const rid = `${id}_${p.key}`;
+      const data = { organizationId: id, categoryId: cat.id, name: p.name, price: p.price, aliases: p.aliases, cutOptions: p.cuts, unit: 'kg', minQty: p.minQty ?? 0.5, maxQty: 10, qtyStep: 0.25, available: p.available ?? true, isDemo: false };
       await prisma.menuItem.upsert({ where: { id: rid }, create: { id: rid, ...data }, update: data });
     }
-    for (let i = 0; i < opts.outlets; i++) {
-      const rid = `${id}_outlet_${i}`;
-      const data = {
-        organizationId: id,
-        name: i === 0 ? `${name} Velachery` : `${name} Anna Nagar`,
-        area: i === 0 ? 'Velachery' : 'Anna Nagar',
-        address: `Test address ${i}`,
-        serviceAreas: i === 0 ? ['velachery', 'guindy'] : ['anna nagar'],
-        opensAt: '00:00',
-        closesAt: '00:00', // open all day for tests
-        acceptsPickup: true,
-        acceptsDelivery: true,
-        deliveryFee: 40,
-        minOrderValue: 100,
-        active: true,
-        sortOrder: i,
-      };
-      await prisma.outlet.upsert({ where: { id: rid }, create: { id: rid, ...data }, update: data });
-    }
+    const oid = `${id}_shop`;
+    const shop = { organizationId: id, name: 'GR Chicken Shop', address: 'Test address', opensAt: '00:00', closesAt: '00:00', prepMinutes: 30, minOrderValue: 0, acceptOutsideHours: false, active: true };
+    await prisma.outlet.upsert({ where: { id: oid }, create: { id: oid, ...shop }, update: shop });
+    await prisma.offerCampaign.upsert({
+      where: { organizationId_code: { organizationId: id, code: 'GR50' } },
+      create: { organizationId: id, code: 'GR50', name: 'Website ₹50 off', amount: 50, minOrderValue: 0, validDays: 7, active: true },
+      update: { amount: 50, minOrderValue: 0, active: true, templateName: null },
+    });
   }
 
   beforeAll(async () => {
@@ -67,226 +60,292 @@ describe.skipIf(!enabled)('Restaurant ordering (integration)', () => {
     const { ConversationsService } = await import('../src/conversations/conversations.service.js');
     const { CatalogService } = await import('../src/restaurant/catalog.service.js');
     const { OrdersService } = await import('../src/restaurant/orders.service.js');
+    const { OffersService } = await import('../src/restaurant/offers.service.js');
     const { OrderSessionStore } = await import('../src/restaurant/order-session.store.js');
     const { OrderingEngine } = await import('../src/restaurant/ordering-engine.service.js');
-    const { TenancyService } = await import('../src/tenancy/tenancy.service.js');
-    const { AiService } = await import('../src/ai/ai.service.js');
+    const { ReadyNoticeService } = await import('../src/restaurant/ready-notice.service.js');
+    const { PublicOffersController } = await import('../src/restaurant/public-offers.controller.js');
     prisma = new PrismaService();
     await prisma.$connect();
-    const conversations = new ConversationsService(prisma);
+    conversations = new ConversationsService(prisma);
     catalog = new CatalogService(prisma);
     orders = new OrdersService(prisma);
-    store = new OrderSessionStore();
+    sender = { sendText: vi.fn(async () => 'wamid.1'), sendNamedTemplate: vi.fn(async () => 'wamid.2') };
+    offers = new OffersService(prisma, conversations, sender, catalog);
+    const store = new OrderSessionStore();
     store.useRedis(null);
-    llmFake = { run: vi.fn(async () => ({ text: '', failed: true, aborted: false, usage: {} })) };
-    engine = new OrderingEngine(prisma, conversations, catalog, orders, store, llmFake);
-    tenancy = new TenancyService(prisma);
-    const realEstateEngine = { generate: vi.fn(async () => ({ response: 'real-estate engine' })) };
-    ai = new AiService(realEstateEngine as any, tenancy, engine);
-    await seedOrg(ORG_A, 'Test Chicken', { outlets: 2 });
-    await seedOrg(ORG_B, 'Other Chicken', { outlets: 1 });
+    const llmFake = { run: vi.fn(async () => ({ text: '', failed: true, aborted: false, usage: {} })) };
+    engine = new OrderingEngine(prisma, conversations, catalog, orders, offers, store, llmFake as any);
+    sarvam = { enabled: true, textToSpeechUrl: vi.fn(async () => 'https://example.test/voice/audio/x.wav'), speechToText: vi.fn(async () => ({ transcript: '' })) };
+    ready = new ReadyNoticeService(prisma, orders, conversations, sarvam, sender);
+    ready.dialer = vi.fn(async () => ({ requestUuid: 'req-1' }));
+    ready.fetchRecording = vi.fn(async () => Buffer.alloc(100));
+    publicOffers = new PublicOffersController(prisma, offers);
+    await seedOrg(ORG);
+    await seedOrg(ORG_B);
   });
 
   beforeEach(async () => {
-    for (const org of [ORG_A, ORG_B]) await prisma.order.deleteMany({ where: { organizationId: org } });
-    catalog.invalidate(ORG_A);
-    catalog.invalidate(ORG_B);
+    for (const org of [ORG, ORG_B]) {
+      await prisma.offerClaim.deleteMany({ where: { organizationId: org } });
+      await prisma.order.deleteMany({ where: { organizationId: org } });
+      await prisma.call.deleteMany({ where: { organizationId: org } });
+    }
+    catalog.invalidate(ORG);
+    sender.sendText.mockClear();
+    sender.sendNamedTemplate.mockClear();
   });
 
   afterAll(async () => {
     await prisma?.$disconnect();
   });
 
-  const chat = (organizationId: string, sessionId: string) => async (message: string) =>
-    engine.generate({ organizationId, channel: 'web', sessionId, message });
+  const wa = (p: string, org = ORG) => (message: string) => engine.generate({ organizationId: org, channel: 'whatsapp', phone: p, message, customerName: 'Priya', now: NOW });
+  const later = (hours: number) => new Date(NOW.getTime() + hours * 3_600_000);
+  const hhmm = (d: Date) => {
+    const x = new Date(d.getTime() + 330 * 60_000);
+    return `${String(x.getUTCHours()).padStart(2, '0')}:${String(x.getUTCMinutes()).padStart(2, '0')}`;
+  };
 
-  async function webOrderToConfirmation(say: (m: string) => Promise<any>) {
-    await say('2 chicken biryani and 1 lime soda');
-    await say('checkout');
-    await say('1'); // Velachery
-    await say('delivery');
-    await say('guindy');
-    await say('No 5, 2nd street, near the park, Guindy');
-    return say(`Priya ${phone()}`);
-  }
+  it('customer says Hi from the link → Tanglish offer message → chicken, kg, cut, payment, time → ₹50 off order, offer used once', async () => {
+    const p = phone();
+    const say = wa(p);
+    const hi = await say('Hi');
+    expect(hi.response).toContain('Vanakkam Priya');
+    expect(hi.response).toContain('₹50 offer');
+    expect(hi.response).toContain('Broiler Chicken — ₹220/kg');
+    expect(hi.response).not.toContain('Chicken Liver'); // not available today
+    const claim = await prisma.offerClaim.findFirst({ where: { organizationId: ORG, phone: `91${p}` } });
+    expect(claim).toMatchObject({ source: 'whatsapp_link', status: 'started' });
 
-  it('web chat: menu → cart → outlet → delivery → contact → YES creates one correctly priced order', async () => {
-    const say = chat(ORG_A, sid());
-    const menu = await say('menu');
-    expect(menu.response).toContain('Chicken Biryani — ₹220');
-    expect(menu.response).not.toContain('Pepper Chicken'); // unavailable items are not offered
-
-    const summary = await webOrderToConfirmation(say);
+    expect((await say('rendu kilo broiler')).response).toContain('eppadi cut');
+    expect((await say('curry cut')).response).toContain('Payment eppadi');
+    expect((await say('gpay')).response).toContain('Eppo vandhu collect');
+    const summary = await say(`${hhmm(later(3))} ku varen`);
     expect(summary.state).toBe('awaiting_confirmation');
-    expect(summary.response).toContain('*Total: ₹530*'); // 2×220 + 50 + 40 delivery
-    expect(await prisma.order.count({ where: { organizationId: ORG_A } })).toBe(0); // nothing before YES
+    expect(summary.response).toContain('2 kg Broiler Chicken — Curry cut — ₹440');
+    expect(summary.response).toContain('Offer: −₹50');
+    expect(summary.response).toContain('*Kattavendiyadhu: ₹390*');
+    expect(await prisma.order.count({ where: { organizationId: ORG } })).toBe(0);
 
-    const placed = await say('yes');
-    expect(placed.order?.status).toBe('created');
+    const placed = await say('sari');
+    expect(placed.order.status).toBe('created');
     expect(placed.response).toContain(placed.order.orderNumber);
-    expect(placed.response).toMatch(/waiting for .* to confirm/);
+    const order = await orders.getOrder(ORG, placed.order.id);
+    expect(order).toMatchObject({ subtotal: 440, discount: 50, total: 390, paymentMethod: 'upi_at_shop', paymentStatus: 'unpaid', status: 'pending', posStatus: 'not_integrated', language: 'tanglish' });
+    expect(order.items.map((i: any) => [i.name, i.quantity, i.cut, i.lineTotal])).toEqual([['Broiler Chicken', 2, 'Curry cut', 440]]);
+    expect(order.offer).toMatchObject({ source: 'whatsapp_link', amount: 50 });
+    expect(await prisma.offerClaim.findFirst({ where: { id: claim.id } })).toMatchObject({ status: 'claimed', orderId: order.id });
 
-    const order = await orders.getOrder(ORG_A, placed.order.id);
-    expect(order.total).toBe(530);
-    expect(order.subtotal).toBe(490);
-    expect(order.deliveryFee).toBe(40);
-    expect(order.status).toBe('pending');
-    expect(order.posStatus).toBe('not_integrated');
-    expect(order.paymentStatus).toBe('unpaid');
-    expect(order.paymentMethod).toBe('cash_on_delivery');
-    expect(order.items.map((i: any) => [i.name, i.quantity, i.lineTotal])).toEqual([['Chicken Biryani', 2, 440], ['Lime Soda', 1, 50]]);
-    expect(order.events[0]).toMatchObject({ type: 'created', actor: 'ai', toStatus: 'pending' });
-
-    // A second YES (double tap / retried request) never creates another order.
-    const again = await say('yes');
+    // Retry / double tap: no second order.
+    const again = await say('sari');
     expect(again.order).toBeUndefined();
-    expect(again.response).toContain('already placed');
-    expect(await prisma.order.count({ where: { organizationId: ORG_A } })).toBe(1);
+    expect(again.response).toContain('already confirm');
 
-    // The conversation and both sides of it are stored and linked to the customer.
-    const conv = await prisma.conversation.findFirst({ where: { id: placed.conversationId }, include: { Message: true } });
-    expect(conv.customerId).toBeTruthy();
-    expect(conv.Message.filter((m: any) => m.role === 'user').length).toBeGreaterThanOrEqual(8);
-
-    const status = await say('order status');
-    expect(status.response).toContain(placed.order.orderNumber);
-    expect(status.response).toContain('waiting for the outlet');
+    // The link offer cannot be claimed twice: the next order has no discount.
+    await say('1 kg boneless, cash, ' + hhmm(later(4)));
+    const second = await say('yes');
+    expect((await orders.getOrder(ORG, second.order.id)).discount).toBe(0);
+    const tryAgain = await say('offer claim GR50');
+    expect(tryAgain.response).toMatch(/already (use|been used)/);
   });
 
-  it('createOrder is idempotent for the same confirmation, even when called concurrently', async () => {
-    const customer = await prisma.customer.create({ data: { organizationId: ORG_A, phone: `91${phone()}`, name: 'Idem' } });
-    const input = {
-      organizationId: ORG_A,
-      idempotencyKey: `idem-${Date.now()}`,
-      customerId: customer.id,
-      channel: 'web',
-      lines: [{ itemId: `${ORG_A}_biryani`, quantity: 1 }],
-      outletId: `${ORG_A}_outlet_0`,
-      fulfilment: 'pickup' as const,
-      expectedTotal: 220,
-    };
-    const results = await Promise.all([orders.createOrder(input), orders.createOrder(input), orders.createOrder(input)]);
-    const ids = new Set(results.map((r: any) => r.order.id));
-    expect(ids.size).toBe(1);
-    expect(results.filter((r: any) => r.status === 'created').length).toBe(1);
-    expect(await prisma.order.count({ where: { organizationId: ORG_A, idempotencyKey: input.idempotencyKey } })).toBe(1);
+  it('everything in one message, a correction after the summary, then Tamil-script confirmation', async () => {
+    const say = wa(phone());
+    await say('Hi');
+    const s1 = await say(`1.5 kg nattu kozhi biryani cut and arai kilo boneless, cash la tharen, ${hhmm(later(5))} manikku varen`);
+    expect(s1.state).toBe('awaiting_confirmation');
+    expect(s1.response).toContain('1.5 kg Country Chicken — Biryani cut — ₹675');
+    expect(s1.response).toContain('500 g Boneless Chicken — ₹190');
+    const s2 = await say('illa 2 kg nattu kozhi');
+    expect(s2.state).toBe('awaiting_confirmation');
+    expect(s2.response).toContain('2 kg Country Chicken — Biryani cut — ₹900');
+    expect(s2.response).toContain('₹1040');
+    const placed = await say('சரி');
+    expect(placed.order.total).toBe(1040);
   });
 
-  it('server-side validation: prices come from the DB, unavailable items, minimum order, service area and a changed price are rejected', async () => {
-    const outletId = `${ORG_A}_outlet_0`;
-    const unavailable = await orders.quote({ organizationId: ORG_A, lines: [{ itemId: `${ORG_A}_sold_out`, quantity: 1 }], outletId, fulfilment: 'pickup' });
-    expect(unavailable.ok).toBe(false);
-    expect(unavailable.problems.join(' ')).toContain('not available');
-
-    const tooSmall = await orders.quote({ organizationId: ORG_A, lines: [{ itemId: `${ORG_A}_soda`, quantity: 1 }], outletId, fulfilment: 'pickup' });
-    expect(tooSmall.problems.join(' ')).toContain('Minimum order');
-
-    const farAway = await orders.quote({ organizationId: ORG_A, lines: [{ itemId: `${ORG_A}_biryani`, quantity: 1 }], outletId, fulfilment: 'delivery', deliveryArea: 'tambaram' });
-    expect(farAway.problems.join(' ')).toContain('does not deliver to tambaram');
-
-    const tooMany = await orders.quote({ organizationId: ORG_A, lines: [{ itemId: `${ORG_A}_biryani`, quantity: 21 }], outletId, fulfilment: 'pickup' });
-    expect(tooMany.ok).toBe(false);
-
-    const otherTenantsItem = await orders.quote({ organizationId: ORG_A, lines: [{ itemId: `${ORG_B}_biryani`, quantity: 1 }], outletId, fulfilment: 'pickup' });
-    expect(otherTenantsItem.ok).toBe(false);
-
-    const customer = await prisma.customer.create({ data: { organizationId: ORG_A, phone: `91${phone()}` } });
-    const stale = await orders.createOrder({
-      organizationId: ORG_A, idempotencyKey: `stale-${Date.now()}`, customerId: customer.id, channel: 'web',
-      lines: [{ itemId: `${ORG_A}_biryani`, quantity: 1 }], outletId, fulfilment: 'pickup', expectedTotal: 199,
-    });
-    expect(stale.status).toBe('rejected');
-    expect(await prisma.order.count({ where: { organizationId: ORG_A } })).toBe(0);
+  it('Tamil script: replies in Tamil, "already paid" is recorded as the customer\'s word, too-early pickup moves to the earliest ready time', async () => {
+    const say = wa(phone());
+    const hi = await say('வணக்கம்');
+    expect(hi.response).toContain('வணக்கம் Priya');
+    await say('ரெண்டு கிலோ கோழி கறி கட்');
+    await say('ஏற்கனவே online-ல பே பண்ணிட்டேன்');
+    const s = await say('இப்போ வரேன்');
+    expect(s.response).toContain('30 நிமிஷம்');
+    expect(s.state).toBe('awaiting_confirmation');
+    const placed = await say('சரி');
+    const order = await orders.getOrder(ORG, placed.order.id);
+    expect(order.paymentMethod).toBe('paid_online');
+    expect(order.paymentStatus).toBe('customer_says_paid');
+    expect(new Date(order.pickupAt).getTime()).toBeGreaterThanOrEqual(NOW.getTime() + 29 * 60_000);
+    expect(order.language).toBe('tamil');
   });
 
-  it('chat never adds a dish we do not sell, or items only asked about', async () => {
-    const say = chat(ORG_A, sid());
-    const q = await say('do you have mutton biryani?');
-    expect(q.response).toContain("don't have mutton biryani");
-    expect(q.cart).toEqual([]);
-    const price = await say('how much is chicken 65?');
-    expect(price.response).toContain('₹180');
-    expect(price.cart).toEqual([]);
-    const sold = await say('2 pepper chicken');
-    expect(sold.response).toContain('not available');
-    expect(sold.cart).toEqual([]);
-    const add = await say('can you add 2 biryani?');
-    expect(add.cart).toEqual([{ name: 'Chicken Biryani', quantity: 2, unitPrice: 220, lineTotal: 440 }]);
+  it('changing anything after the summary cancels the pending confirmation', async () => {
+    const say = wa(phone());
+    await say('Hi');
+    await say(`2 kg broiler curry cut, cash, ${hhmm(later(3))}`);
+    const changed = await say('fry cut');
+    expect(changed.state).toBe('awaiting_confirmation');
+    expect(changed.response).toContain('Fry cut');
+    const no = await say('venam');
+    expect(no.state).toBe('collecting');
+    expect(await prisma.order.count({ where: { organizationId: ORG } })).toBe(0);
   });
 
-  it('changing the cart after the summary cancels the pending confirmation', async () => {
-    const say = chat(ORG_A, sid());
-    await webOrderToConfirmation(say);
-    const changed = await say('add 1 chicken 65');
-    expect(changed.state).toBe('browsing');
-    const yes = await say('yes');
-    expect(yes.order).toBeUndefined(); // "yes" now only restarts checkout with the new total
-    expect(yes.state).toBe('awaiting_confirmation');
-    expect(yes.response).toContain('*Total: ₹710*');
-    expect(await prisma.order.count({ where: { organizationId: ORG_A } })).toBe(0);
-    const no = await say('no');
-    expect(no.state).toBe('browsing');
-    expect(await prisma.order.count({ where: { organizationId: ORG_A } })).toBe(0);
+  it('website / dashboard offers: sent on WhatsApp inside 24h, recorded honestly outside it, retry-safe, then claimed in chat', async () => {
+    const p = phone();
+    // Not in the 24h window and no approved template: nothing is sent, the claim says why.
+    const r1 = await offers.createAndSend({ organizationId: ORG, phone: p, name: 'Kumar', source: 'website', websiteOrderRef: `WEB-${p}` });
+    expect(r1.claim.status).toBe('pending_send');
+    expect(r1.claim.sendError).toContain('template');
+    expect(sender.sendText).not.toHaveBeenCalled();
+    const dup = await offers.createAndSend({ organizationId: ORG, phone: p, source: 'website', websiteOrderRef: `WEB-${p}` });
+    expect(dup.duplicate).toBe(true);
+    expect(dup.claim.id).toBe(r1.claim.id);
+
+    // With an approved template it is sent.
+    await prisma.offerCampaign.updateMany({ where: { organizationId: ORG }, data: { templateName: 'gr_offer_v1' } });
+    const sent = await offers.send(ORG, r1.claim.id);
+    expect(sent.status).toBe('sent');
+    expect(sender.sendNamedTemplate).toHaveBeenCalledWith(`91${p}`, 'gr_offer_v1', ['Kumar']);
+    await prisma.offerCampaign.updateMany({ where: { organizationId: ORG }, data: { templateName: null } });
+
+    // The customer replies: the website offer is used (not a new link offer).
+    const say = engine.generate.bind(engine);
+    const t = (message: string) => say({ organizationId: ORG, channel: 'whatsapp', phone: p, message, now: NOW });
+    expect((await t('Hi')).response).toContain('₹50 offer');
+    await t(`1 kg boneless, cash, ${hhmm(later(2))}`);
+    const placed = await t('yes');
+    const order = await orders.getOrder(ORG, placed.order.id);
+    expect(order.offer).toMatchObject({ source: 'website', websiteOrderRef: `WEB-${p}` });
+    expect(order.total).toBe(330);
+
+    // Inside the 24h window the offer message goes as normal text.
+    const p2 = phone();
+    const c2 = await prisma.customer.create({ data: { organizationId: ORG, phone: `91${p2}`, lastInboundAt: new Date() } });
+    const r2 = await offers.createAndSend({ organizationId: ORG, phone: p2, source: 'dashboard' });
+    expect(r2.claim.status).toBe('sent');
+    expect(sender.sendText).toHaveBeenCalledWith(`91${p2}`, expect.stringContaining('₹50 offer'));
+    expect(c2).toBeTruthy();
   });
 
-  it('WhatsApp: the customer is known from the number; single-outlet tenant goes straight to pickup/delivery', async () => {
-    const wa = phone();
-    const say = (message: string) => ai.generateResponse({ organizationId: ORG_B, channel: 'whatsapp', phone: wa, message, customerName: 'Arun' });
-    await say('1 chicken biryani');
-    const f = await say('checkout');
-    expect(f.response).toContain('pickup* or *delivery');
-    const summary = await say('pickup');
-    expect(summary.state).toBe('awaiting_confirmation');
-    expect(summary.response).toContain('*Total: ₹220*');
-    expect(summary.response).toContain('Pay at the outlet');
-    const placed = await say('yes');
-    expect(placed.order?.status).toBe('created');
-    const order = await orders.getOrder(ORG_B, placed.order.id);
-    expect(order.channel).toBe('whatsapp');
-    expect(order.customerPhone).toBe(`91${wa}`);
-    expect(order.paymentMethod).toBe('pay_at_outlet');
+  it('website API: tenant from the key, bad key rejected', async () => {
+    const key = await offers.rotateWebsiteKey(ORG);
+    await expect(publicOffers.create('grk_wrong_key_wrong_key_wrong', { phone: '9876543210' })).rejects.toThrow('Invalid API key');
+    const res = await publicOffers.create(key, { phone: phone(), name: 'Anu', websiteOrderId: `W-${Date.now()}` });
+    expect(res).toMatchObject({ status: 'pending_send', duplicate: false, amount: 50 });
+    const claim = await prisma.offerClaim.findUnique({ where: { id: res.offerId } });
+    expect(claim.organizationId).toBe(ORG);
   });
 
-  it('tenant isolation: one restaurant cannot read or change another restaurant\'s orders', async () => {
-    const say = chat(ORG_A, sid());
-    await webOrderToConfirmation(say);
-    const placed = await say('yes');
-    await expect(orders.getOrder(ORG_B, placed.order.id)).rejects.toThrow('Order not found');
-    await expect(orders.updateStatus(ORG_B, placed.order.id, { status: 'confirmed' }, { sub: 'u', role: 'admin' })).rejects.toThrow('Order not found');
-    expect((await orders.list(ORG_B, {})).map((o: any) => o.id)).not.toContain(placed.order.id);
-    expect(await orders.findByNumber(ORG_B, placed.order.orderNumber)).toBeNull();
+  it('one offer discounts at most one order, even with concurrent confirmations', async () => {
+    const p = phone();
+    const customer = await prisma.customer.create({ data: { organizationId: ORG, phone: `91${p}` } });
+    const campaign = await prisma.offerCampaign.findFirst({ where: { organizationId: ORG } });
+    const claim = await prisma.offerClaim.create({ data: { organizationId: ORG, campaignId: campaign.id, customerId: customer.id, phone: `91${p}`, source: 'dashboard', status: 'started', amount: 50, expiresAt: later(48) } });
+    const base = { organizationId: ORG, customerId: customer.id, channel: 'whatsapp', lines: [{ itemId: `${ORG}_boneless`, quantity: 1 }], outletId: `${ORG}_shop`, pickupAt: later(2), paymentMethod: 'cash_at_shop', claimId: claim.id, expectedTotal: 330, now: NOW };
+    const same = await Promise.all([orders.createOrder({ ...base, idempotencyKey: 'k1' }), orders.createOrder({ ...base, idempotencyKey: 'k1' })]);
+    expect(new Set(same.map((r: any) => r.order?.id)).size).toBe(1);
+    const other = await orders.createOrder({ ...base, idempotencyKey: 'k2' });
+    expect(other.status).toBe('rejected'); // the offer is used; ₹330 would be the wrong total now
+    expect(await prisma.order.count({ where: { organizationId: ORG } })).toBe(1);
   });
 
-  it('staff status updates follow the allowed transitions and are audited; viewers cannot change orders', async () => {
-    const say = chat(ORG_A, sid());
-    await webOrderToConfirmation(say);
-    const { order } = await say('yes');
+  it('server-side validation: cut required, quantity steps/min, unavailable product, shop prep time, other tenant\'s product', async () => {
+    const q = (lines: any[], pickupAt = later(2)) => orders.quote({ organizationId: ORG, lines, outletId: `${ORG}_shop`, pickupAt, now: NOW });
+    expect((await q([{ itemId: `${ORG}_broiler`, quantity: 2 }])).problems.join()).toContain('Which cut');
+    expect((await q([{ itemId: `${ORG}_broiler`, quantity: 1.3, cut: 'Curry cut' }])).problems.join()).toContain('steps of');
+    expect((await q([{ itemId: `${ORG}_broiler`, quantity: 0.25, cut: 'Curry cut' }])).problems.join()).toContain('Minimum');
+    expect((await q([{ itemId: `${ORG}_broiler`, quantity: 2, cut: 'Boneless' }])).problems.join()).toContain('not available as');
+    expect((await q([{ itemId: `${ORG}_liver`, quantity: 1 }])).problems.join()).toContain('not available today');
+    expect((await q([{ itemId: `${ORG}_boneless`, quantity: 1 }], later(0.1))).problems.join()).toContain('30 minutes');
+    expect((await q([{ itemId: `${ORG_B}_boneless`, quantity: 1 }])).ok).toBe(false);
+    const ok = await q([{ itemId: `${ORG}_broiler`, quantity: 1.5, cut: 'Fry cut' }]);
+    expect(ok).toMatchObject({ ok: true, subtotal: 330, total: 330 });
+  });
+
+  it('staff mark Ready → Tamil call → customer says they are coming → noted on the order', async () => {
+    const say = wa(phone());
+    await say('Hi');
+    await say(`rendu kilo broiler curry cut, cash la tharen, ${hhmm(later(3))} manikku varen`);
+    const { order: placed } = await say('sari');
+    expect((await orders.getOrder(ORG, placed.id)).language).toBe('tanglish');
     const staff = { sub: 'staff-1', role: 'admin' };
-    await expect(orders.updateStatus(ORG_A, order.id, { status: 'completed' }, staff)).rejects.toThrow('cannot be moved');
-    await expect(orders.updateStatus(ORG_A, order.id, { status: 'confirmed' }, { sub: 'v', role: 'viewer' })).rejects.toThrow('only view');
-    for (const s of ['confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed']) await orders.updateStatus(ORG_A, order.id, { status: s }, staff);
-    const paid = await orders.updateStatus(ORG_A, order.id, { paymentStatus: 'paid', note: 'cash collected' }, staff);
-    expect(paid.status).toBe('completed');
-    expect(paid.paymentStatus).toBe('paid');
-    expect(paid.events.map((e: any) => e.toStatus ?? e.type)).toEqual(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed', 'payment_changed']);
-    expect(paid.events.slice(1).every((e: any) => e.actor === 'user:staff-1')).toBe(true);
-    await expect(orders.updateStatus(ORG_A, order.id, { status: 'cancelled' }, staff)).rejects.toThrow('cannot be moved');
+    for (const s of ['confirmed', 'preparing']) await orders.updateStatus(ORG, placed.id, { status: s }, staff);
+    const { changedTo } = await orders.updateStatus(ORG, placed.id, { status: 'ready' }, staff);
+    expect(changedTo).toBe('ready');
+    await ready.notify(ORG, placed.id);
+    expect(ready.dialer).toHaveBeenCalledWith('914400000000', expect.any(String), expect.stringContaining('/voice/ready/answer?callId='), expect.stringContaining('/voice/ready/hangup?callId='));
+    let order = await orders.getOrder(ORG, placed.id);
+    expect(order.readyNotice).toBe('calling');
+
+    const xml = await ready.answer(order.readyCallId, { CallUUID: 'cu-1' });
+    expect(xml).toContain('<Play>https://example.test/voice/audio/x.wav</Play>');
+    expect(xml).toContain('/voice/ready/turn?callId=');
+    const spoken = sarvam.textToSpeechUrl.mock.calls.at(-1)[0];
+    expect(spoken).toContain('நீங்க சொன்ன மாதிரி 2 கிலோ Broiler Chicken Curry cut எல்லாம் ready-ஆ இருக்கு');
+
+    sarvam.speechToText.mockResolvedValueOnce({ transcript: 'சரி, பத்து நிமிஷத்துல வரேன்' });
+    const turn = await ready.turn(order.readyCallId, { RecordUrl: 'https://plivo.test/rec.wav' });
+    expect(turn).toContain('<Hangup/>');
+    await ready.hangup(order.readyCallId, { Duration: '24', HangupCause: 'NORMAL_HANGUP' });
+    order = await orders.getOrder(ORG, placed.id);
+    expect(order.readyNotice).toBe('answered');
+    expect(order.readyNoticeNote).toContain('பத்து நிமிஷத்துல வரேன்');
+    expect(order.readyNoticeNote).toContain('(coming)');
+    const call = await prisma.call.findUnique({ where: { id: order.readyCallId } });
+    expect(call).toMatchObject({ status: 'completed', durationSec: 24 });
+    // The call is readable in the inbox.
+    const voiceConv = await prisma.conversation.findFirst({ where: { organizationId: ORG, channel: 'voice', customerId: order.customerId }, include: { Message: true } });
+    expect(voiceConv.Message.map((m: any) => m.role)).toEqual(['assistant', 'user', 'assistant']);
+
+    // Customer collects.
+    const done = await orders.updateStatus(ORG, placed.id, { status: 'completed' }, staff);
+    expect(done.order.status).toBe('completed');
   });
 
-  it('routing: restaurant tenants get the ordering engine, phone calls are declined politely, other tenants are untouched', async () => {
-    const voice = await ai.generateResponse({ organizationId: ORG_A, channel: 'voice', phone: phone(), message: 'hello' });
-    expect(voice.response).toContain('phone ordering is not available');
-    expect(voice.actions.endCall).toBe(true);
-    await prisma.organization.upsert({ where: { id: 'org_test_real_estate_x' }, create: { id: 'org_test_real_estate_x', name: 'Realty' }, update: {} });
-    const re = await ai.generateResponse({ organizationId: 'org_test_real_estate_x', channel: 'whatsapp', phone: phone(), message: 'hi' });
-    expect(re.response).toBe('real-estate engine');
+  it('unanswered ready call → WhatsApp ready message; no calling setup → straight to WhatsApp', async () => {
+    const p = phone();
+    const say = wa(p);
+    await say('Hi');
+    await say(`1 kg boneless, upi, ${hhmm(later(2))}`);
+    const { order: placed } = await say('sari');
+    // The WhatsApp webhook records the customer's last message (24h window); the engine is called after it.
+    await prisma.customer.updateMany({ where: { organizationId: ORG, phone: `91${p}` }, data: { lastInboundAt: new Date() } });
+    const staff = { sub: 's', role: 'admin' };
+    await orders.updateStatus(ORG, placed.id, { status: 'confirmed' }, staff);
+    await orders.updateStatus(ORG, placed.id, { status: 'ready' }, staff);
+    await ready.notify(ORG, placed.id);
+    let order = await orders.getOrder(ORG, placed.id);
+    await ready.hangup(order.readyCallId, { HangupCause: 'NO_ANSWER' });
+    order = await orders.getOrder(ORG, placed.id);
+    expect(order.readyNotice).toBe('whatsapp_sent');
+    expect(sender.sendText).toHaveBeenCalledWith(`91${p}`, expect.stringContaining(placed.orderNumber));
+    expect((await prisma.call.findUnique({ where: { id: order.readyCallId } })).status).toBe('no_answer');
+
+    // Calling not configured (e.g. Sarvam key missing): WhatsApp at once, reason recorded.
+    sarvam.enabled = false;
+    sender.sendText.mockClear();
+    await ready.notify(ORG, placed.id, { force: true });
+    order = await orders.getOrder(ORG, placed.id);
+    expect(order.readyNoticeNote).toContain('SARVAM_API_KEY');
+    expect(sender.sendText).toHaveBeenCalledTimes(1);
+    sarvam.enabled = true;
   });
 
-  it('without a configured model, free-form questions get a safe help reply (no invented answers)', async () => {
-    const say = chat(ORG_A, sid());
-    const r = await say('is your chicken halal and how spicy is it');
-    expect(r.path).toBe('rules');
-    expect(r.response).toContain('talk to staff');
-    expect(llmFake.run).not.toHaveBeenCalled();
+  it('cancelling an order gives the offer back; viewers cannot change orders; tenants are isolated', async () => {
+    const say = wa(phone());
+    await say('Hi');
+    await say(`1 kg boneless, cash, ${hhmm(later(2))}`);
+    const { order: placed } = await say('sari');
+    await expect(orders.updateStatus(ORG, placed.id, { status: 'confirmed' }, { sub: 'v', role: 'viewer' })).rejects.toThrow('only view');
+    await expect(orders.updateStatus(ORG, placed.id, { status: 'completed' }, { sub: 's', role: 'admin' })).rejects.toThrow('cannot be moved');
+    await expect(orders.getOrder(ORG_B, placed.id)).rejects.toThrow('Order not found');
+    await expect(orders.updateStatus(ORG_B, placed.id, { status: 'cancelled' }, { sub: 's', role: 'admin' })).rejects.toThrow('Order not found');
+    await orders.updateStatus(ORG, placed.id, { status: 'cancelled' }, { sub: 's', role: 'admin' });
+    const claim = await prisma.offerClaim.findFirst({ where: { organizationId: ORG, customer: { id: (await orders.getOrder(ORG, placed.id)).customerId } } });
+    expect(claim).toMatchObject({ status: 'started', orderId: null });
   });
 });

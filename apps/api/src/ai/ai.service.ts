@@ -40,7 +40,8 @@ export class AiService {
     }
     const result = await this.ordering.generate({
       organizationId,
-      channel: input.channel,
+      // The authenticated /ai/chat test endpoint ("web") behaves like the dashboard test chat.
+      channel: input.channel === 'whatsapp' ? 'whatsapp' : 'test',
       phone: input.phone,
       message: input.message,
       customerName: input.customerName,

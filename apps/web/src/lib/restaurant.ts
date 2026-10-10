@@ -29,29 +29,33 @@ export function forgetMe() {
   mePromise = null;
 }
 
-export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'out_for_delivery' | 'completed' | 'cancelled';
+export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'completed' | 'cancelled';
 
 export type Order = {
   id: string;
   orderNumber: string;
   status: OrderStatus;
   channel: string;
-  fulfilment: 'pickup' | 'delivery';
-  deliveryAddress: string | null;
-  deliveryArea: string | null;
+  pickupAt: string;
   subtotal: number;
-  deliveryFee: number;
+  discount: number;
   total: number;
-  paymentMethod: string;
-  paymentStatus: 'paid' | 'unpaid';
+  paymentMethod: 'cash_at_shop' | 'upi_at_shop' | 'paid_online';
+  paymentStatus: 'paid' | 'unpaid' | 'customer_says_paid';
   posStatus: string;
   isDemo: boolean;
+  language: string | null;
+  readyNotice: string | null;
+  readyNoticeAt: string | null;
+  readyNoticeNote: string | null;
+  readyCallId: string | null;
   customerName: string | null;
   customerPhone: string | null;
   customerId: string;
   conversationId: string | null;
-  outlet: { id: string; name: string; area: string | null; phone: string | null; isDemo: boolean };
-  items: Array<{ id: string; menuItemId: string; name: string; unitPrice: number; quantity: number; lineTotal: number }>;
+  outlet: { id: string; name: string; area: string | null; phone: string | null; address: string; isDemo: boolean };
+  offer: { id: string; source: string; websiteOrderRef: string | null; amount: number } | null;
+  items: Array<{ id: string; menuItemId: string; name: string; cut: string | null; unit: string; unitPrice: number; quantity: number; lineTotal: number }>;
   events: Array<{ id: string; type: string; fromStatus: string | null; toStatus: string | null; actor: string; note: string | null; createdAt: string }>;
   allowedNext: OrderStatus[];
   createdAt: string;
@@ -60,12 +64,12 @@ export type Order = {
 
 export type Overview = {
   days: number;
-  enquiries: { total: number; inRange: number };
-  orders: { total: number; inRange: number; today: number; active: number; byStatus: Record<string, number>; conversionRate: number };
-  sales: { today: number; inRange: number };
-  channels: Array<{ channel: string; conversations: number; orders: number }>;
+  offers: { total: number; sent: number; started: number; claimed: number; notSent: number; claimRate: number; bySource: Record<string, number>; byStatus: Record<string, number> };
+  orders: { inRange: number; active: number; byStatus: Record<string, number>; pickupsToday: number };
+  sales: { inRange: number; discountGiven: number };
+  readyNotices: Record<string, number>;
+  upcoming: Order[];
   handoffsOpen: number;
-  recentOrders: Order[];
   recentConversations: Array<{
     id: string;
     channel: string;
@@ -83,7 +87,11 @@ export type MenuItem = {
   name: string;
   description: string | null;
   price: number;
-  isVeg: boolean;
+  unit: 'kg' | 'piece';
+  cutOptions: string[];
+  minQty: number;
+  maxQty: number;
+  qtyStep: number;
   available: boolean;
   imageUrl: string | null;
   aliases: string[];
@@ -98,12 +106,9 @@ export type Outlet = {
   address: string;
   area: string | null;
   phone: string | null;
-  serviceAreas: string[];
   opensAt: string;
   closesAt: string;
-  acceptsPickup: boolean;
-  acceptsDelivery: boolean;
-  deliveryFee: number;
+  prepMinutes: number;
   minOrderValue: number;
   acceptOutsideHours: boolean;
   active: boolean;
@@ -111,6 +116,28 @@ export type Outlet = {
 };
 
 export type Catalog = { categories: Array<{ id: string; name: string }>; items: MenuItem[]; outlets: Outlet[] };
+
+export type OfferClaim = {
+  id: string;
+  source: 'whatsapp_link' | 'website' | 'dashboard';
+  status: string;
+  sendError: string | null;
+  websiteOrderRef: string | null;
+  amount: number;
+  expiresAt: string;
+  createdAt: string;
+  customer: { id: string; name: string | null; phone: string | null };
+  order: { id: string; orderNumber: string; total: number; status: string } | null;
+};
+
+export type OffersData = {
+  campaign: { id: string; name: string; code: string; amount: number; minOrderValue: number; validDays: number; templateName: string | null; active: boolean } | null;
+  stats: Overview['offers'];
+  claims: OfferClaim[];
+  whatsappLink: string | null;
+  whatsappLinkNote: string | null;
+  website: { keyConfigured: boolean; endpoint: string };
+};
 
 export type RConversation = {
   id: string;
@@ -148,37 +175,77 @@ export type RCustomer = {
   lastOrderAt: string | null;
 };
 
-/** Exact rupees (orders need ₹605, not ₹0.6 K). */
+/** Exact rupees (orders need ₹390, not ₹0.4 K). */
 export function inr(n: number | null | undefined) {
   const v = Number(n ?? 0);
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
+/** 2 kg, 1.5 kg, 500 g, 12 pcs */
+export function qty(q: number, unit: string) {
+  if (unit === 'piece') return `${q} pcs`;
+  if (q < 1) return `${Math.round(q * 1000)} g`;
+  return `${+q.toFixed(2)} kg`;
+}
+
 export const ORDER_STATUS: Record<OrderStatus, { label: string; tone: Tone }> = {
-  pending: { label: 'New · needs confirmation', tone: 'amber' },
+  pending: { label: 'New · confirm', tone: 'amber' },
   confirmed: { label: 'Confirmed', tone: 'sky' },
-  preparing: { label: 'Preparing', tone: 'violet' },
-  ready: { label: 'Ready', tone: 'brand' },
-  out_for_delivery: { label: 'Out for delivery', tone: 'violet' },
-  completed: { label: 'Completed', tone: 'slate' },
+  preparing: { label: 'Cutting & packing', tone: 'violet' },
+  ready: { label: 'Ready to collect', tone: 'brand' },
+  completed: { label: 'Collected', tone: 'slate' },
   cancelled: { label: 'Cancelled', tone: 'rose' },
 };
 
 export const ACTION_LABEL: Record<OrderStatus, string> = {
   pending: 'Pending',
   confirmed: 'Confirm order',
-  preparing: 'Start preparing',
-  ready: 'Mark ready',
-  out_for_delivery: 'Out for delivery',
-  completed: 'Mark completed',
+  preparing: 'Start cutting',
+  ready: 'Mark ready & call customer',
+  completed: 'Collected',
   cancelled: 'Cancel order',
 };
 
-export const CHANNEL_LABEL: Record<string, string> = { web: 'Website', whatsapp: 'WhatsApp', voice: 'Voice' };
+export const READY_NOTICE: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: 'Calling soon', tone: 'amber' },
+  calling: { label: 'Calling…', tone: 'violet' },
+  answered: { label: 'Call answered', tone: 'brand' },
+  no_answer: { label: 'No answer', tone: 'amber' },
+  failed: { label: 'Call failed', tone: 'rose' },
+  whatsapp_sent: { label: 'Told on WhatsApp', tone: 'sky' },
+  not_sent: { label: 'Not notified', tone: 'rose' },
+};
+
+export const CLAIM_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending_send: { label: 'Not sent', tone: 'amber' },
+  send_failed: { label: 'Send failed', tone: 'rose' },
+  sent: { label: 'Sent', tone: 'sky' },
+  started: { label: 'Chatting', tone: 'violet' },
+  claimed: { label: 'Claimed', tone: 'brand' },
+  expired: { label: 'Expired', tone: 'slate' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+};
+
+export const SOURCE_LABEL: Record<string, string> = { whatsapp_link: 'WhatsApp link', website: 'Website', dashboard: 'Added by staff' };
+
+export const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', voice: 'Phone call', test: 'Test chat', web: 'Website' };
 
 export function paymentLabel(o: Pick<Order, 'paymentMethod' | 'paymentStatus'>) {
-  const method = o.paymentMethod === 'cash_on_delivery' ? 'Cash on delivery' : o.paymentMethod === 'pay_at_outlet' ? 'Pay at outlet' : o.paymentMethod;
-  return `${method} · ${o.paymentStatus === 'paid' ? 'Paid' : 'Unpaid'}`;
+  const method = o.paymentMethod === 'cash_at_shop' ? 'Cash at shop' : o.paymentMethod === 'upi_at_shop' ? 'UPI at shop' : 'Paid online';
+  const status = o.paymentStatus === 'paid' ? 'Paid' : o.paymentStatus === 'customer_says_paid' ? 'Customer says paid — verify' : 'Unpaid';
+  return `${method} · ${status}`;
+}
+
+const IST: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata' };
+/** "Today 6:00 PM", "Tomorrow 10:00 AM", "Tue 13 Oct, 11:00 AM" */
+export function pickupLabel(iso: string) {
+  const d = new Date(iso);
+  const day = (x: Date) => x.toLocaleDateString('en-CA', IST);
+  const time = d.toLocaleTimeString('en-IN', { ...IST, hour: 'numeric', minute: '2-digit' });
+  const today = new Date();
+  if (day(d) === day(today)) return `Today ${time}`;
+  if (day(d) === day(new Date(today.getTime() + 86_400_000))) return `Tomorrow ${time}`;
+  return `${d.toLocaleDateString('en-IN', { ...IST, weekday: 'short', day: 'numeric', month: 'short' })}, ${time}`;
 }
 
 export function actorLabel(actor: string) {

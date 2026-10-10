@@ -1,4 +1,5 @@
--- Restaurant vertical (GR Chicken): tenant type, outlets, menu, orders and order audit trail. Additive only.
+-- Restaurant vertical (GR Chicken): tenant type, shops, per-kg products with cuts, WhatsApp offer claims,
+-- pickup orders and the order audit trail. Additive only.
 
 -- AlterTable
 ALTER TABLE `Organization` ADD COLUMN `vertical` VARCHAR(191) NOT NULL DEFAULT 'real_estate';
@@ -11,12 +12,9 @@ CREATE TABLE `Outlet` (
     `address` TEXT NOT NULL,
     `area` VARCHAR(191) NULL,
     `phone` VARCHAR(191) NULL,
-    `serviceAreas` JSON NOT NULL,
-    `opensAt` VARCHAR(191) NOT NULL DEFAULT '11:00',
-    `closesAt` VARCHAR(191) NOT NULL DEFAULT '23:00',
-    `acceptsPickup` BOOLEAN NOT NULL DEFAULT true,
-    `acceptsDelivery` BOOLEAN NOT NULL DEFAULT false,
-    `deliveryFee` DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    `opensAt` VARCHAR(191) NOT NULL DEFAULT '07:00',
+    `closesAt` VARCHAR(191) NOT NULL DEFAULT '21:00',
+    `prepMinutes` INTEGER NOT NULL DEFAULT 30,
     `minOrderValue` DECIMAL(10, 2) NOT NULL DEFAULT 0,
     `acceptOutsideHours` BOOLEAN NOT NULL DEFAULT false,
     `active` BOOLEAN NOT NULL DEFAULT true,
@@ -49,7 +47,11 @@ CREATE TABLE `MenuItem` (
     `name` VARCHAR(191) NOT NULL,
     `description` TEXT NULL,
     `price` DECIMAL(10, 2) NOT NULL,
-    `isVeg` BOOLEAN NOT NULL DEFAULT false,
+    `unit` VARCHAR(191) NOT NULL DEFAULT 'kg',
+    `cutOptions` JSON NOT NULL,
+    `minQty` DECIMAL(8, 3) NOT NULL DEFAULT 0.5,
+    `maxQty` DECIMAL(8, 3) NOT NULL DEFAULT 10,
+    `qtyStep` DECIMAL(8, 3) NOT NULL DEFAULT 0.25,
     `available` BOOLEAN NOT NULL DEFAULT true,
     `imageUrl` TEXT NULL,
     `aliases` TEXT NULL,
@@ -65,6 +67,49 @@ CREATE TABLE `MenuItem` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `OfferCampaign` (
+    `id` VARCHAR(191) NOT NULL,
+    `organizationId` VARCHAR(191) NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `code` VARCHAR(191) NOT NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `minOrderValue` DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    `validDays` INTEGER NOT NULL DEFAULT 7,
+    `templateName` VARCHAR(191) NULL,
+    `active` BOOLEAN NOT NULL DEFAULT true,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+    PRIMARY KEY (`id`),
+    INDEX `OfferCampaign_organizationId_idx`(`organizationId`),
+    UNIQUE INDEX `OfferCampaign_organizationId_code_key`(`organizationId`, `code`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `OfferClaim` (
+    `id` VARCHAR(191) NOT NULL,
+    `organizationId` VARCHAR(191) NOT NULL,
+    `campaignId` VARCHAR(191) NOT NULL,
+    `customerId` VARCHAR(191) NOT NULL,
+    `phone` VARCHAR(191) NOT NULL,
+    `source` VARCHAR(191) NOT NULL,
+    `websiteOrderRef` VARCHAR(191) NULL,
+    `status` VARCHAR(191) NOT NULL,
+    `sendError` TEXT NULL,
+    `orderId` VARCHAR(191) NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `expiresAt` DATETIME(3) NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE INDEX `OfferClaim_orderId_key`(`orderId`),
+    INDEX `OfferClaim_organizationId_createdAt_idx`(`organizationId`, `createdAt`),
+    INDEX `OfferClaim_organizationId_status_idx`(`organizationId`, `status`),
+    INDEX `OfferClaim_customerId_idx`(`customerId`),
+    INDEX `OfferClaim_campaignId_idx`(`campaignId`),
+    UNIQUE INDEX `OfferClaim_organizationId_websiteOrderRef_key`(`organizationId`, `websiteOrderRef`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `Order` (
     `id` VARCHAR(191) NOT NULL,
     `organizationId` VARCHAR(191) NOT NULL,
@@ -73,12 +118,10 @@ CREATE TABLE `Order` (
     `conversationId` VARCHAR(191) NULL,
     `outletId` VARCHAR(191) NOT NULL,
     `channel` VARCHAR(191) NOT NULL,
-    `fulfilment` VARCHAR(191) NOT NULL,
-    `deliveryAddress` TEXT NULL,
-    `deliveryArea` VARCHAR(191) NULL,
     `status` VARCHAR(191) NOT NULL DEFAULT 'pending',
+    `pickupAt` DATETIME(3) NOT NULL,
     `subtotal` DECIMAL(10, 2) NOT NULL,
-    `deliveryFee` DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    `discount` DECIMAL(10, 2) NOT NULL DEFAULT 0,
     `total` DECIMAL(10, 2) NOT NULL,
     `paymentMethod` VARCHAR(191) NOT NULL,
     `paymentStatus` VARCHAR(191) NOT NULL DEFAULT 'unpaid',
@@ -86,6 +129,11 @@ CREATE TABLE `Order` (
     `idempotencyKey` VARCHAR(191) NOT NULL,
     `customerName` VARCHAR(191) NULL,
     `customerPhone` VARCHAR(191) NULL,
+    `language` VARCHAR(191) NULL,
+    `readyNotice` VARCHAR(191) NULL,
+    `readyNoticeAt` DATETIME(3) NULL,
+    `readyCallId` VARCHAR(191) NULL,
+    `readyNoticeNote` TEXT NULL,
     `notes` TEXT NULL,
     `isDemo` BOOLEAN NOT NULL DEFAULT false,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -93,6 +141,7 @@ CREATE TABLE `Order` (
     PRIMARY KEY (`id`),
     INDEX `Order_organizationId_createdAt_idx`(`organizationId`, `createdAt`),
     INDEX `Order_organizationId_status_idx`(`organizationId`, `status`),
+    INDEX `Order_organizationId_pickupAt_idx`(`organizationId`, `pickupAt`),
     INDEX `Order_customerId_idx`(`customerId`),
     INDEX `Order_outletId_idx`(`outletId`),
     UNIQUE INDEX `Order_organizationId_idempotencyKey_key`(`organizationId`, `idempotencyKey`),
@@ -105,8 +154,10 @@ CREATE TABLE `OrderItem` (
     `orderId` VARCHAR(191) NOT NULL,
     `menuItemId` VARCHAR(191) NOT NULL,
     `name` VARCHAR(191) NOT NULL,
+    `cut` VARCHAR(191) NULL,
+    `unit` VARCHAR(191) NOT NULL DEFAULT 'kg',
     `unitPrice` DECIMAL(10, 2) NOT NULL,
-    `quantity` INTEGER NOT NULL,
+    `quantity` DECIMAL(8, 3) NOT NULL,
     `lineTotal` DECIMAL(10, 2) NOT NULL,
     PRIMARY KEY (`id`),
     INDEX `OrderItem_orderId_idx`(`orderId`),
@@ -140,6 +191,21 @@ ALTER TABLE `MenuItem` ADD CONSTRAINT `MenuItem_organizationId_fkey` FOREIGN KEY
 
 -- AddForeignKey
 ALTER TABLE `MenuItem` ADD CONSTRAINT `MenuItem_categoryId_fkey` FOREIGN KEY (`categoryId`) REFERENCES `MenuCategory`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OfferCampaign` ADD CONSTRAINT `OfferCampaign_organizationId_fkey` FOREIGN KEY (`organizationId`) REFERENCES `Organization`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OfferClaim` ADD CONSTRAINT `OfferClaim_organizationId_fkey` FOREIGN KEY (`organizationId`) REFERENCES `Organization`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OfferClaim` ADD CONSTRAINT `OfferClaim_campaignId_fkey` FOREIGN KEY (`campaignId`) REFERENCES `OfferCampaign`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OfferClaim` ADD CONSTRAINT `OfferClaim_customerId_fkey` FOREIGN KEY (`customerId`) REFERENCES `Customer`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OfferClaim` ADD CONSTRAINT `OfferClaim_orderId_fkey` FOREIGN KEY (`orderId`) REFERENCES `Order`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `Order` ADD CONSTRAINT `Order_organizationId_fkey` FOREIGN KEY (`organizationId`) REFERENCES `Organization`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;

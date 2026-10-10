@@ -5,7 +5,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { Search, ShoppingBag } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { displayName, timeAgo } from '@/lib/format';
-import { CHANNEL_LABEL, ORDER_STATUS, inr, useMe, type Order } from '@/lib/restaurant';
+import { CHANNEL_LABEL, ORDER_STATUS, READY_NOTICE, inr, pickupLabel, qty, useMe, type Order } from '@/lib/restaurant';
 import { PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, ErrorBanner, Segmented, Skeleton, cx } from '@/components/ui';
 import { OrderPanel } from '@/components/restaurant/order-panel';
@@ -62,8 +62,8 @@ function Orders() {
           onChange={setFilter}
           options={[
             { value: 'active', label: 'Active' },
-            { value: 'pending', label: 'Needs confirmation' },
-            { value: 'completed', label: 'Completed' },
+            { value: 'pending', label: 'New' },
+            { value: 'completed', label: 'Collected' },
             { value: 'cancelled', label: 'Cancelled' },
             { value: 'all', label: 'All' },
           ]}
@@ -91,7 +91,7 @@ function Orders() {
             </div>
           ) : !orders?.length ? (
             <Empty icon={<ShoppingBag className="size-6" />} title={debounced ? 'No orders match your search' : 'No orders here'}>
-              New orders from the website chat and WhatsApp show up here automatically.
+              Orders confirmed on WhatsApp show up here automatically, sorted by pickup time.
             </Empty>
           ) : (
             <ul className="divide-y divide-line">
@@ -100,31 +100,28 @@ function Orders() {
                   <button
                     onClick={() => select(o.id)}
                     aria-current={selected === o.id ? 'true' : undefined}
-                    className={cx('grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-5 py-3 text-left hover:bg-slate-50/70 md:grid-cols-[130px_minmax(0,1fr)_90px_minmax(150px,auto)]', selected === o.id && 'bg-brand-soft/40')}
+                    className={cx('grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-5 py-3 text-left hover:bg-slate-50/70 md:grid-cols-[130px_minmax(0,1fr)_84px_140px]', selected === o.id && 'bg-brand-soft/40')}
                   >
                     <div>
-                      <p className="text-[13.5px] font-bold text-ink">{o.orderNumber}</p>
+                      <p className="text-[13.5px] font-bold text-ink">{pickupLabel(o.pickupAt)}</p>
                       <p className="text-[11.5px] text-faint">
-                        {timeAgo(o.createdAt)} ago · {CHANNEL_LABEL[o.channel] ?? o.channel}
+                        {o.orderNumber} · {CHANNEL_LABEL[o.channel] ?? o.channel}
                       </p>
                     </div>
-                    <p className="tabular text-right text-[13.5px] font-bold text-ink md:order-3">{inr(o.total)}</p>
+                    <p className="tabular text-right text-[13.5px] font-bold text-ink md:order-3">
+                      {inr(o.total)}
+                      {o.discount > 0 && <span className="block text-[11px] font-semibold text-violet">−₹{o.discount} offer</span>}
+                    </p>
                     <div className="col-span-2 min-w-0 md:order-2 md:col-span-1">
                       <p className="truncate text-[13px] font-semibold text-ink">{displayName({ name: o.customerName, phone: o.customerPhone })}</p>
-                      <p className="truncate text-[12px] text-muted">{o.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}</p>
-                      <p className="truncate text-[11.5px] text-faint">
-                        {o.fulfilment === 'delivery' ? 'Delivery' : 'Pickup'} · {o.outlet.name}
-                      </p>
+                      <p className="truncate text-[12.5px] text-body">{o.items.map((i) => `${qty(i.quantity, i.unit)} ${i.name}${i.cut ? ` · ${i.cut}` : ''}`).join(', ')}</p>
                     </div>
-                    <div className="col-span-2 md:order-4 md:col-span-1">
+                    <div className="col-span-2 flex flex-wrap gap-1 md:order-4 md:col-span-1 md:flex-col md:items-start">
                       <Badge tone={ORDER_STATUS[o.status].tone} dot>
                         {ORDER_STATUS[o.status].label}
                       </Badge>
-                      {o.paymentStatus === 'paid' && (
-                        <Badge tone="brand" className="ml-1">
-                          Paid
-                        </Badge>
-                      )}
+                      {o.readyNotice && READY_NOTICE[o.readyNotice] && <Badge tone={READY_NOTICE[o.readyNotice].tone}>{READY_NOTICE[o.readyNotice].label}</Badge>}
+                      {o.paymentStatus === 'paid' && <Badge tone="brand">Paid</Badge>}
                     </div>
                   </button>
                 </li>

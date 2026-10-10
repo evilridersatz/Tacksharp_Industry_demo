@@ -54,7 +54,7 @@ export const config = {
     loginPerWindow: num('RATE_LIMIT_LOGIN', 10),
     apiPerMinute: num('RATE_LIMIT_API_PER_MIN', 300),
     webhookPerMinute: num('RATE_LIMIT_WEBHOOK_PER_MIN', 1200),
-    publicChatPerMinute: num('RATE_LIMIT_PUBLIC_CHAT_PER_MIN', 40),
+    publicApiPerMinute: num('RATE_LIMIT_PUBLIC_API_PER_MIN', 60),
   },
 
   /** Run BullMQ workers inside the API process (simplest for local + single Lightsail box). */
@@ -85,6 +85,8 @@ export const config = {
       visit_confirm: process.env.WHATSAPP_TEMPLATE_VISIT_CONFIRM ?? '',
       visit_reminder: process.env.WHATSAPP_TEMPLATE_VISIT_REMINDER ?? '',
       visit_after: process.env.WHATSAPP_TEMPLATE_VISIT_AFTER ?? '',
+      // Restaurant: "order ready" outside the 24h window, {{1}} = order number.
+      order_ready: process.env.WHATSAPP_TEMPLATE_ORDER_READY ?? '',
     } as Record<string, string>,
     templateLanguage: process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? 'en',
     /** Number of {{n}} body variables in the template (0, 1 = customer name, 2 = name + requirement). */

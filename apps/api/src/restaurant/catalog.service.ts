@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { log } from '../common/logger.js';
-import type { CatalogItem } from './order-parse.js';
+import type { Product } from './chicken-parse.js';
 
 const CACHE_MS = 30_000;
 const MAX_PRICE = 100_000;
@@ -12,7 +12,11 @@ export type MenuItemView = {
   name: string;
   description: string | null;
   price: number;
-  isVeg: boolean;
+  unit: 'kg' | 'piece';
+  cutOptions: string[];
+  minQty: number;
+  maxQty: number;
+  qtyStep: number;
   available: boolean;
   imageUrl: string | null;
   aliases: string[];
@@ -28,12 +32,9 @@ export type OutletView = {
   address: string;
   area: string | null;
   phone: string | null;
-  serviceAreas: string[];
   opensAt: string;
   closesAt: string;
-  acceptsPickup: boolean;
-  acceptsDelivery: boolean;
-  deliveryFee: number;
+  prepMinutes: number;
   minOrderValue: number;
   acceptOutsideHours: boolean;
   active: boolean;
@@ -46,10 +47,28 @@ export type Catalog = {
   outlets: OutletView[];
 };
 
-const money = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
+const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const splitAliases = (raw: string | null) => (raw ?? '').split(',').map((a) => a.trim()).filter(Boolean);
+const cutsOf = (raw: unknown) => (Array.isArray(raw) ? raw.map((c) => String(c).trim()).filter(Boolean) : []);
 
-/** Menu and outlets of a restaurant tenant. Every query is scoped by organizationId. */
+export function outletView(o: Prisma.OutletGetPayload<object>): OutletView {
+  return {
+    id: o.id,
+    name: o.name,
+    address: o.address,
+    area: o.area,
+    phone: o.phone,
+    opensAt: o.opensAt,
+    closesAt: o.closesAt,
+    prepMinutes: o.prepMinutes,
+    minOrderValue: num(o.minOrderValue),
+    acceptOutsideHours: o.acceptOutsideHours,
+    active: o.active,
+    isDemo: o.isDemo,
+  };
+}
+
+/** Products and shops of a restaurant tenant. Every query is scoped by organizationId. */
 @Injectable()
 export class CatalogService {
   private readonly cache = new Map<string, { at: number; value: Catalog }>();
@@ -61,7 +80,7 @@ export class CatalogService {
     if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
     const [categories, items, outlets] = await Promise.all([
       this.prisma.menuCategory.findMany({ where: { organizationId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
-      this.prisma.menuItem.findMany({ where: { organizationId }, include: { category: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+      this.prisma.menuItem.findMany({ where: { organizationId }, include: { category: true }, orderBy: [{ category: { sortOrder: 'asc' } }, { sortOrder: 'asc' }, { name: 'asc' }] }),
       this.prisma.outlet.findMany({ where: { organizationId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
     ]);
     const value: Catalog = {
@@ -70,8 +89,12 @@ export class CatalogService {
         id: i.id,
         name: i.name,
         description: i.description,
-        price: money(i.price),
-        isVeg: i.isVeg,
+        price: num(i.price),
+        unit: i.unit === 'piece' ? 'piece' : 'kg',
+        cutOptions: cutsOf(i.cutOptions),
+        minQty: num(i.minQty),
+        maxQty: num(i.maxQty),
+        qtyStep: num(i.qtyStep),
         available: i.available,
         imageUrl: i.imageUrl,
         aliases: splitAliases(i.aliases),
@@ -80,42 +103,25 @@ export class CatalogService {
         categoryName: i.category.name,
         sortOrder: i.sortOrder,
       })),
-      outlets: outlets.map((o) => ({
-        id: o.id,
-        name: o.name,
-        address: o.address,
-        area: o.area,
-        phone: o.phone,
-        serviceAreas: Array.isArray(o.serviceAreas) ? (o.serviceAreas as unknown[]).map((a) => String(a).toLowerCase().trim()).filter(Boolean) : [],
-        opensAt: o.opensAt,
-        closesAt: o.closesAt,
-        acceptsPickup: o.acceptsPickup,
-        acceptsDelivery: o.acceptsDelivery,
-        deliveryFee: money(o.deliveryFee),
-        minOrderValue: money(o.minOrderValue),
-        acceptOutsideHours: o.acceptOutsideHours,
-        active: o.active,
-        isDemo: o.isDemo,
-      })),
+      outlets: outlets.map(outletView),
     };
     this.cache.set(organizationId, { at: Date.now(), value });
     return value;
   }
 
-  /** Items in the shape the message parser needs. Unavailable items are included so we can say "not available today". */
-  async parserCatalog(organizationId: string): Promise<CatalogItem[]> {
-    const c = await this.get(organizationId);
-    return c.items.map((i) => ({ id: i.id, name: i.name, categoryId: i.categoryId, categoryName: i.categoryName, aliases: i.aliases, available: i.available }));
+  /** Products in the shape the message parser needs (unavailable ones too, so we can say "not available today"). */
+  products(catalog: Catalog): Product[] {
+    return catalog.items.map((i) => ({ id: i.id, name: i.name, unit: i.unit, aliases: i.aliases, cutOptions: i.cutOptions, available: i.available }));
   }
 
   invalidate(organizationId: string) {
     this.cache.delete(organizationId);
   }
 
-  /** Dashboard edit: price, availability, description, image, aliases, name, category. Validated on the server. */
+  /** Dashboard edit: price per kg, availability, cuts, description, aliases. Validated on the server. */
   async updateItem(organizationId: string, itemId: string, patch: Record<string, unknown>, actor: string) {
     const item = await this.prisma.menuItem.findFirst({ where: { id: itemId, organizationId } });
-    if (!item) throw new NotFoundException('Menu item not found');
+    if (!item) throw new NotFoundException('Product not found');
     const data = await this.validateItemInput(organizationId, patch, false);
     const updated = await this.prisma.menuItem.update({ where: { id: item.id }, data });
     this.invalidate(organizationId);
@@ -132,13 +138,15 @@ export class CatalogService {
   async createItem(organizationId: string, input: Record<string, unknown>, actor: string) {
     const data = await this.validateItemInput(organizationId, input, true);
     try {
-      const created = await this.prisma.menuItem.create({ data: { ...(data as Prisma.MenuItemUncheckedCreateInput), organizationId } });
+      const created = await this.prisma.menuItem.create({
+        data: { ...(data as Omit<Prisma.MenuItemUncheckedCreateInput, 'organizationId' | 'cutOptions'>), cutOptions: (data.cutOptions as string[] | undefined) ?? [], organizationId },
+      });
       this.invalidate(organizationId);
       log.info('menu.item_created', { organizationId, itemId: created.id, actor });
       return created;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new BadRequestException('An item with this name already exists.');
+        throw new BadRequestException('A product with this name already exists.');
       }
       throw error;
     }
@@ -147,6 +155,11 @@ export class CatalogService {
   private async validateItemInput(organizationId: string, input: Record<string, unknown>, creating: boolean) {
     const data: Record<string, unknown> = {};
     const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : undefined);
+    const positive = (v: unknown, label: string, max: number) => {
+      const n = typeof v === 'string' ? Number(v) : v;
+      if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0 || n > max) throw new BadRequestException(`${label} must be a number between 0 and ${max}.`);
+      return n;
+    };
 
     if (input.name !== undefined || creating) {
       const name = str(input.name, 120);
@@ -154,20 +167,26 @@ export class CatalogService {
       data.name = name;
     }
     if (input.price !== undefined || creating) {
-      const price = typeof input.price === 'string' ? Number(input.price) : input.price;
-      if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price > MAX_PRICE) {
-        throw new BadRequestException(`Price must be a number between 1 and ${MAX_PRICE}.`);
-      }
+      const price = positive(input.price, 'Price', MAX_PRICE);
       if (Math.round(price * 100) !== price * 100) throw new BadRequestException('Price can have at most 2 decimals.');
       data.price = new Prisma.Decimal(price.toFixed(2));
+    }
+    if (input.unit !== undefined || creating) {
+      const unit = input.unit ?? 'kg';
+      if (unit !== 'kg' && unit !== 'piece') throw new BadRequestException('unit must be kg or piece.');
+      data.unit = unit;
+    }
+    if (input.cutOptions !== undefined) {
+      const raw = typeof input.cutOptions === 'string' ? input.cutOptions.split(',') : input.cutOptions;
+      if (!Array.isArray(raw)) throw new BadRequestException('cutOptions must be a list.');
+      data.cutOptions = raw.map((c) => String(c).trim().slice(0, 40)).filter(Boolean).slice(0, 8);
+    }
+    for (const key of ['minQty', 'maxQty', 'qtyStep'] as const) {
+      if (input[key] !== undefined) data[key] = new Prisma.Decimal(positive(input[key], key, 1000).toFixed(3));
     }
     if (input.available !== undefined) {
       if (typeof input.available !== 'boolean') throw new BadRequestException('available must be true or false.');
       data.available = input.available;
-    }
-    if (input.isVeg !== undefined) {
-      if (typeof input.isVeg !== 'boolean') throw new BadRequestException('isVeg must be true or false.');
-      data.isVeg = input.isVeg;
     }
     if (input.description !== undefined) data.description = str(input.description, 500) || null;
     if (input.aliases !== undefined) data.aliases = str(input.aliases, 500) || null;

@@ -20,7 +20,8 @@ import {
   ShoppingBag,
   UtensilsCrossed,
   Users,
-  Megaphone,
+  Gift,
+  FlaskConical,
   PlugZap,
   X,
 } from 'lucide-react';
@@ -39,15 +40,16 @@ const RESTAURANT_NAV: NavGroup[] = [
     items: [
       { href: '/', label: 'Overview', icon: LayoutDashboard },
       { href: '/orders', label: 'Live orders', icon: ShoppingBag, badge: 'orders' },
-      { href: '/conversations', label: 'AI conversations', icon: MessageSquare, badge: 'handoff' },
+      { href: '/conversations', label: 'Conversations', icon: MessageSquare, badge: 'handoff' },
       { href: '/customers', label: 'Customers', icon: Users },
     ],
   },
   {
-    section: 'Store',
+    section: 'Shop',
     items: [
-      { href: '/menu', label: 'Menu', icon: UtensilsCrossed },
-      { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+      { href: '/offers', label: '₹50 Offer', icon: Gift },
+      { href: '/menu', label: 'Products & rates', icon: UtensilsCrossed },
+      { href: '/test-chat', label: 'Test chat', icon: FlaskConical },
     ],
   },
   {
@@ -188,8 +190,7 @@ function UserCard() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  // Login and the public website chat have no dashboard chrome (and need no login).
-  if (pathname === '/login' || pathname.startsWith('/chat/')) return <>{children}</>;
+  if (pathname === '/login') return <>{children}</>;
   return <Shell>{children}</Shell>;
 }
 

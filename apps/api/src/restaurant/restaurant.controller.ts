@@ -6,11 +6,15 @@ import { queueRedis } from '../queues/queues.js';
 import { config } from '../common/config.js';
 import { CatalogService } from './catalog.service.js';
 import { OrdersService } from './orders.service.js';
+import { OffersService } from './offers.service.js';
+import { OrderingEngine } from './ordering-engine.service.js';
+import { ReadyNoticeService } from './ready-notice.service.js';
+import { findPhone } from './chicken-parse.js';
 
 const IST_OFFSET_MS = 330 * 60_000;
 const istDay = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
-const startOfIstDay = () => new Date(Date.now() - ((Date.now() + IST_OFFSET_MS) % 86_400_000));
-const ACTIVE = ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery'];
+const startOfIstDay = (offsetDays = 0) => new Date(Date.now() - ((Date.now() + IST_OFFSET_MS) % 86_400_000) + offsetDays * 86_400_000);
+const ACTIVE = ['pending', 'confirmed', 'preparing', 'ready'];
 
 function requireStaff(user: SessionClaims) {
   if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
@@ -23,6 +27,9 @@ export class RestaurantController {
     private readonly prisma: PrismaService,
     private readonly catalog: CatalogService,
     private readonly orders: OrdersService,
+    private readonly offers: OffersService,
+    private readonly engine: OrderingEngine,
+    private readonly ready: ReadyNoticeService,
   ) {}
 
   @Get('overview')
@@ -30,34 +37,29 @@ export class RestaurantController {
     const days = Math.min(Math.max(Number(daysParam) || 7, 1), 90);
     const since = new Date(Date.now() - days * 86_400_000);
     const today = startOfIstDay();
+    const tomorrow = startOfIstDay(1);
     const notCancelled = { status: { not: 'cancelled' } };
 
-    const [
-      conversationsTotal, enquiriesInRange, ordersTotal, ordersInRange, byStatus, ordersToday, salesToday, salesInRange,
-      convByChannel, ordersByChannel, recentOrders, recentConversations, handoffsOpen, convertedInRange, seriesRows, demoItems,
-    ] = await Promise.all([
-      this.prisma.conversation.count({ where: { organizationId } }),
-      this.prisma.conversation.count({ where: { organizationId, Message: { some: { role: 'user', createdAt: { gte: since } } } } }),
-      this.prisma.order.count({ where: { organizationId } }),
-      this.prisma.order.count({ where: { organizationId, createdAt: { gte: since } } }),
-      this.prisma.order.groupBy({ by: ['status'], where: { organizationId }, _count: { _all: true } }),
-      this.prisma.order.count({ where: { organizationId, createdAt: { gte: today } } }),
-      this.prisma.order.aggregate({ where: { organizationId, createdAt: { gte: today }, ...notCancelled }, _sum: { total: true } }),
-      this.prisma.order.aggregate({ where: { organizationId, createdAt: { gte: since }, ...notCancelled }, _sum: { total: true } }),
-      this.prisma.conversation.groupBy({ by: ['channel'], where: { organizationId }, _count: { _all: true } }),
-      this.prisma.order.groupBy({ by: ['channel'], where: { organizationId }, _count: { _all: true } }),
-      this.orders.list(organizationId, { limit: 8 }),
-      this.prisma.conversation.findMany({
-        where: { organizationId },
-        orderBy: { updatedAt: 'desc' },
-        take: 6,
-        include: { Customer: { select: { id: true, name: true, phone: true } }, Message: { orderBy: { createdAt: 'desc' }, take: 1 } },
-      }),
-      this.prisma.conversation.count({ where: { organizationId, status: 'human_handoff' } }),
-      this.prisma.order.findMany({ where: { organizationId, createdAt: { gte: since }, conversationId: { not: null } }, select: { conversationId: true }, distinct: ['conversationId'] }),
-      this.prisma.order.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, total: true, status: true } }),
-      this.prisma.menuItem.count({ where: { organizationId, isDemo: true } }),
-    ]);
+    const [offerStats, ordersInRange, byStatus, salesInRange, discountInRange, pickupsToday, upcoming, readyNotices, recentConversations, handoffsOpen, seriesRows, demoItems] =
+      await Promise.all([
+        this.offers.stats(organizationId, since),
+        this.prisma.order.count({ where: { organizationId, createdAt: { gte: since } } }),
+        this.prisma.order.groupBy({ by: ['status'], where: { organizationId }, _count: { _all: true } }),
+        this.prisma.order.aggregate({ where: { organizationId, createdAt: { gte: since }, ...notCancelled }, _sum: { total: true } }),
+        this.prisma.order.aggregate({ where: { organizationId, createdAt: { gte: since }, ...notCancelled }, _sum: { discount: true } }),
+        this.prisma.order.count({ where: { organizationId, pickupAt: { gte: today, lt: tomorrow }, ...notCancelled } }),
+        this.orders.list(organizationId, { status: 'active', limit: 8 }),
+        this.prisma.order.groupBy({ by: ['readyNotice'], where: { organizationId, readyNotice: { not: null }, updatedAt: { gte: since } }, _count: { _all: true } }),
+        this.prisma.conversation.findMany({
+          where: { organizationId },
+          orderBy: { updatedAt: 'desc' },
+          take: 6,
+          include: { Customer: { select: { id: true, name: true, phone: true } }, Message: { orderBy: { createdAt: 'desc' }, take: 1 } },
+        }),
+        this.prisma.conversation.count({ where: { organizationId, status: 'human_handoff' } }),
+        this.prisma.order.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, total: true, status: true } }),
+        this.prisma.menuItem.count({ where: { organizationId, isDemo: true } }),
+      ]);
 
     const buckets = Array.from({ length: days }, (_, i) => istDay(new Date(Date.now() - (days - 1 - i) * 86_400_000)));
     const series = buckets.map((day) => {
@@ -67,23 +69,12 @@ export class RestaurantController {
     const status = Object.fromEntries(byStatus.map((s) => [s.status, s._count._all]));
     return {
       days,
-      enquiries: { total: conversationsTotal, inRange: enquiriesInRange },
-      orders: {
-        total: ordersTotal,
-        inRange: ordersInRange,
-        today: ordersToday,
-        active: ACTIVE.reduce((s, k) => s + (status[k] ?? 0), 0),
-        byStatus: status,
-        conversionRate: enquiriesInRange ? Math.round((convertedInRange.length / enquiriesInRange) * 1000) / 10 : 0,
-      },
-      sales: { today: Number(salesToday._sum.total ?? 0), inRange: Number(salesInRange._sum.total ?? 0) },
-      channels: ['web', 'whatsapp', 'voice'].map((channel) => ({
-        channel,
-        conversations: convByChannel.find((c) => c.channel === channel)?._count._all ?? 0,
-        orders: ordersByChannel.find((c) => c.channel === channel)?._count._all ?? 0,
-      })),
+      offers: { ...offerStats, claimRate: offerStats.sent ? Math.round((offerStats.claimed / offerStats.sent) * 1000) / 10 : 0 },
+      orders: { inRange: ordersInRange, active: ACTIVE.reduce((s, k) => s + (status[k] ?? 0), 0), byStatus: status, pickupsToday },
+      sales: { inRange: Number(salesInRange._sum.total ?? 0), discountGiven: Number(discountInRange._sum.discount ?? 0) },
+      readyNotices: Object.fromEntries(readyNotices.map((r) => [r.readyNotice ?? 'none', r._count._all])),
+      upcoming,
       handoffsOpen,
-      recentOrders,
       recentConversations: recentConversations.map((c) => ({
         id: c.id,
         channel: c.channel,
@@ -109,12 +100,25 @@ export class RestaurantController {
     return this.orders.getOrder(organizationId, id);
   }
 
+  /** Staff status / payment change. Marking Ready triggers the customer call (in the background). */
   @Patch('orders/:id')
-  updateOrder(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { status?: unknown; note?: unknown; paymentStatus?: unknown }) {
-    return this.orders.updateStatus(organizationId, id, body ?? {}, user);
+  async updateOrder(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { status?: unknown; note?: unknown; paymentStatus?: unknown }) {
+    const { order, changedTo } = await this.orders.updateStatus(organizationId, id, body ?? {}, user);
+    if (changedTo === 'ready') void this.ready.notify(organizationId, order.id);
+    return order;
   }
 
-  // ---- Menu --------------------------------------------------------------------------------
+  /** "Call again" from the order screen. */
+  @Post('orders/:id/notify-ready')
+  async notifyReady(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string) {
+    requireStaff(user);
+    const order = await this.orders.getOrder(organizationId, id);
+    if (order.status !== 'ready') throw new BadRequestException('Only orders that are Ready can be notified.');
+    await this.ready.notify(organizationId, id, { force: true });
+    return this.orders.getOrder(organizationId, id);
+  }
+
+  // ---- Products ----------------------------------------------------------------------------
 
   @Get('menu')
   menu(@Org() organizationId: string) {
@@ -129,8 +133,87 @@ export class RestaurantController {
 
   @Post('menu/items')
   createItem(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: Record<string, unknown>) {
-    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can add menu items.');
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can add products.');
     return this.catalog.createItem(organizationId, body ?? {}, `user:${user.sub}`);
+  }
+
+  // ---- Offer (₹50 website offer) -----------------------------------------------------------
+
+  @Get('offers')
+  async offerOverview(@Org() organizationId: string, @Query('status') status?: string, @Query('source') source?: string) {
+    const [campaign, claims, stats, waNumber, websiteKey] = await Promise.all([
+      this.offers.activeCampaign(organizationId).then((c) => c ?? this.prisma.offerCampaign.findFirst({ where: { organizationId }, orderBy: { createdAt: 'asc' } })),
+      this.offers.list(organizationId, { status, source }),
+      this.offers.stats(organizationId),
+      this.prisma.organizationChannel.findFirst({ where: { organizationId, kind: 'whatsapp_display_number' } }),
+      this.prisma.organizationChannel.findFirst({ where: { organizationId, kind: 'website_api_key' } }),
+    ]);
+    const linkText = campaign ? `Vanakkam GR Chicken! En ₹${Number(campaign.amount)} offer claim pannanum (${campaign.code})` : '';
+    return {
+      campaign: campaign && { ...campaign, amount: Number(campaign.amount), minOrderValue: Number(campaign.minOrderValue) },
+      stats,
+      claims,
+      whatsappLink: waNumber && campaign ? `https://wa.me/${waNumber.externalId}?text=${encodeURIComponent(linkText)}` : null,
+      whatsappLinkNote: waNumber ? null : 'Set the WhatsApp business number (GR_WHATSAPP_DISPLAY_NUMBER in the seed) to get the claim link.',
+      website: { keyConfigured: Boolean(websiteKey), endpoint: `${config.publicBaseUrl}/public/offers` },
+    };
+  }
+
+  @Patch('offers/campaign/:id')
+  updateCampaign(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can change the offer.');
+    return this.offers.updateCampaign(organizationId, id, body ?? {});
+  }
+
+  /** Staff add customers who ordered on the website: one number per line, optional name after a comma. */
+  @Post('offers/send')
+  async sendOffers(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { entries?: unknown }) {
+    requireStaff(user);
+    const raw = typeof body?.entries === 'string' ? body.entries : '';
+    const lines = raw.split(/\n/).map((l) => l.trim()).filter(Boolean).slice(0, 50);
+    if (!lines.length) throw new BadRequestException('Add at least one phone number.');
+    const results = [];
+    for (const line of lines) {
+      const phone = findPhone(line);
+      if (!phone) {
+        results.push({ input: line, ok: false, error: 'No valid mobile number' });
+        continue;
+      }
+      const name = line.replace(/(?:\+?91)?[\s-]*[6-9](?:[\s-]*\d){9}/, '').replace(/^[\s,;-]+|[\s,;-]+$/g, '').slice(0, 80) || undefined;
+      try {
+        const r = await this.offers.createAndSend({ organizationId, phone, name, source: 'dashboard' });
+        results.push({ input: line, ok: true, duplicate: r.duplicate, status: r.claim.status, note: r.claim.sendError });
+      } catch (e) {
+        results.push({ input: line, ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { results };
+  }
+
+  @Post('offers/:id/resend')
+  resendOffer(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string) {
+    requireStaff(user);
+    return this.offers.send(organizationId, id);
+  }
+
+  /** New key for the website integration; shown once, only its hash is stored. */
+  @Post('offers/website-key')
+  async rotateWebsiteKey(@Org() organizationId: string, @CurrentUser() user: SessionClaims) {
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can create API keys.');
+    return { key: await this.offers.rotateWebsiteKey(organizationId), note: 'Copy it now: it will not be shown again.' };
+  }
+
+  // ---- Test chat (same conversation as WhatsApp, nothing is sent) ---------------------------
+
+  @Post('test-chat')
+  async testChat(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown; message?: unknown; name?: unknown }) {
+    requireStaff(user);
+    const phone = findPhone(String(body?.phone ?? ''));
+    const message = typeof body?.message === 'string' ? body.message.trim() : '';
+    if (!phone) throw new BadRequestException('Enter a 10-digit test mobile number.');
+    if (!message || message.length > 1000) throw new BadRequestException('Message must be 1–1000 characters.');
+    const r = await this.engine.generate({ organizationId, channel: 'test', phone, message, customerName: typeof body?.name === 'string' ? body.name.slice(0, 60) : undefined });
+    return { reply: r.response, step: r.state, draft: r.draft, order: r.order ?? null, path: r.path };
   }
 
   // ---- Conversations -----------------------------------------------------------------------
@@ -276,23 +359,23 @@ export class RestaurantController {
 
   @Get('integrations')
   async integrations(@Org() organizationId: string) {
-    const [org, channels, outlets, db, redis, llm] = await Promise.all([
+    const [org, channels, outlets, db, redis, llm, campaign] = await Promise.all([
       this.prisma.organization.findUnique({ where: { id: organizationId }, select: { id: true, name: true, vertical: true, createdAt: true } }),
       this.prisma.organizationChannel.findMany({ where: { organizationId }, select: { kind: true, externalId: true } }),
       this.catalog.get(organizationId, true).then((c) => c.outlets),
       check(() => this.prisma.$queryRaw`SELECT 1`),
       check(() => queueRedis.ping()),
       llmStatus(),
+      this.offers.activeCampaign(organizationId),
     ]);
     const waMapped = channels.some((c) => c.kind === 'whatsapp_phone_number_id') || (organizationId === config.defaultOrganizationId && Boolean(config.whatsapp.phoneNumberId));
-    const webKey = channels.find((c) => c.kind === 'web_chat_key')?.externalId;
+    const voice = this.ready.voiceStatus();
     return {
       tenant: org,
       outlets,
       health: { database: db, redis },
       llm,
       channels: {
-        web: { connected: Boolean(webKey), chatKey: webKey ?? null, note: webKey ? 'Public website chat is live for this tenant.' : 'No website chat key. Run the GR Chicken seed or add an OrganizationChannel(kind=web_chat_key).' },
         whatsapp: {
           connected: waMapped && Boolean(config.whatsapp.accessToken) && Boolean(config.whatsapp.phoneNumberId),
           accessTokenSet: Boolean(config.whatsapp.accessToken),
@@ -300,18 +383,22 @@ export class RestaurantController {
           verifyTokenSet: Boolean(config.whatsapp.verifyToken),
           appSecretSet: Boolean(config.whatsapp.appSecret),
           mappedToThisTenant: waMapped,
+          displayNumberSet: channels.some((c) => c.kind === 'whatsapp_display_number'),
+          offerTemplateSet: Boolean(campaign?.templateName),
+          orderReadyTemplateSet: Boolean(config.whatsapp.stepTemplates.order_ready),
           webhookUrl: `${config.publicBaseUrl}/webhooks/whatsapp`,
         },
-        voice: { connected: false, note: 'Voice ordering is not built for restaurants yet. Calls to a restaurant number get a polite "order on WhatsApp or website" reply.' },
+        voice: {
+          connected: voice.ready,
+          missing: voice.missing,
+          callingHours: `${config.voice.callWindowStartHour}:00–${config.voice.callWindowEndHour}:00 IST`,
+          answerUrl: `${config.publicBaseUrl}/voice/ready/answer`,
+          note: voice.ready ? 'The assistant calls the customer in Tamil when staff mark an order Ready; WhatsApp if unanswered.' : 'Ready calls are off until these are set; the ready message goes on WhatsApp instead.',
+        },
+        website: { keyConfigured: channels.some((c) => c.kind === 'website_api_key'), endpoint: `${config.publicBaseUrl}/public/offers` },
       },
-      pos: { status: 'not_integrated', note: 'No GR Chicken POS API access yet. Orders stay in Tacksharp; staff confirm them here and enter them into the outlet POS.' },
-      payments: { status: 'not_integrated', note: 'No payment gateway. Orders are cash on delivery / pay at outlet. Only staff can mark an order paid.' },
-      delivery: { status: 'not_integrated', note: 'No delivery-partner API. Delivery orders are fulfilled by the outlet.' },
-      campaigns: {
-        sendingEnabled: false,
-        templateConfigured: Boolean(config.whatsapp.templateName),
-        note: 'Campaign sending is disabled. It needs WhatsApp credentials, an approved marketing template and recorded customer opt-in.',
-      },
+      pos: { status: 'not_integrated', note: 'No GR Chicken POS API access yet. Orders stay in Tacksharp; staff confirm them here.' },
+      payments: { status: 'not_integrated', note: 'No payment gateway. Customers pay cash or UPI at the shop; "paid online" is the customer\'s word until staff verify it.' },
     };
   }
 }
@@ -328,7 +415,7 @@ async function check(fn: () => Promise<unknown>) {
   }
 }
 
-/** Which model the restaurant assistant would use and whether it answers. Never returns keys. */
+/** Which model the assistant would use and whether it answers. Never returns keys. */
 async function llmStatus() {
   const baseUrl = process.env.OPENAI_BASE_URL;
   const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';

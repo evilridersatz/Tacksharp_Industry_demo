@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Bot, Globe, Headset, MessageCircle, MessageSquare, Search } from 'lucide-react';
+import { Bot, FlaskConical, Headset, MessageCircle, MessageSquare, PhoneCall, Search } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Message } from '@/lib/types';
 import { dateTime, displayName, formatPhone, timeAgo, waLink } from '@/lib/format';
@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/shell';
 import { Avatar, Badge, Button, Card, Empty, ErrorBanner, Segmented, Skeleton, cx } from '@/components/ui';
 import { Thread } from '@/components/conversation';
 
-type Channel = 'all' | 'web' | 'whatsapp';
+type Channel = 'all' | 'whatsapp' | 'voice' | 'test';
 
 export function RestaurantConversations() {
   const params = useSearchParams();
@@ -81,8 +81,9 @@ export function RestaurantConversations() {
               onChange={setChannel}
               options={[
                 { value: 'all', label: 'All' },
-                { value: 'web', label: 'Website' },
                 { value: 'whatsapp', label: 'WhatsApp' },
+                { value: 'voice', label: 'Calls' },
+                { value: 'test', label: 'Test' },
               ]}
             />
             <label className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-muted">
@@ -103,7 +104,7 @@ export function RestaurantConversations() {
                     <Avatar person={c.customer} size={34} />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
-                        <span className="truncate text-[13px] font-semibold text-ink">{c.customer ? displayName(c.customer) : 'Website visitor'}</span>
+                        <span className="truncate text-[13px] font-semibold text-ink">{displayName(c.customer)}</span>
                         <span className="text-[11px] text-faint">{timeAgo(c.lastMessage?.createdAt ?? c.updatedAt)}</span>
                       </span>
                       <span className="block truncate text-[12.5px] text-muted">
@@ -111,7 +112,7 @@ export function RestaurantConversations() {
                         {c.lastMessage ? plain(c.lastMessage.content) : 'No messages'}
                       </span>
                       <span className="mt-1 flex items-center gap-1.5 text-[11.5px] text-faint">
-                        {c.channel === 'web' ? <Globe className="size-3" /> : <MessageCircle className="size-3" />}
+                        {c.channel === 'voice' ? <PhoneCall className="size-3" /> : c.channel === 'test' ? <FlaskConical className="size-3" /> : <MessageCircle className="size-3" />}
                         {CHANNEL_LABEL[c.channel] ?? c.channel}
                         {c.orderCount > 0 && <Badge tone="brand">{c.orderCount} order{c.orderCount > 1 ? 's' : ''}</Badge>}
                         {c.status === 'human_handoff' && (
@@ -127,7 +128,7 @@ export function RestaurantConversations() {
             })}
             {list && items.length === 0 && (
               <Empty icon={<MessageSquare className="size-6" />} title="No conversations">
-                Chats appear here when customers message on the website or WhatsApp.
+                WhatsApp chats, order-ready calls and test chats appear here.
               </Empty>
             )}
           </ul>
@@ -139,7 +140,7 @@ export function RestaurantConversations() {
               <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
                 <Avatar person={detail.customer} size={36} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[14px] font-semibold text-ink">{detail.customer ? displayName(detail.customer) : 'Website visitor'}</p>
+                  <p className="truncate text-[14px] font-semibold text-ink">{displayName(detail.customer)}</p>
                   <p className="text-[12px] text-muted">
                     {detail.customer?.phone ? `${formatPhone(detail.customer.phone)} · ` : ''}via {CHANNEL_LABEL[detail.channel] ?? detail.channel} · started {dateTime(detail.createdAt)}
                   </p>
@@ -198,8 +199,8 @@ export function RestaurantConversations() {
                         {o.orderNumber} <span className="tabular">{inr(o.total)}</span>
                       </p>
                       <p className="mt-0.5 text-[12px] text-muted">{o.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}</p>
-                      <Badge tone={ORDER_STATUS[o.status].tone} className="mt-1.5">
-                        {ORDER_STATUS[o.status].label}
+                      <Badge tone={ORDER_STATUS[o.status]?.tone ?? 'slate'} className="mt-1.5">
+                        {ORDER_STATUS[o.status]?.label ?? o.status}
                       </Badge>
                     </Link>
                   </li>

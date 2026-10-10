@@ -29,6 +29,8 @@ model Organization {
   menuItems      MenuItem[]
   orders         Order[]
   orderEvents    OrderEvent[]
+  offerCampaigns OfferCampaign[]
+  offerClaims    OfferClaim[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -105,6 +107,7 @@ model Customer {
   leads          Lead[]
   SiteVisit      SiteVisit[]
   orders         Order[]
+  offerClaims    OfferClaim[]
 
   @@unique([organizationId, phone])
   @@index([organizationId])
@@ -287,11 +290,12 @@ model User {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Restaurant vertical (GR Chicken). Prices, availability and totals live here and are only ever
-// computed by the server; the language model never sets them.
+// Restaurant vertical (GR Chicken: fresh chicken, sold by the kg, collected at the shop).
+// Prices, discounts and totals live here and are only ever computed by the server; the language
+// model never sets them.
 // ---------------------------------------------------------------------------------------------
 
-/// A restaurant outlet that accepts orders.
+/// A shop where customers collect their order.
 model Outlet {
   id                 String       @id @default(cuid())
   organizationId     String
@@ -299,16 +303,13 @@ model Outlet {
   address            String       @db.Text
   area               String?
   phone              String?
-  /// Areas (lower-case names) this outlet delivers to. Empty = pickup only.
-  serviceAreas       Json
   /// IST "HH:mm".
-  opensAt            String       @default("11:00")
-  closesAt           String       @default("23:00")
-  acceptsPickup      Boolean      @default(true)
-  acceptsDelivery    Boolean      @default(false)
-  deliveryFee        Decimal      @default(0) @db.Decimal(10, 2)
+  opensAt            String       @default("07:00")
+  closesAt           String       @default("21:00")
+  /// Minutes the shop needs to cut and pack an order (earliest pickup = now + this).
+  prepMinutes        Int          @default(30)
   minOrderValue      Decimal      @default(0) @db.Decimal(10, 2)
-  /// Accept orders outside opening hours (for testing a demo tenant). Staff still confirm every order.
+  /// Accept pickup times outside opening hours (for testing a demo tenant). Staff still confirm every order.
   acceptOutsideHours Boolean      @default(false)
   active             Boolean      @default(true)
   /// True for placeholder data that has NOT been verified with the client.
@@ -336,17 +337,26 @@ model MenuCategory {
   @@index([organizationId])
 }
 
+/// A product: broiler chicken, country chicken, boneless, eggs ...
 model MenuItem {
   id             String       @id @default(cuid())
   organizationId String
   categoryId     String
   name           String
   description    String?      @db.Text
+  /// Price per unit (per kg for unit = kg).
   price          Decimal      @db.Decimal(10, 2)
-  isVeg          Boolean      @default(false)
+  /// kg | piece
+  unit           String       @default("kg")
+  /// Cuts the shop offers for this product, e.g. ["Curry cut", "Biryani cut", "Whole"]. Empty = no cut choice.
+  cutOptions     Json
+  minQty         Decimal      @default(0.5) @db.Decimal(8, 3)
+  maxQty         Decimal      @default(10) @db.Decimal(8, 3)
+  /// Quantities must be multiples of this (0.25 = quarter kg).
+  qtyStep        Decimal      @default(0.25) @db.Decimal(8, 3)
   available      Boolean      @default(true)
   imageUrl       String?      @db.Text
-  /// Comma-separated other names customers use ("65, chicken sixty five").
+  /// Comma-separated other names customers use ("broiler, kozhi, chicken").
   aliases        String?      @db.Text
   isDemo         Boolean      @default(false)
   sortOrder      Int          @default(0)
@@ -362,49 +372,111 @@ model MenuItem {
   @@index([categoryId])
 }
 
-/// A customer order. Created only after the customer explicitly confirmed the server-computed total.
-model Order {
-  id              String       @id @default(cuid())
+/// An offer customers claim on WhatsApp, e.g. "₹50 off for website customers".
+model OfferCampaign {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  /// Short code customers send from the WhatsApp link, e.g. GR50.
+  code           String
+  /// Rupees off the order.
+  amount         Decimal      @db.Decimal(10, 2)
+  minOrderValue  Decimal      @default(0) @db.Decimal(10, 2)
+  validDays      Int          @default(7)
+  /// Approved WhatsApp template used to start the chat when the customer has not messaged in 24h ({{1}} = name).
+  templateName   String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claims         OfferClaim[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+/// One customer's offer: created from the WhatsApp link, the website, or by staff; claimed by one order.
+model OfferClaim {
+  id              String        @id @default(cuid())
   organizationId  String
-  /// Short reference shown to the customer and staff, e.g. GR-7K2Q9X.
-  orderNumber     String
+  campaignId      String
   customerId      String
-  conversationId  String?
-  outletId        String
-  channel         String
-  /// pickup | delivery
-  fulfilment      String
-  deliveryAddress String?      @db.Text
-  deliveryArea    String?
-  /// pending | confirmed | preparing | ready | out_for_delivery | completed | cancelled
-  status          String       @default("pending")
-  subtotal        Decimal      @db.Decimal(10, 2)
-  deliveryFee     Decimal      @default(0) @db.Decimal(10, 2)
-  total           Decimal      @db.Decimal(10, 2)
-  /// cash_on_delivery | pay_at_outlet. No online payment is integrated.
-  paymentMethod   String
-  /// unpaid | paid. Only staff can mark an order paid.
-  paymentStatus   String       @default("unpaid")
-  /// not_integrated = the order lives only in Tacksharp; staff enter it into the outlet's POS.
-  posStatus       String       @default("not_integrated")
+  phone           String
+  /// whatsapp_link | website | dashboard
+  source          String
+  /// Order number on the GR Chicken website that earned the offer (when the website sent it).
+  websiteOrderRef String?
+  /// pending_send | sent | send_failed | started | claimed | expired | cancelled
+  status          String
+  sendError       String?       @db.Text
+  orderId         String?       @unique
+  amount          Decimal       @db.Decimal(10, 2)
+  expiresAt       DateTime
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign        OfferCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  customer        Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order           Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, websiteOrderRef])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([campaignId])
+}
+
+/// A pickup order. Created only after the customer explicitly confirmed the server-computed total.
+model Order {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// Short reference shown to the customer and staff, e.g. GR-7K2Q9X.
+  orderNumber    String
+  customerId     String
+  conversationId String?
+  outletId       String
+  channel        String
+  /// pending | confirmed | preparing | ready | completed (collected) | cancelled
+  status         String       @default("pending")
+  /// When the customer said they will collect it.
+  pickupAt       DateTime
+  subtotal       Decimal      @db.Decimal(10, 2)
+  /// Offer discount (₹50 ...), never more than the subtotal.
+  discount       Decimal      @default(0) @db.Decimal(10, 2)
+  total          Decimal      @db.Decimal(10, 2)
+  /// cash_at_shop | upi_at_shop | paid_online
+  paymentMethod  String
+  /// unpaid | paid | customer_says_paid (paid online, staff must verify)
+  paymentStatus  String       @default("unpaid")
+  /// not_integrated = the order lives only in Tacksharp; staff enter it into the shop's POS.
+  posStatus      String       @default("not_integrated")
   /// Same confirmation retried (webhook retry, double tap) -> the same order, never a second one.
-  idempotencyKey  String
-  customerName    String?
-  customerPhone   String?
-  notes           String?      @db.Text
-  isDemo          Boolean      @default(false)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer        Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  outlet          Outlet       @relation(fields: [outletId], references: [id], onDelete: Restrict)
-  items           OrderItem[]
-  events          OrderEvent[]
+  idempotencyKey String
+  customerName   String?
+  customerPhone  String?
+  /// Reply language: tamil | tanglish | english (the ready call speaks it).
+  language       String?
+  /// pending | calling | answered | no_answer | failed | whatsapp_sent | not_sent
+  readyNotice    String?
+  readyNoticeAt  DateTime?
+  readyCallId    String?
+  readyNoticeNote String?     @db.Text
+  notes          String?      @db.Text
+  isDemo         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  outlet         Outlet       @relation(fields: [outletId], references: [id], onDelete: Restrict)
+  items          OrderItem[]
+  events         OrderEvent[]
+  offerClaim     OfferClaim?
 
   @@unique([organizationId, idempotencyKey])
   @@unique([organizationId, orderNumber])
   @@index([organizationId, createdAt])
   @@index([organizationId, status])
+  @@index([organizationId, pickupAt])
   @@index([customerId])
   @@index([outletId])
 }
@@ -413,10 +485,12 @@ model OrderItem {
   id         String   @id @default(cuid())
   orderId    String
   menuItemId String
-  /// Name and price as charged (snapshot), so later menu edits never change a placed order.
+  /// Name, cut and price as charged (snapshot), so later menu edits never change a placed order.
   name       String
+  cut        String?
+  unit       String   @default("kg")
   unitPrice  Decimal  @db.Decimal(10, 2)
-  quantity   Int
+  quantity   Decimal  @db.Decimal(8, 3)
   lineTotal  Decimal  @db.Decimal(10, 2)
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
@@ -425,12 +499,12 @@ model OrderItem {
   @@index([menuItemId])
 }
 
-/// Audit trail: order created, status changes, payment changes, who did it.
+/// Audit trail: order created, status changes, payment changes, ready call result, who did it.
 model OrderEvent {
   id             String       @id @default(cuid())
   organizationId String
   orderId        String
-  /// created | status_changed | payment_changed | note
+  /// created | status_changed | payment_changed | ready_notice | note
   type           String
   fromStatus     String?
   toStatus       String?
