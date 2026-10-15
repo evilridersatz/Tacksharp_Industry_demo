@@ -53,6 +53,15 @@ export const ECHO_TAIL_MS = 1200;
 /** A segment that STARTED before our playback ended (+ this margin) may be our echo; one that starts later is an
  *  answer, even when it repeats our words ("ஆமா" to "ஆமா, இல்ல வேண்டாம்னு சொல்லுங்க", a property name we listed). */
 export const ECHO_START_MARGIN_MS = 250;
+/**
+ * Speech that goes on this long after our playback finished cannot be only our echo (echo stops with our audio plus
+ * the line round trip). Such a segment is an answer said over the end of our question ("ஆமா" as the question ends):
+ * it is checked for echo against the LAST words we said only, and is never dropped for being short.
+ */
+export const OUTLAST_MS = 200;
+
+/** The last few words of what we said: all that can still come back as echo once our audio has finished. */
+export const tailWords = (text: string, n = 3) => normWords(text).slice(-n).join(' ');
 
 const normWords = (text: string) =>
   (text ?? '').toLowerCase().replace(/[.,!?？।:;"'()\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -232,7 +241,11 @@ export class StreamCall {
         this.speechStartedAt = 0;
         const playbackEnd = this.openingActive || this.state === 'speaking' ? Number.POSITIVE_INFINITY : this.playbackEndedAt;
         const inEchoWindow = startedAt < playbackEnd + ECHO_START_MARGIN_MS;
-        const seg = { id: ++this.segment, voicedMs: ev.voicedMs, inEchoWindow, echoOf: inEchoWindow ? this.recentSpeech(startedAt) : '' };
+        // Started during our audio but still going well after it finished: an answer over the end of our line.
+        // Not after a barge-in: audio already on its way when we cut it still echoes back after the cut.
+        const outlasted = inEchoWindow && !this.cutByBargeIn && Number.isFinite(playbackEnd) && startedAt + ev.voicedMs > playbackEnd + OUTLAST_MS;
+        const recent = inEchoWindow ? this.recentSpeech(startedAt) : '';
+        const seg = { id: ++this.segment, voicedMs: ev.voicedMs, inEchoWindow, outlasted, echoOf: outlasted ? tailWords(recent) : recent };
         this.queue = this.queue.then(() => this.turn(ev.pcm, ev.durationMs, endedAt, overlappedOurAudio, seg)).catch((error) => {
           log.error('voice.stream_turn_failed', { callId: this.callId, error: errorMessage(error) });
         });
@@ -266,7 +279,7 @@ export class StreamCall {
     durationMs: number,
     endedAt: number,
     overlappedOurAudio = false,
-    seg: { id: number; voicedMs: number; inEchoWindow: boolean; echoOf: string } = { id: 0, voicedMs: durationMs, inEchoWindow: false, echoOf: '' },
+    seg: { id: number; voicedMs: number; inEchoWindow: boolean; outlasted?: boolean; echoOf: string } = { id: 0, voicedMs: durationMs, inEchoWindow: false, echoOf: '' },
   ) {
     if (this.state === 'closed' || this.state === 'ending') return;
     this.state = 'thinking';
@@ -278,11 +291,13 @@ export class StreamCall {
     const timings: Record<string, number> = {};
     let transcript = '';
     let sttLanguage: string | undefined;
+    let sttFailed = false;
     try {
       const stt = await this.deps.transcribe(pcmToWav(pcm));
       transcript = stt.transcript;
       sttLanguage = stt.languageCode;
     } catch (error) {
+      sttFailed = true;
       log.error('voice.stt_failed', { callId: this.callId, error: errorMessage(error), mode: 'stream' });
     }
     timings.stt = this.now() - t0;
@@ -290,7 +305,7 @@ export class StreamCall {
     const reject = transcript.trim()
       ? seg.inEchoWindow && seg.echoOf && isEchoOf(transcript, seg.echoOf)
         ? 'echo_of_agent_audio'
-        : seg.inEchoWindow && seg.voicedMs < 400
+        : seg.inEchoWindow && !seg.outlasted && seg.voicedMs < 400
           ? 'short_speech_during_echo_window'
           : implausibleTranscript(transcript, seg.voicedMs)
             ? 'text_longer_than_speech'
@@ -298,7 +313,7 @@ export class StreamCall {
       : undefined;
     log.info('voice.segment', {
       callId: this.callId, streamId: this.streamId, segment: seg.id, durationMs, voicedMs: seg.voicedMs,
-      inEchoWindow: seg.inEchoWindow, playback: this.state, sttChars: transcript.trim().length, accepted: !reject && Boolean(transcript.trim()), reason: reject ?? (transcript.trim() ? 'speech' : 'empty'),
+      inEchoWindow: seg.inEchoWindow, outlastedPlayback: Boolean(seg.outlasted), playback: this.state, sttChars: transcript.trim().length, accepted: !reject && Boolean(transcript.trim()), reason: reject ?? (transcript.trim() ? 'speech' : 'empty'),
     });
     if (reject) {
       if (reject === 'echo_of_agent_audio') {
@@ -325,6 +340,15 @@ export class StreamCall {
       if (this.state === 'listening') this.armSilence();
       return;
     }
+    if (!transcript.trim() && sttFailed && seg.voicedMs >= 600 && !seg.inEchoWindow) {
+      // The caller really spoke but speech-to-text failed (timeout, provider error): ask them to say it again
+      // (the engine's unclear-turn rules: "Sorry, சரியா கேக்கல…", and a polite end after repeated failures).
+      log.warn('voice.stt_failed_ask_repeat', { callId: this.callId, voicedMs: seg.voicedMs });
+      const decided = await this.deps.understand('', undefined, durationMs);
+      if (decided.kind === 'unclear') await this.playUnclear(decided);
+      else if (this.state === 'thinking') this.state = 'listening';
+      return;
+    }
     if (!transcript.trim()) {
       // Nothing intelligible (a passing bus, a door, a TV): on a live line that is not a turn. Say nothing and keep
       // listening; a caller who is really silent gets "ஹலோ? கேக்குதா?" from the no-response timer instead.
@@ -349,9 +373,24 @@ export class StreamCall {
         });
       }, this.opts.fillerAfterMs);
     }
-    const decided = await this.deps.understand(transcript, sttLanguage, durationMs).finally(() => {
+    let decided: DecidedTurn;
+    try {
+      decided = await this.deps.understand(transcript, sttLanguage, durationMs);
+    } catch (error) {
+      // The decision step crashed (database / provider down). Never leave the caller in silence: ask them to say
+      // it again with the unclear-turn rules (which never reach the engine), and keep listening.
+      log.error('voice.stream_understand_failed', { callId: this.callId, error: errorMessage(error) });
       if (fillerTimer) clearTimeout(fillerTimer);
-    });
+      const retry = await this.deps.understand('', undefined, Math.max(durationMs, 600)).catch(() => undefined);
+      if (retry?.kind === 'unclear') await this.playUnclear(retry);
+      else if ((this.state as State) === 'thinking') {
+        this.state = 'listening';
+        this.armSilence();
+      }
+      return;
+    } finally {
+      if (fillerTimer) clearTimeout(fillerTimer);
+    }
     timings.ai = this.now() - t0 - timings.stt;
 
     if (this.interrupted && (this.state as State) === 'listening') {

@@ -17,6 +17,9 @@ if (enabled) {
   process.env.PUBLIC_BASE_URL = 'https://example.test';
   process.env.VOICE_CALL_WINDOW_START = '0';
   process.env.VOICE_CALL_WINDOW_END = '24';
+  // These tests drive the real-provider code paths against fakes (sender / dialer are stubs).
+  process.env.DRY_RUN = 'false';
+  process.env.LIVE_ALLOW_ALL_CUSTOMERS = 'true';
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_BASE_URL;
 }
@@ -75,9 +78,14 @@ describe.skipIf(!enabled)('GR Chicken offer + pickup orders (integration)', () =
     const store = new OrderSessionStore();
     store.useRedis(null);
     const llmFake = { run: vi.fn(async () => ({ text: '', failed: true, aborted: false, usage: {} })) };
-    engine = new OrderingEngine(prisma, conversations, catalog, orders, offers, store, llmFake as any);
     sarvam = { enabled: true, textToSpeechUrl: vi.fn(async () => 'https://example.test/voice/audio/x.wav'), speechToText: vi.fn(async () => ({ transcript: '' })) };
     ready = new ReadyNoticeService(prisma, orders, conversations, sarvam, sender);
+    const { FeedbackService } = await import('../src/restaurant/feedback.service.js');
+    const { OrderFollowUpService } = await import('../src/restaurant/order-followup.service.js');
+    const feedback = new FeedbackService(prisma);
+    const followUps = new OrderFollowUpService(prisma, conversations, sender as any, ready, sarvam as any, feedback);
+    followUps.queue = { add: vi.fn(async () => undefined) };
+    engine = new OrderingEngine(prisma, conversations, catalog, orders, offers, feedback, followUps, store, llmFake as any);
     ready.dialer = vi.fn(async () => ({ requestUuid: 'req-1' }));
     ready.fetchRecording = vi.fn(async () => Buffer.alloc(100));
     publicOffers = new PublicOffersController(prisma, offers);

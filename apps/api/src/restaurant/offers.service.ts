@@ -9,7 +9,8 @@ import { errorMessage, log } from '../common/logger.js';
 import { firstName } from '../whatsapp/message-templates.js';
 import { CatalogService } from './catalog.service.js';
 import { OPEN_CLAIM_STATUSES } from './orders.service.js';
-import { menuBlock, say } from './replies.js';
+import { menuBlock, orderHint, say } from './replies.js';
+import { followUpConfig, liveGate } from './followup-config.js';
 
 export type ClaimSource = 'whatsapp_link' | 'website' | 'dashboard';
 export type ClaimView = Awaited<ReturnType<OffersService['list']>>[number];
@@ -92,7 +93,7 @@ export class OffersService {
     if (!campaign) throw new BadRequestException('No active offer. Turn the offer on in the dashboard first.');
 
     const customer = await this.conversations.getOrCreateCustomerByPhone(input.organizationId, phone, { name: input.name?.trim().slice(0, 80) || undefined, source: input.source });
-    if (customer.doNotContact) throw new BadRequestException('This customer opted out of messages.');
+    if (customer.doNotContact || customer.optedOutAt) throw new BadRequestException('This customer opted out of messages.');
     const open = await this.openClaim(input.organizationId, customer.id);
     if (open) return { claim: await this.view(open.id), duplicate: true };
 
@@ -130,13 +131,24 @@ export class OffersService {
     if (!['pending_send', 'send_failed', 'sent'].includes(claim.status)) return this.view(claim.id);
     const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
     const catalog = await this.catalog.get(organizationId);
-    const text = say.offerGreeting('tl', { name: firstName(claim.customer.name) || undefined, business: org?.name ?? 'GR Chicken', amount: num(claim.amount), menu: menuBlock(catalog, 'tl') });
+    const text = say.offerGreeting('tl', { name: firstName(claim.customer.name) || undefined, business: org?.name ?? 'GR Chicken', amount: num(claim.amount), menu: menuBlock(catalog, 'tl'), hint: orderHint(catalog) });
+    if (claim.customer.optedOutAt) {
+      await this.prisma.offerClaim.update({ where: { id: claim.id }, data: { status: 'cancelled', sendError: 'Customer opted out (STOP)' } });
+      return this.view(claim.id);
+    }
     const windowOpen = await this.conversations.isWhatsAppWindowOpen(organizationId, claim.customerId);
     let status = 'sent';
     let sendError: string | null = null;
     let stored: string | undefined;
+    let simulated = false;
+    const gate = liveGate(followUpConfig(), { phone: claim.phone, isDemo: claim.customer.isDemo });
     try {
-      if (windowOpen) {
+      if (!gate.live) {
+        // DRY_RUN / not an approved test number: record what would be sent, contact nobody.
+        simulated = true;
+        stored = windowOpen || !claim.campaign.templateName ? text : `[template:${claim.campaign.templateName}] offer ${num(claim.amount)}`;
+        sendError = `Simulated (${gate.reason}): nothing was sent on WhatsApp.`;
+      } else if (windowOpen) {
         await this.sender.sendText(claim.phone, text);
         stored = text;
       } else if (claim.campaign.templateName) {
@@ -153,7 +165,7 @@ export class OffersService {
     await this.prisma.offerClaim.update({ where: { id: claim.id }, data: { status, sendError } });
     if (stored) {
       const conv = await this.conversations.getOrCreateConversation({ organizationId, channel: 'whatsapp', externalId: claim.phone, customerId: claim.customerId });
-      await this.conversations.addMessage({ organizationId, conversationId: conv.id, role: 'assistant', content: stored, metadata: { offerClaimId: claim.id, kind: 'offer_invite' } });
+      await this.conversations.addMessage({ organizationId, conversationId: conv.id, role: 'assistant', content: stored, metadata: { offerClaimId: claim.id, kind: 'offer_invite', simulated } });
     }
     log.info('offer.send', { organizationId, claimId: claim.id, status });
     return this.view(claim.id);

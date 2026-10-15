@@ -89,6 +89,8 @@ export const config = {
       order_ready: process.env.WHATSAPP_TEMPLATE_ORDER_READY ?? '',
     } as Record<string, string>,
     templateLanguage: process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? 'en',
+    /** How long one send to Meta may take. A timeout after sending counts as "delivery unknown" (never resent). */
+    sendTimeoutMs: num('WHATSAPP_SEND_TIMEOUT_MS', 15_000),
     /** Number of {{n}} body variables in the template (0, 1 = customer name, 2 = name + requirement). */
     templateParams: num('WHATSAPP_TEMPLATE_PARAMS', 1),
   },
@@ -133,9 +135,9 @@ export const config = {
     ttsSampleRate: num('SARVAM_TTS_SAMPLE_RATE', 8000),
     timeoutMs: num('SARVAM_TIMEOUT_MS', 12000),
     /** Per-request TTS timeout on a live call (a slow request is retried or falls back instead of blocking the turn). */
-    ttsTimeoutMs: num('SARVAM_TTS_TIMEOUT_MS', 5000),
+    ttsTimeoutMs: num('SARVAM_TTS_TIMEOUT_MS', 4000),
     /** Total time a live turn may spend on TTS including retries. */
-    ttsBudgetMs: num('SARVAM_TTS_BUDGET_MS', 8000),
+    ttsBudgetMs: num('SARVAM_TTS_BUDGET_MS', 5000),
     /** Concurrent TTS requests to Sarvam (protects against HTTP 429). */
     ttsConcurrency: num('SARVAM_TTS_CONCURRENCY', 3),
   },
@@ -213,6 +215,27 @@ export function productionWarnings(env: NodeJS.ProcessEnv = process.env): string
   if (!env.META_LEAD_VERIFY_TOKEN) warnings.push('META_LEAD_VERIFY_TOKEN is not set: Meta lead-ads webhook verification will fail');
   if (!env.WHATSAPP_TEMPLATE_NAME && !(env.WHATSAPP_TEMPLATE_VISIT_CONFIRM && env.WHATSAPP_TEMPLATE_VISIT_REMINDER)) {
     warnings.push('No approved WhatsApp template for site-visit confirmation/reminder: they reach only customers who messaged in the last 24h');
+  }
+  return warnings;
+}
+
+/**
+ * Safety / readiness warnings for every environment (names only, never values): logged at startup so a disabled
+ * webhook signature check or a missing restaurant template is visible before a real customer is affected.
+ */
+export function configWarnings(env: NodeJS.ProcessEnv = process.env): string[] {
+  const warnings: string[] = [];
+  if (env.PLIVO_AUTH_ID && env.PLIVO_AUTH_TOKEN && env.PLIVO_VALIDATE_SIGNATURE !== 'true') {
+    warnings.push('PLIVO_VALIDATE_SIGNATURE is not true: Plivo callbacks (/voice/*) are accepted without a signature check. Set it to true once PUBLIC_BASE_URL is the HTTPS URL Plivo calls.');
+  }
+  if (env.WHATSAPP_ACCESS_TOKEN && !env.META_APP_SECRET) {
+    warnings.push('META_APP_SECRET is not set: WhatsApp webhook signatures (x-hub-signature-256) are not verified.');
+  }
+  if (env.DRY_RUN === 'false' && !env.LIVE_TEST_RECIPIENTS && env.LIVE_ALLOW_ALL_CUSTOMERS !== 'true') {
+    warnings.push('DRY_RUN=false but LIVE_TEST_RECIPIENTS is empty: restaurant follow-ups and calls will reach nobody (by design) until a test number is approved.');
+  }
+  if (env.DRY_RUN === 'false' && !env.WHATSAPP_TEMPLATE_ORDER_READY) {
+    warnings.push('WHATSAPP_TEMPLATE_ORDER_READY is empty: the WhatsApp "order ready" fallback reaches only customers who messaged in the last 24h.');
   }
   return warnings;
 }

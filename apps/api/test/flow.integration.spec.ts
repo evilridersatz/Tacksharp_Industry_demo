@@ -62,6 +62,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
   beforeAll(async () => {
     m = {
       ...(await import('../src/prisma/prisma.service.js')),
+      ...(await import('../src/whatsapp/inbound-messages.service.js')),
       ...(await import('../src/conversations/conversations.service.js')),
       ...(await import('../src/leads/leads.service.js')),
       ...(await import('../src/follow-ups/follow-ups.service.js')),
@@ -91,7 +92,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
     meta = new m.MetaLeadsService(prisma, leads, followUps, tenancy);
     voice = new m.VoiceService(prisma, aiStub, conversations, leads, followUps, sarvamStub, tenancy);
     processor = new m.FollowUpProcessor(prisma, conversations, leads, voiceStub, whatsappStub);
-    whatsappWebhook = new m.WhatsAppService(prisma, followUps, tenancy);
+    whatsappWebhook = new m.WhatsAppService(prisma, followUps, tenancy, undefined, conversations, new m.InboundMessageService(prisma));
   });
 
   afterAll(async () => {

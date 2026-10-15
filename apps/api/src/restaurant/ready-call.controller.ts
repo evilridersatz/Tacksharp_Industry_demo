@@ -1,19 +1,52 @@
 import { Body, Controller, ForbiddenException, HttpCode, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import plivo from 'plivo';
 import { Public } from '../auth/decorators.js';
 import { config } from '../common/config.js';
 import { errorMessage, log } from '../common/logger.js';
 import { HANGUP, response } from '../voice/plivo-xml.js';
+import { checkPlivoSignature } from '../voice/plivo-signature.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
+import { OrderFollowUpService } from './order-followup.service.js';
 
 /** Plivo webhooks for the "order ready" call. Same signature check as the existing voice webhooks. */
-@Controller('voice/ready')
+@Controller('voice')
 export class ReadyCallController {
-  constructor(private readonly ready: ReadyNoticeService) {}
+  constructor(
+    private readonly ready: ReadyNoticeService,
+    private readonly followUps: OrderFollowUpService,
+  ) {}
+
+  // ---- Post-collection feedback call ----
 
   @Public()
-  @Post('answer')
+  @Post('feedback/answer')
+  async feedbackAnswer(@Query('followUpId') id: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
+    const body = raw ?? {};
+    this.verify(req, body);
+    res.status(200).type('application/xml').send(await this.safe(() => this.followUps.answer(id, body)));
+  }
+
+  @Public()
+  @Post('feedback/turn')
+  async feedbackTurn(@Query('followUpId') id: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
+    const body = raw ?? {};
+    this.verify(req, body);
+    res.status(200).type('application/xml').send(await this.safe(() => this.followUps.turn(id, body)));
+  }
+
+  @Public()
+  @Post('feedback/hangup')
+  @HttpCode(200)
+  feedbackHangup(@Query('followUpId') id: string | undefined, @Req() req: Request, @Body() raw: Record<string, string> | undefined) {
+    const body = raw ?? {};
+    this.verify(req, body);
+    return this.followUps.hangup(id, body);
+  }
+
+  // ---- Order-ready call ----
+
+  @Public()
+  @Post('ready/answer')
   async answer(@Query('callId') callId: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
     const body = raw ?? {};
     this.verify(req, body);
@@ -21,7 +54,7 @@ export class ReadyCallController {
   }
 
   @Public()
-  @Post('turn')
+  @Post('ready/turn')
   async turn(@Query('callId') callId: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
     const body = raw ?? {};
     this.verify(req, body);
@@ -29,7 +62,7 @@ export class ReadyCallController {
   }
 
   @Public()
-  @Post('hangup')
+  @Post('ready/hangup')
   @HttpCode(200)
   hangup(@Query('callId') callId: string | undefined, @Req() req: Request, @Body() raw: Record<string, string> | undefined) {
     const body = raw ?? {};
@@ -46,15 +79,13 @@ export class ReadyCallController {
     }
   }
 
+  /** Plivo V3 signature check (PLIVO_VALIDATE_SIGNATURE=true; see voice/plivo-signature.ts). */
   private verify(req: Request, body: Record<string, string>) {
-    if (!config.plivo.validateSignature) return;
-    const signature = req.header('x-plivo-signature-v3');
-    const nonce = req.header('x-plivo-signature-v3-nonce');
-    const url = `${config.publicBaseUrl}${req.originalUrl}`;
-    const valid = signature && nonce && plivo.validateV3Signature(req.method, url, nonce, config.plivo.authToken, signature, body);
-    if (!valid) {
-      log.warn('ready_call.signature_invalid', { url: req.originalUrl });
+    const check = checkPlivoSignature(req, body, { enabled: config.plivo.validateSignature, authToken: config.plivo.authToken, publicBaseUrl: config.publicBaseUrl });
+    if (!check.ok) {
+      log.warn('ready_call.signature_invalid', { path: req.path, reason: check.reason });
       throw new ForbiddenException('Invalid Plivo signature');
     }
   }
+
 }

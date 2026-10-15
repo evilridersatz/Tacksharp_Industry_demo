@@ -30,7 +30,7 @@ export default function ProductsPage() {
       />
       {(menu?.items.some((i) => i.isDemo) || menu?.outlets.some((o) => o.isDemo)) && (
         <DemoBanner>
-          <b>Demo rates.</b> Products marked “Demo” have placeholder per-kg prices. Set today&apos;s real rates here — the WhatsApp assistant only ever quotes what is saved on this page.
+          <b>Demo rates and stock.</b> Products marked “Demo” have placeholder per-kg prices, and “Demo stock” numbers are samples. Set today&apos;s real rates and counted stock here — the assistant (WhatsApp and phone) only ever quotes what is saved on this page.
         </DemoBanner>
       )}
       {error && !menu && <ErrorBanner message={error} onRetry={reload} />}
@@ -150,8 +150,8 @@ function ProductRow({ item, canEdit, onSaved }: { item: MenuItem; canEdit: boole
             </Button>
           )}
           <label className="inline-flex cursor-pointer items-center gap-2 text-[12.5px] font-semibold text-muted">
-            <input type="checkbox" checked={item.available} disabled={busy} onChange={(e) => save({ available: e.target.checked })} className="size-4 accent-[var(--color-brand)]" />
-            In stock
+            <input type="checkbox" checked={item.listed ?? item.available} disabled={busy} onChange={(e) => save({ available: e.target.checked })} className="size-4 accent-[var(--color-brand)]" />
+            Selling
           </label>
         </form>
       ) : (
@@ -160,7 +160,78 @@ function ProductRow({ item, canEdit, onSaved }: { item: MenuItem; canEdit: boole
           {item.cutOptions.length > 0 && <span className="block text-[12px] font-normal text-muted">{item.cutOptions.join(', ')}</span>}
         </p>
       )}
+      <StockCell item={item} canEdit={canEdit} onSaved={onSaved} />
     </li>
+  );
+}
+
+const STOCK_BADGE: Record<string, { tone: 'brand' | 'amber' | 'rose' | 'slate'; label: string }> = {
+  in_stock: { tone: 'brand', label: 'In stock' },
+  low: { tone: 'amber', label: 'Low stock' },
+  out: { tone: 'rose', label: 'Out of stock' },
+  unknown: { tone: 'slate', label: 'Stock unknown' },
+};
+
+/**
+ * Stock on hand (from the database) and its low-stock level. Staff set the counted quantity; orders take stock
+ * when the customer confirms and give it back if the order is cancelled.
+ */
+function StockCell({ item, canEdit, onSaved }: { item: MenuItem; canEdit: boolean; onSaved: () => void }) {
+  const unit = item.unit === 'piece' ? 'pcs' : 'kg';
+  const [stock, setStock] = useState(item.stockQty == null ? '' : String(item.stockQty));
+  const [low, setLow] = useState(item.lowStockThreshold == null ? '' : String(item.lowStockThreshold));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const dirty = stock !== (item.stockQty == null ? '' : String(item.stockQty)) || low !== (item.lowStockThreshold == null ? '' : String(item.lowStockThreshold));
+  const badge = STOCK_BADGE[item.stockStatus ?? 'unknown'];
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.patch(`/restaurant/inventory/${item.id}`, {
+        stockQty: stock.trim() === '' ? null : Number(stock),
+        lowStockThreshold: low.trim() === '' ? null : Number(low),
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2 border-t border-dashed border-line pt-2 text-[12.5px] md:w-auto md:border-0 md:pt-0">
+      <Badge tone={badge.tone}>{badge.label}</Badge>
+      {item.stockIsDemo && item.stockQty != null && <Badge tone="amber">Demo stock</Badge>}
+      {canEdit ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (dirty) void save();
+          }}
+        >
+          <label className="flex h-9 items-center rounded-[10px] border border-line bg-white px-2" title="Stock on hand; empty = not tracked">
+            <input inputMode="decimal" value={stock} onChange={(e) => setStock(e.target.value.replace(/[^\d.]/g, ''))} placeholder="—" aria-label={`Stock of ${item.name} in ${unit}`} className="tabular w-14 bg-transparent text-right font-semibold text-ink outline-none placeholder:text-faint" />
+            <span className="ml-1 text-muted">{unit}</span>
+          </label>
+          <label className="flex h-9 items-center rounded-[10px] border border-line bg-white px-2" title="Alert when stock is at or below this">
+            <span className="text-muted">low ≤</span>
+            <input inputMode="decimal" value={low} onChange={(e) => setLow(e.target.value.replace(/[^\d.]/g, ''))} placeholder="—" aria-label={`Low-stock level of ${item.name}`} className="tabular w-10 bg-transparent text-right text-ink outline-none placeholder:text-faint" />
+          </label>
+          {dirty && (
+            <Button type="submit" variant="primary" busy={busy} className="h-9">
+              Save stock
+            </Button>
+          )}
+        </form>
+      ) : (
+        <span className="tabular font-semibold text-ink">{item.stockQty == null ? '—' : `${item.stockQty} ${unit}`}</span>
+      )}
+      {err && <span className="text-rose">{err}</span>}
+    </div>
   );
 }
 

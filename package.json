@@ -25,7 +25,12 @@
     "db:baseline": "npm run db:baseline -w apps/api",
     "user:create": "npm run user:create -w apps/api --",
     "verify:live": "npm run verify:live -w apps/api --",
-    "seed:gr-chicken": "npm run seed:gr-chicken -w apps/api"
+    "seed:gr-chicken": "npm run seed:gr-chicken -w apps/api",
+    "seed:gr-chicken-demo": "npm run seed:gr-chicken-demo -w apps/api",
+    "seed:demo-inventory": "npm run seed:demo-inventory -w apps/api --",
+    "check:config": "npm run check:config -w apps/api",
+    "verify:restaurant": "npm run verify:restaurant -w apps/api --",
+    "test:restaurant": "npm run test:restaurant -w apps/api"
   },
   "allowScripts": {
     "prisma": true,

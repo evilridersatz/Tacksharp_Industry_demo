@@ -26,28 +26,43 @@ export class AiService {
   async generateResponse(input: GenerateResponseInput): Promise<GenerateResponseResult> {
     const organizationId = input.organizationId ?? config.defaultOrganizationId;
     if ((await this.tenancy.vertical(organizationId)) !== 'restaurant') return this.engine.generate(input);
-    if (input.channel === 'voice') {
-      // Voice ordering is not built for restaurants yet: never guess an order on a phone line.
-      return {
-        conversationId: '',
-        customerId: '',
-        leadId: '',
-        response: 'Sorry, phone ordering is not available yet. Please order on WhatsApp or our website.',
-        actions: { endCall: true },
-        timings: {},
-        path: 'rules',
-      };
-    }
     const result = await this.ordering.generate({
       organizationId,
-      // The authenticated /ai/chat test endpoint ("web") behaves like the dashboard test chat.
-      channel: input.channel === 'whatsapp' ? 'whatsapp' : 'test',
+      // Phone calls use the same ordering rules with spoken replies. The authenticated /ai/chat test endpoint
+      // ("web") behaves like the dashboard test chat.
+      channel: input.channel === 'whatsapp' ? 'whatsapp' : input.channel === 'voice' ? 'voice' : 'test',
       phone: input.phone,
       message: input.message,
       customerName: input.customerName,
       metadata: input.metadata,
     });
-    return { ...result, actions: {}, state: result.state, intent: result.intent };
+    return { ...result, actions: AiService.restaurantActions(result), state: result.state, intent: result.intent };
+  }
+
+  /**
+   * What a restaurant turn means for the call: it ends ONLY when the ordering engine says the customer ended it
+   * (goodbye, "no" / "thanks" after their order, or a request for staff). A normal answer keeps the call open.
+   */
+  static restaurantActions(result: { endCall?: boolean; endReason?: string; order?: { status: string } }): GenerateResponseResult['actions'] {
+    const outcome = result.order ? 'order_placed' : result.endReason === 'handoff' ? 'human_requested' : undefined;
+    return {
+      ...(result.endCall ? { endCall: true } : {}),
+      ...(outcome ? { outcome } : {}),
+    } as GenerateResponseResult['actions'];
+  }
+
+  /** Which product the organization runs (routes calls and chats; never decided from message content). */
+  vertical(organizationId: string) {
+    return this.tenancy.vertical(organizationId);
+  }
+
+  /** Restaurant calls: open the phone session and save the opening line. */
+  openRestaurantCall(input: Parameters<OrderingEngine['openVoiceSession']>[0]) {
+    return this.ordering.openVoiceSession(input);
+  }
+
+  restaurantKeyterms(organizationId: string) {
+    return this.ordering.voiceKeyterms(organizationId);
   }
 
   /** Voice: create the call-scoped session at answer time so the first customer turn needs no lookups. */

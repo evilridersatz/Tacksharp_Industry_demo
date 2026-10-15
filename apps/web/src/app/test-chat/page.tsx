@@ -39,7 +39,9 @@ export default function TestChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [lines]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'end' });
+  }, [lines]);
 
   async function send(m: string) {
     const message = m.trim();

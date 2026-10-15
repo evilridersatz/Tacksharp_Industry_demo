@@ -8,10 +8,18 @@ import type { FollowUp } from '@/lib/types';
 import { dayLabel, displayName, followUpLabel, requirement, stopReason, timeOnly } from '@/lib/format';
 import { PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, ErrorBanner, IconTile, Segmented, Skeleton } from '@/components/ui';
+import { useMe } from '@/lib/restaurant';
+import { RestaurantFollowUps } from '@/components/restaurant/followups';
 
 type Tab = 'upcoming' | 'done' | 'stopped';
 
 export default function FollowUpsPage() {
+  const me = useMe();
+  if (!me) return <Skeleton className="h-[480px] rounded-[14px]" />;
+  return me.vertical === 'restaurant' ? <RestaurantFollowUps /> : <RealEstateFollowUps />;
+}
+
+function RealEstateFollowUps() {
   const [tab, setTab] = useState<Tab>('upcoming');
   const { data, error, reload } = useApi<FollowUp[]>('/follow-ups');
   const [busy, setBusy] = useState<string | null>(null);

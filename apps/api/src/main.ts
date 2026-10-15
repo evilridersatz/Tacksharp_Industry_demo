@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
-import { config, productionProblems, productionWarnings } from './common/config.js';
+import { config, configWarnings, productionProblems, productionWarnings } from './common/config.js';
 import { log } from './common/logger.js';
 import { configureApp } from './bootstrap.js';
 
@@ -14,7 +14,7 @@ async function bootstrap() {
     process.exit(1);
   }
 
-  for (const warning of productionWarnings()) log.warn('startup.config_warning', { warning });
+  for (const warning of [...productionWarnings(), ...configWarnings()]) log.warn('startup.config_warning', { warning });
 
   // rawBody is needed to verify Meta webhook signatures.
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });

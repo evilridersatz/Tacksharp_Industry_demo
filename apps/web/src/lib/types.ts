@@ -70,6 +70,8 @@ export type Call = {
   endedAt: string | null;
   durationSec: number | null;
   hangupCause: string | null;
+  /** Why the call ended (customer_goodbye, max_turns, handoff, no_response, ...). */
+  endReason?: string | null;
   summary?: string | null;
   createdAt: string;
   customer?: Customer;
@@ -83,6 +85,8 @@ export type Message = {
   content: string;
   createdAt: string;
   metadata?: Record<string, unknown> | null;
+  /** WhatsApp messages we sent: accepted | sent | delivered | read | failed | unknown (from Meta's receipts). */
+  deliveryStatus?: string | null;
 };
 
 export type Conversation = {

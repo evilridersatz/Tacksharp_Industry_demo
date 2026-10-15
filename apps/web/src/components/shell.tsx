@@ -23,6 +23,7 @@ import {
   Gift,
   FlaskConical,
   PlugZap,
+  Activity,
   X,
 } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
@@ -41,6 +42,7 @@ const RESTAURANT_NAV: NavGroup[] = [
       { href: '/', label: 'Overview', icon: LayoutDashboard },
       { href: '/orders', label: 'Live orders', icon: ShoppingBag, badge: 'orders' },
       { href: '/conversations', label: 'Conversations', icon: MessageSquare, badge: 'handoff' },
+      { href: '/follow-ups', label: 'Follow-ups', icon: ListChecks },
       { href: '/customers', label: 'Customers', icon: Users },
     ],
   },
@@ -49,6 +51,7 @@ const RESTAURANT_NAV: NavGroup[] = [
     items: [
       { href: '/offers', label: '₹50 Offer', icon: Gift },
       { href: '/menu', label: 'Products & rates', icon: UtensilsCrossed },
+      { href: '/activity', label: 'Carts, stock & messages', icon: Activity },
       { href: '/test-chat', label: 'Test chat', icon: FlaskConical },
     ],
   },

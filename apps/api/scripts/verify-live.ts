@@ -1,5 +1,9 @@
 /**
- * Tacksharp LIVE verification — tests the REAL providers with YOUR keys (from apps/api/.env).
+ * Tacksharp LIVE verification for the REAL-ESTATE product — tests the REAL providers with YOUR keys (from apps/api/.env).
+ *
+ * The AI section runs the real-estate agent on fixed real-estate sample data (Porur, 2 BHK, Green Valley
+ * Residency...): those answers are EXPECTED here and say nothing about GR Chicken. For the restaurant product use
+ *   npm run verify:restaurant            (templates, Plivo callbacks, signatures; --call=<number> for a real call)
  * Keys never leave your machine. Writes verify-output/verify-report.md (no secrets) to share.
  *
  *   npm run verify:live                                  # AI, Sarvam, WhatsApp, Plivo, Meta, server checks
@@ -20,6 +24,7 @@ import { normalizePhone } from '../src/common/phone.js';
 import { parseIndianBudget } from '../src/common/parsers.js';
 import { nowInIst } from '../src/common/time.js';
 import { percentile } from '../src/common/latency.js';
+import { diagnoseBaseUrl } from './lib/diagnose-base-url.js';
 
 // ---------------------------------------------------------------- setup
 const args = Object.fromEntries(
@@ -182,7 +187,7 @@ const FAKE_INVENTORY = [
 ];
 
 async function testAi() {
-  head('1. AI agent (real OpenAI model)');
+  head('1. AI agent (real OpenAI model) — real-estate agent on fixed sample data, not your tenant');
   if (!env.OPENAI_API_KEY && !env.OPENAI_BASE_URL) return result('SKIP', 'OPENAI_API_KEY not set — NOT VERIFIED — EXTERNAL SERVICE REQUIRED');
   note(`Model: ${env.OPENAI_MODEL || 'gpt-5.4-mini'} (voice: ${env.OPENAI_VOICE_MODEL || env.OPENAI_MODEL || 'gpt-5.4-mini'}), reasoning ${env.OPENAI_REASONING_EFFORT || 'low'}`);
   const priceIn = Number(env.VERIFY_PRICE_INPUT_PER_M ?? 0.75);
@@ -394,7 +399,7 @@ async function testWhatsApp() {
     const to = normalizePhone(String(args['whatsapp-to']));
     if (!to || !env.WHATSAPP_TEMPLATE_NAME) return result('SKIP', 'Send test message', 'needs a valid --whatsapp-to and WHATSAPP_TEMPLATE_NAME');
     const params = Number(env.WHATSAPP_TEMPLATE_PARAMS ?? 1);
-    const values = ['Test', 'a 2 BHK in Porur'].slice(0, params);
+    const values = ['Test', 'verification'].slice(0, params);
     const s = await getJson(`${GRAPH}/${v}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: { ...auth, 'Content-Type': 'application/json' },
@@ -468,6 +473,11 @@ async function testServer() {
   head('6. Your server (public URL)');
   if (!env.PUBLIC_BASE_URL) return result('SKIP', 'PUBLIC_BASE_URL not set');
   if (!env.PUBLIC_BASE_URL.startsWith('https://')) result('WARN', 'PUBLIC_BASE_URL', 'not https — Plivo/Meta need HTTPS in production');
+  // Explain a failure instead of reporting a bare 404 (offline ngrok tunnel, tunnel to the dashboard, path in URL).
+  const diag = await diagnoseBaseUrl(env.PUBLIC_BASE_URL);
+  for (const p of diag.problems) result('FAIL', 'PUBLIC_BASE_URL reaches the API', p);
+  for (const n of diag.notes) note(`- ${n}`);
+  if (!diag.ok) return; // /auth/login would 404 for the same reason: not a login problem
   try {
     const [h, t] = await timed(() => getJson(api('/health')));
     result(h.ok && h.body?.status === 'ok' ? 'PASS' : 'FAIL', 'GET /health over the internet', `${ms(t)} · db ${h.body?.database?.ok} · redis ${h.body?.redis?.ok} · failed jobs ${(h.body?.queues?.followUp?.failed ?? 0) + (h.body?.queues?.whatsapp?.failed ?? 0)}`);
@@ -527,6 +537,11 @@ async function testOutboundCall() {
   const phone = normalizePhone(String(args.call));
   if (!phone) return result('FAIL', 'Outbound call', 'invalid --call number');
   if (!cookie) await login();
+  // This test creates a real-estate lead and asks property questions. Never on a restaurant tenant.
+  const me = await authed('/auth/me');
+  if (me.body?.vertical === 'restaurant') {
+    return result('FAIL', 'Outbound call', 'this dashboard user belongs to a restaurant (GR Chicken). This is the real-estate call test — use: npm run verify:restaurant -- --call=<number>');
+  }
   const lead = await authed('/leads', { method: 'POST', body: JSON.stringify({ phone, name: 'Live Test', location: 'Porur', budget: '80 lakhs', bhk: '2', source: 'verify', startSequence: false }) });
   if (!lead.ok) return result('FAIL', 'Create test lead', errText(lead.body));
   note(`Calling ${mask(phone)} now. Answer, then say for example:`);
@@ -554,7 +569,7 @@ async function testInboundCall() {
 // ---------------------------------------------------------------- main
 async function main() {
   await fs.mkdir(OUT, { recursive: true });
-  console.log('Tacksharp live verification — real providers, your keys stay on this machine.');
+  console.log('Tacksharp live verification (REAL-ESTATE product) — real providers, your keys stay on this machine. GR Chicken: npm run verify:restaurant');
   if (want('ai')) await testAi();
   if (want('sarvam')) await testSarvam();
   if (want('whatsapp')) await testWhatsApp();

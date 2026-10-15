@@ -14,7 +14,6 @@ import {
 import type { Request, Response } from 'express';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import plivo from 'plivo';
 import { VoiceService } from './voice.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { config } from '../common/config.js';
@@ -22,6 +21,7 @@ import { errorMessage, log } from '../common/logger.js';
 import { HANGUP, response } from './plivo-xml.js';
 import { Org, Public } from '../auth/decorators.js';
 import { latencyStats } from '../common/latency.js';
+import { checkPlivoSignature } from './plivo-signature.js';
 
 @Controller('voice')
 export class VoiceController {
@@ -82,7 +82,7 @@ export class VoiceController {
     });
     if (!call) throw new NotFoundException('Call not found');
     const conversation = await this.prisma.conversation.findFirst({
-      where: { customerId: call.customerId, channel: 'voice' },
+      where: { organizationId, customerId: call.customerId, channel: 'voice' },
     });
     const end = new Date((call.endedAt ?? new Date()).getTime() + 5000);
     const window = conversation
@@ -170,18 +170,15 @@ export class VoiceController {
   }
 
   /** Plivo V3 signature check (enable with PLIVO_VALIDATE_SIGNATURE=true once behind a stable HTTPS URL). */
+  /** Plivo V3 signature check (PLIVO_VALIDATE_SIGNATURE=true; see voice/plivo-signature.ts). */
   private verify(req: Request, body: Record<string, string>) {
-    if (!config.plivo.validateSignature) return;
-    const signature = req.header('x-plivo-signature-v3');
-    const nonce = req.header('x-plivo-signature-v3-nonce');
-    const url = `${config.publicBaseUrl}${req.originalUrl}`;
-    const valid =
-      signature && nonce && plivo.validateV3Signature(req.method, url, nonce, config.plivo.authToken, signature, body);
-    if (!valid) {
-      log.warn('voice.signature_invalid', { url: req.originalUrl });
+    const check = checkPlivoSignature(req, body, { enabled: config.plivo.validateSignature, authToken: config.plivo.authToken, publicBaseUrl: config.publicBaseUrl });
+    if (!check.ok) {
+      log.warn('voice.signature_invalid', { path: req.path, reason: check.reason });
       throw new ForbiddenException('Invalid Plivo signature');
     }
   }
+
 }
 
 /**

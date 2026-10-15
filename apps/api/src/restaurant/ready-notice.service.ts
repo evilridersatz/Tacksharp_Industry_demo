@@ -11,6 +11,9 @@ import { escapeXml, HANGUP, response, sayXml } from '../voice/plivo-xml.js';
 import { firstName } from '../whatsapp/message-templates.js';
 import { OrdersService, type OrderView } from './orders.service.js';
 import { itemsPhrase, say, type Style } from './replies.js';
+import { followUpConfig, liveGate } from './followup-config.js';
+import { withLock } from '../common/redis-lock.js';
+import { queueRedis } from '../queues/queues.js';
 
 type PlivoParams = Record<string, string | undefined>;
 type Dialer = (from: string, to: string, answerUrl: string, hangupUrl: string) => Promise<{ requestUuid?: string }>;
@@ -83,19 +86,64 @@ export class ReadyNoticeService {
     return { ready: missing.length === 0, missing };
   }
 
-  /** Staff marked the order Ready (or pressed "Call again"). Never throws: failures are recorded on the order. */
+  /** Serialize ready notifications per order to prevent concurrent duplicate calls/messages. */
   async notify(organizationId: string, orderId: string, opts: { force?: boolean } = {}) {
+    try {
+      await withLock(
+        queueRedis,
+        `ready-notice:${organizationId}:${orderId}`,
+        async () => this.notifyLocked(organizationId, orderId, opts),
+        { ttlMs: 60_000, waitMs: 15_000 },
+      );
+    } catch (error) {
+      log.error('ready_notice.failed', { organizationId, orderId, error: errorMessage(error) });
+    }
+  }
+
+  private async notifyLocked(organizationId: string, orderId: string, opts: { force?: boolean }) {
     try {
       const order = await this.orders.getOrder(organizationId, orderId);
       if (order.status !== 'ready') return;
       if (!opts.force && order.readyNotice && ['calling', 'answered', 'whatsapp_sent'].includes(order.readyNotice)) return;
+
+      const customer = await this.prisma.customer.findFirst({
+        where: { id: order.customerId, organizationId },
+        select: { phone: true, isDemo: true, optedOutAt: true },
+      });
+
+      if (customer?.optedOutAt) {
+        return this.orders.recordReadyNotice(organizationId, order.id, {
+          readyNotice: 'not_sent',
+          note: 'Customer opted out (STOP): no call or message',
+        });
+      }
+
+      const gate = liveGate(followUpConfig(), {
+        phone: customer?.phone ?? null,
+        isDemo: customer?.isDemo ?? false,
+      });
+
+      if (!gate.live && order.channel !== 'test') {
+        return this.simulate(order, gate.reason ?? 'DRY_RUN');
+      }
+
       const voice = this.voiceStatus();
-      if (!voice.ready) return this.whatsapp(order, `Call not placed: voice calling not set up (${voice.missing.join(', ')})`);
+      if (!voice.ready) {
+        return this.whatsapp(order, `Call not placed: voice calling not set up (${voice.missing.join(', ')})`);
+      }
+
       const hour = istHour();
       if (hour < config.voice.callWindowStartHour || hour >= config.voice.callWindowEndHour) {
         return this.whatsapp(order, `Call not placed: outside calling hours (${config.voice.callWindowStartHour}:00–${config.voice.callWindowEndHour}:00 IST)`);
       }
-      if (!order.customerPhone) return this.orders.recordReadyNotice(organizationId, order.id, { readyNotice: 'not_sent', note: 'No phone number on the order' });
+
+      if (!order.customerPhone) {
+        return this.orders.recordReadyNotice(organizationId, order.id, {
+          readyNotice: 'not_sent',
+          note: 'No phone number on the order',
+        });
+      }
+
       await this.call(order);
     } catch (error) {
       log.error('ready_notice.failed', { organizationId, orderId, error: errorMessage(error) });
@@ -209,6 +257,15 @@ export class ReadyNoticeService {
       await this.whatsapp(order, 'Call not answered');
     }
     return { ok: true };
+  }
+
+  /** DRY_RUN or not an approved test number: show the ready message in the conversation, contact nobody. */
+  private async simulate(order: OrderView, reason: string) {
+    const organizationId = await this.orgOf(order.id);
+    const st = waStyleOf(order.language);
+    const text = say.readyWhatsApp(st, { orderNumber: order.orderNumber, items: itemsPhrase(order.items, st), shop: order.outlet.name, total: order.total, paid: order.paymentStatus === 'paid' });
+    if (order.conversationId) await this.conversations.addMessage({ organizationId, conversationId: order.conversationId, role: 'assistant', content: text, metadata: { kind: 'order_ready', simulated: true } });
+    await this.orders.recordReadyNotice(organizationId, order.id, { readyNotice: 'whatsapp_sent', note: `Simulated (${reason}): no call placed and nothing sent; the ready message is shown in the conversation.` });
   }
 
   /** The ready message on WhatsApp (within 24h: free text; otherwise the approved order-ready template). */

@@ -3,6 +3,7 @@ import { retryTransient } from '../common/retry.js';
 import { isHotLead } from '../settings/tenant-settings.js';
 import { randomUUID } from 'node:crypto';
 import type { CallContext, Channel, TacksharpAgentContext, Toolset, TurnActions, CallOutcome } from 'ai/agents/real-estate-agent.js';
+import { getRealEstateAgent } from 'ai/agents/real-estate-agent.js';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
@@ -55,6 +56,8 @@ export type GenerateResponseInput = {
 };
 
 export type GenerateResponseResult = {
+  /** Restaurant turns: why the model was or was not used (not_needed, not_configured, failed, ...). */
+  llm?: string;
   conversationId: string;
   customerId: string;
   leadId: string;
@@ -863,7 +866,9 @@ export class ConversationEngine {
     if (
       session.channel !== 'voice' &&
       !activeProposal(session, turn.now) &&
-      /\b(?:what|show|list|check|my|upcoming)\b.{0,40}\b(?:booking|bookings|appointment|appointments|site visit|visits)\b|\b(?:booking|appointment|site visit)\s+(?:status|details)\b/i.test(text)
+      (/\b(?:what|show|list|check|my|upcoming)\b.{0,40}\b(?:booking|bookings|appointment|appointments|site visit|visits)\b|\b(?:booking|appointment|site visit)\s+(?:status|details)\b/i.test(text) ||
+        // A bare greeting ("Hi", "Hello", "வணக்கம்") — the case the comment above describes.
+        /^\s*(?:hi+|hello+|hey+|helo|vanakkam|vanakam|வணக்கம்|ஹாய்|ஹலோ)(?:\s+(?:sir|madam|anna|akka|there))?\s*[!.,?]*\s*$/iu.test(text))
     ) {
       const booked = await this.upcomingBookedVisits(session, turn.now).catch(() => []);
       if (booked.length) {
@@ -1260,7 +1265,7 @@ export class ConversationEngine {
     const recent = session.channel === 'voice' ? session.recent.slice(-4) : session.recent;
     const history = recent.map((m) => ({ ...m, content: m.content.slice(0, HISTORY_CHARS) }));
     const [run, inventory] = await Promise.all([
-      this.llm.run({ channel: session.channel, toolset: plan.toolset, context, history, message: turn.text, maxTurns: session.channel === 'voice' ? 2 : undefined }),
+      this.llm.run({ channel: session.channel, toolset: plan.toolset, context, history, message: turn.text, maxTurns: session.channel === 'voice' ? 2 : undefined, agent: getRealEstateAgent(session.channel, plan.toolset) }),
       this.inventoryNames(session.organizationId).catch(() => [] as string[]),
     ]);
 

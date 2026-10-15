@@ -122,6 +122,8 @@ function Orders() {
                       </Badge>
                       {o.readyNotice && READY_NOTICE[o.readyNotice] && <Badge tone={READY_NOTICE[o.readyNotice].tone}>{READY_NOTICE[o.readyNotice].label}</Badge>}
                       {o.paymentStatus === 'paid' && <Badge tone="brand">Paid</Badge>}
+                      {o.complaintStatus === 'open' && <Badge tone="rose">Complaint</Badge>}
+                      {o.isDemo && <Badge tone="amber">Demo</Badge>}
                     </div>
                   </button>
                 </li>

@@ -232,6 +232,44 @@ export class ConversationsService {
     return message;
   }
 
+  /**
+   * The reply just generated for this conversation was handed to WhatsApp: record the provider id and state on the
+   * newest assistant message (one message at a time per customer, so it is this turn's reply).
+   * "accepted" means Meta took the request; only a delivery receipt makes it delivered / read.
+   */
+  async recordReplySend(organizationId: string, conversationId: string, result: { providerMessageId?: string; status: 'accepted' | 'unknown' | 'failed'; error?: string }) {
+    const reply = await this.prisma.message.findFirst({ where: { organizationId, conversationId, role: 'assistant' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+    if (!reply) return;
+    await this.prisma.message.update({
+      where: { id: reply.id },
+      data: {
+        ...(result.providerMessageId ? { externalId: result.providerMessageId } : {}),
+        deliveryStatus: result.status,
+        deliveryError: result.error?.slice(0, 500) ?? null,
+        deliveryUpdatedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Meta delivery receipt for a message we sent (matched on its provider id, inside this organization only).
+   * Never moves backwards: a late "sent" after "read" is ignored; "failed" is always recorded.
+   */
+  async applyDeliveryStatus(organizationId: string, providerMessageId: string, status: string, error?: string) {
+    const rank: Record<string, number> = { accepted: 1, unknown: 1, sent: 2, delivered: 3, read: 4 };
+    const next = status.toLowerCase();
+    if (!(next in rank) && next !== 'failed') return 0;
+    const rows = await this.prisma.message.findMany({ where: { organizationId, externalId: providerMessageId }, select: { id: true, deliveryStatus: true } });
+    let updated = 0;
+    for (const row of rows) {
+      const current = row.deliveryStatus ?? 'accepted';
+      if (next !== 'failed' && (rank[current] ?? 0) >= rank[next]) continue;
+      await this.prisma.message.update({ where: { id: row.id }, data: { deliveryStatus: next, deliveryError: next === 'failed' ? (error ?? 'failed').slice(0, 500) : null, deliveryUpdatedAt: new Date() } });
+      updated++;
+    }
+    return updated;
+  }
+
   /** Has the customer messaged us on WhatsApp in the last 24h? (Meta customer-service window) */
   async isWhatsAppWindowOpen(organizationId: string, customerId: string) {
     const customer = await this.prisma.customer.findFirst({

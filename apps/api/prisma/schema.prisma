@@ -31,6 +31,9 @@ model Organization {
   orderEvents    OrderEvent[]
   offerCampaigns OfferCampaign[]
   offerClaims    OfferClaim[]
+  orderFollowUps OrderFollowUp[]
+  inventoryMovements InventoryMovement[]
+  inboundMessages InboundMessage[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -100,6 +103,13 @@ model Customer {
   /// Set when the customer says not interested / wrong number. Blocks all automation.
   doNotContact         Boolean   @default(false)
   lastInboundAt        DateTime?
+  /// Restaurant follow-ups: may we message / call this customer (recorded by staff, or given by ordering on WhatsApp).
+  messagingConsent     Boolean   @default(false)
+  callingConsent       Boolean   @default(false)
+  /// Customer replied STOP. Blocks all business-initiated messages and calls until they reply START.
+  optedOutAt           DateTime?
+  /// Synthetic record created by the demo seed (never a real person).
+  isDemo               Boolean   @default(false)
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls          Call[]
   Conversation   Conversation[]
@@ -108,6 +118,7 @@ model Customer {
   SiteVisit      SiteVisit[]
   orders         Order[]
   offerClaims    OfferClaim[]
+  orderFollowUps OrderFollowUp[]
 
   @@unique([organizationId, phone])
   @@index([organizationId])
@@ -199,8 +210,15 @@ model Message {
   conversationId String
   role           String
   content        String       @db.Text
+  /// Provider message id (WhatsApp wamid) of a message we sent; delivery receipts are matched on it.
   externalId     String?
   metadata       Json?
+  /// Outbound WhatsApp only: accepted (Meta took it) | sent | delivered | read | failed | unknown (send timed out:
+  /// Meta may or may not have it; never retried automatically, so the customer never gets it twice).
+  /// "accepted" is NOT delivered: only a delivery receipt from Meta sets delivered / read.
+  deliveryStatus    String?
+  deliveryError     String?   @db.VarChar(500)
+  deliveryUpdatedAt DateTime?
   createdAt      DateTime     @default(now())
   Conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -208,6 +226,7 @@ model Message {
   @@index([conversationId, createdAt])
   @@index([organizationId, conversationId])
   @@index([organizationId])
+  @@index([organizationId, externalId])
 }
 
 model SiteVisit {
@@ -258,6 +277,9 @@ model Call {
   endedAt        DateTime?
   durationSec    Int?
   hangupCause    String?
+  /// Why the call ended: customer_goodbye | done_after_order | handoff | max_turns | no_response | technical |
+  /// conversation_end (we ended it) or customer_or_network_hangup / no_answer / busy / failed (they or the network did)
+  endReason      String?
   followUpId     String?
   summary        String?      @db.Text
   createdAt      DateTime     @default(now())
@@ -360,11 +382,21 @@ model MenuItem {
   aliases        String?      @db.Text
   isDemo         Boolean      @default(false)
   sortOrder      Int          @default(0)
+  /// Stock on hand in this product's unit (kg or pieces). NULL = stock is not tracked (only `available` applies).
+  stockQty          Decimal?  @db.Decimal(10, 3)
+  /// At or below this the shop gets a low-stock alert. NULL = no alert.
+  lowStockThreshold Decimal?  @db.Decimal(10, 3)
+  /// The stock numbers are demo / sample values, not counted shop inventory.
+  stockIsDemo       Boolean   @default(false)
+  stockUpdatedAt    DateTime?
+  /// Last stock alert sent for this product: low | out | NULL (none since stock was last above the threshold).
+  stockAlertLevel   String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   category       MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   orderItems     OrderItem[]
+  stockMovements InventoryMovement[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -463,6 +495,22 @@ model Order {
   readyNoticeNote String?     @db.Text
   notes          String?      @db.Text
   isDemo         Boolean      @default(false)
+  /// When the customer collected the order (GR Chicken is pickup: "delivered" = collected). Follow-ups start from here.
+  collectedAt    DateTime?
+  feedbackRating Int?
+  feedbackComment String?     @db.Text
+  feedbackAt     DateTime?
+  /// whatsapp | voice
+  feedbackChannel String?
+  /// open | resolved (set when the customer rates 1-2 or complains)
+  complaintStatus String?
+  complaintNote  String?      @db.Text
+  /// none | scheduled | in_progress | done | skipped
+  followUpStatus String?
+  lastContactAt  DateTime?
+  nextFollowUpAt DateTime?
+  /// Demo orders only: how the simulated customer behaves in dry-run follow-ups.
+  demoScenario   String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -471,6 +519,7 @@ model Order {
   items          OrderItem[]
   events         OrderEvent[]
   offerClaim     OfferClaim?
+  followUps      OrderFollowUp[]
 
   @@unique([organizationId, idempotencyKey])
   @@unique([organizationId, orderNumber])
@@ -518,3 +567,101 @@ model OrderEvent {
   @@index([orderId, createdAt])
   @@index([organizationId, createdAt])
 }
+
+/// One business-initiated message or call about an order: confirmation, status update, feedback request
+/// (WhatsApp) or feedback call (voice). Processed by the restaurant follow-up queue; every attempt and
+/// result is recorded here, including simulated (dry-run) ones.
+model OrderFollowUp {
+  id                String       @id @default(cuid())
+  organizationId    String
+  orderId           String
+  customerId        String
+  /// order_confirmation | status_update | feedback_request | feedback_call
+  kind              String
+  /// whatsapp | voice
+  channel           String
+  /// scheduled | retrying | sent | delivered | read | completed | no_answer | failed | skipped | cancelled
+  status            String       @default("scheduled")
+  scheduledAt       DateTime
+  attempts          Int          @default(0)
+  maxAttempts       Int          @default(3)
+  /// Same logical follow-up created twice (retries, double clicks, re-runs) -> one row.
+  dedupeKey         String
+  /// true = simulated: no provider was contacted.
+  dryRun            Boolean      @default(true)
+  /// Exact provider request (WhatsApp Graph API body / call request), never contains tokens.
+  payload           Json?
+  /// Outcome details: rating, transcript, simulated reply, skip reason.
+  result            Json?
+  providerMessageId String?
+  callId            String?
+  lastError         String?      @db.Text
+  completedAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer          Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, status, scheduledAt])
+  @@index([orderId])
+  @@index([customerId])
+  @@index([providerMessageId])
+}
+
+/// Every stock change (order reservation, cancellation release, staff set / adjust, demo seed). `dedupeKey` makes an
+/// order's deduction and its release happen at most once, however often a webhook or request is repeated.
+model InventoryMovement {
+  id             String       @id @default(cuid())
+  organizationId String
+  menuItemId     String
+  orderId        String?
+  /// Change in the product's unit: negative = taken out of stock.
+  delta          Decimal      @db.Decimal(10, 3)
+  balanceAfter   Decimal      @db.Decimal(10, 3)
+  /// order_reserved | order_cancelled | staff_set | staff_adjust | demo_seed
+  reason         String
+  actor          String?
+  dedupeKey      String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  menuItem       MenuItem     @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, menuItemId, createdAt])
+  @@index([orderId])
+}
+
+/// One inbound WhatsApp message, keyed by Meta's message id. The unique key makes a re-delivered webhook a no-op;
+/// the status is claimed with compare-and-set so only one worker ever answers it; the reply text and its send state
+/// are stored here (not only in Redis), so a retry after a crash or a Redis timeout never sends the reply twice.
+model InboundMessage {
+  id                String       @id @default(cuid())
+  organizationId    String
+  channel           String       @default("whatsapp")
+  providerMessageId String
+  fromPhone         String
+  messageType       String
+  /// What the worker needs to answer it (text / media id / profile name), so a lost queue job can be re-queued.
+  payload           Json?
+  /// received (persisted, not yet queued) | queued | processing | replied | reply_unknown | failed | skipped
+  status            String       @default("received")
+  attempts          Int          @default(0)
+  /// A worker holds the message until then; a crashed worker's claim expires and another may continue.
+  lockedUntil       DateTime?
+  conversationId    String?
+  replyText         String?      @db.Text
+  /// pending (generated, not sent) | sending (request in flight) | accepted (Meta took it) | unknown | failed
+  replyStatus       String?
+  replyProviderId   String?
+  lastError         String?      @db.VarChar(500)
+  receivedAt        DateTime     @default(now())
+  processedAt       DateTime?
+  updatedAt         DateTime     @updatedAt
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, providerMessageId])
+  @@index([organizationId, status, receivedAt])
+}
+

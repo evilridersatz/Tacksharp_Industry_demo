@@ -10,6 +10,11 @@ import { OffersService } from './offers.service.js';
 import { OrderingEngine } from './ordering-engine.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
 import { findPhone } from './chicken-parse.js';
+import { OrderFollowUpService, DEMO_SCENARIOS, type DemoScenario } from './order-followup.service.js';
+import { followUpConfig } from './followup-config.js';
+import { TenancyService } from '../tenancy/tenancy.service.js';
+import { InventoryService } from './inventory.service.js';
+import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
 
 const IST_OFFSET_MS = 330 * 60_000;
 const istDay = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -30,6 +35,10 @@ export class RestaurantController {
     private readonly offers: OffersService,
     private readonly engine: OrderingEngine,
     private readonly ready: ReadyNoticeService,
+    private readonly followUps: OrderFollowUpService,
+    private readonly tenancy: TenancyService,
+    private readonly inventory: InventoryService,
+    private readonly inbound: InboundMessageService,
   ) {}
 
   @Get('overview')
@@ -105,6 +114,7 @@ export class RestaurantController {
   async updateOrder(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { status?: unknown; note?: unknown; paymentStatus?: unknown }) {
     const { order, changedTo } = await this.orders.updateStatus(organizationId, id, body ?? {}, user);
     if (changedTo === 'ready') void this.ready.notify(organizationId, order.id);
+    if (changedTo) await this.followUps.onStatusChanged(organizationId, order.id, changedTo).catch(() => undefined);
     return order;
   }
 
@@ -114,7 +124,7 @@ export class RestaurantController {
     requireStaff(user);
     const order = await this.orders.getOrder(organizationId, id);
     if (order.status !== 'ready') throw new BadRequestException('Only orders that are Ready can be notified.');
-    await this.ready.notify(organizationId, id, { force: true });
+    await this.ready.notify(organizationId, id);
     return this.orders.getOrder(organizationId, id);
   }
 
@@ -135,6 +145,49 @@ export class RestaurantController {
   createItem(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: Record<string, unknown>) {
     if (user.role !== 'admin') throw new ForbiddenException('Only an admin can add products.');
     return this.catalog.createItem(organizationId, body ?? {}, `user:${user.sub}`);
+  }
+
+  // ---- Inventory (stock on hand) -----------------------------------------------------------
+
+  /** Stock per product for this organization (any signed-in role can view). */
+  @Get('inventory')
+  inventoryList(@Org() organizationId: string) {
+    return this.inventory.list(organizationId);
+  }
+
+  /** Set counted stock, add / remove a quantity, or change the low-stock level. Staff and admins only. */
+  @Patch('inventory/:id')
+  inventoryUpdate(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    requireStaff(user);
+    return this.inventory.update(organizationId, id, body ?? {}, `user:${user.sub}`);
+  }
+
+  /** Recent stock movements of one product (orders, cancellations, staff changes). */
+  @Get('inventory/:id/movements')
+  inventoryMovements(@Org() organizationId: string, @Param('id') id: string) {
+    return this.inventory.movements(organizationId, id);
+  }
+
+  /** Latest stock movements across all products (orders, cancellations, staff changes, demo seed). */
+  @Get('inventory-movements')
+  inventoryRecentMovements(@Org() organizationId: string, @Query('limit') limit?: string) {
+    return this.inventory.recentMovements(organizationId, Number(limit) || 30);
+  }
+
+  // ---- Activity (carts being built, WhatsApp processing) ----------------------------------
+
+  /** Carts customers are building now (WhatsApp, phone, test chat), priced from the catalogue. */
+  @Get('carts')
+  carts(@Org() organizationId: string) {
+    return this.engine.activeCarts(organizationId);
+  }
+
+  /** Inbound WhatsApp messages with processing / reply status (received, queued, replied, unknown, failed). */
+  @Get('whatsapp-inbound')
+  whatsappInbound(@Org() organizationId: string, @Query('status') status?: string, @Query('limit') limit?: string) {
+    const allowed = ['received', 'queued', 'processing', 'replied', 'reply_unknown', 'failed', 'skipped'];
+    if (status && !allowed.includes(status)) throw new BadRequestException(`status must be one of ${allowed.join(', ')}`);
+    return this.inbound.recent(organizationId, { status, limit: Number(limit) || 50 });
   }
 
   // ---- Offer (₹50 website offer) -----------------------------------------------------------
@@ -268,7 +321,7 @@ export class RestaurantController {
       status: conv.status,
       createdAt: conv.createdAt,
       customer: conv.Customer,
-      messages: conv.Message.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.createdAt, metadata: m.metadata })),
+      messages: conv.Message.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.createdAt, metadata: m.metadata, deliveryStatus: m.deliveryStatus })),
       orders,
     };
   }
@@ -296,7 +349,7 @@ export class RestaurantController {
       },
       orderBy: { updatedAt: 'desc' },
       take: 300,
-      select: { id: true, name: true, phone: true, source: true, doNotContact: true, createdAt: true, lastInboundAt: true, _count: { select: { Conversation: true } } },
+      select: { id: true, name: true, phone: true, source: true, doNotContact: true, createdAt: true, lastInboundAt: true, messagingConsent: true, callingConsent: true, optedOutAt: true, isDemo: true, _count: { select: { Conversation: true } } },
     });
     const stats = await this.prisma.order.groupBy({
       by: ['customerId'],
@@ -313,6 +366,10 @@ export class RestaurantController {
         phone: c.phone,
         source: c.source,
         doNotContact: c.doNotContact,
+        messagingConsent: c.messagingConsent,
+        callingConsent: c.callingConsent,
+        optedOutAt: c.optedOutAt,
+        isDemo: c.isDemo,
         createdAt: c.createdAt,
         lastInboundAt: c.lastInboundAt,
         conversations: c._count.Conversation,
@@ -327,7 +384,7 @@ export class RestaurantController {
   async customer(@Org() organizationId: string, @Param('id') id: string) {
     const c = await this.prisma.customer.findFirst({
       where: { id, organizationId },
-      select: { id: true, name: true, phone: true, email: true, source: true, doNotContact: true, createdAt: true, lastInboundAt: true },
+      select: { id: true, name: true, phone: true, email: true, source: true, doNotContact: true, createdAt: true, lastInboundAt: true, messagingConsent: true, callingConsent: true, optedOutAt: true, isDemo: true },
     });
     if (!c) throw new NotFoundException('Customer not found');
     const [orders, conversations] = await Promise.all([
@@ -345,14 +402,128 @@ export class RestaurantController {
     };
   }
 
-  /** Marketing consent: staff record when a customer opts out of (or back into) promotional messages. */
+  /** Consent recorded by staff: do-not-contact, WhatsApp messaging consent, calling consent. */
   @Patch('customers/:id')
-  async updateCustomer(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { doNotContact?: unknown }) {
+  async updateCustomer(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { doNotContact?: unknown; messagingConsent?: unknown; callingConsent?: unknown }) {
     requireStaff(user);
-    if (typeof body?.doNotContact !== 'boolean') throw new BadRequestException('doNotContact must be true or false.');
-    const res = await this.prisma.customer.updateMany({ where: { id, organizationId }, data: { doNotContact: body.doNotContact } });
-    if (!res.count) throw new NotFoundException('Customer not found');
-    return { ok: true, doNotContact: body.doNotContact };
+    const data: { doNotContact?: boolean; messagingConsent?: boolean; callingConsent?: boolean } = {};
+    for (const k of ['doNotContact', 'messagingConsent', 'callingConsent'] as const) {
+      if (body?.[k] === undefined) continue;
+      if (typeof body[k] !== 'boolean') throw new BadRequestException(`${k} must be true or false.`);
+      data[k] = body[k] as boolean;
+    }
+    if (!Object.keys(data).length) throw new BadRequestException('Nothing to update.');
+    const customer = await this.prisma.customer.findFirst({ where: { id, organizationId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+    // A customer who replied STOP is only re-enabled by their own START.
+    if (customer.optedOutAt && (data.messagingConsent || data.callingConsent)) throw new BadRequestException('This customer replied STOP. Only the customer can opt back in (by replying START).');
+    await this.prisma.customer.update({ where: { id: customer.id }, data });
+    return { ok: true, ...data };
+  }
+
+  // ---- Follow-ups (WhatsApp + voice) ---------------------------------------------------------
+
+  @Get('followups')
+  async listFollowUps(@Org() organizationId: string, @Query('status') status?: string, @Query('channel') channel?: string, @Query('kind') kind?: string, @Query('orderId') orderId?: string) {
+    const rows = await this.prisma.orderFollowUp.findMany({
+      where: {
+        organizationId,
+        ...(status === 'open' ? { status: { in: ['scheduled', 'retrying', 'processing', 'calling'] } } : status ? { status } : {}),
+        ...(channel ? { channel } : {}),
+        ...(kind ? { kind } : {}),
+        ...(orderId ? { orderId } : {}),
+      },
+      orderBy: [{ updatedAt: 'desc' }],
+      take: 300,
+      include: { order: { select: { id: true, orderNumber: true, isDemo: true, status: true } }, customer: { select: { id: true, name: true, phone: true, isDemo: true } } },
+    });
+    const callIds = rows.map((r) => r.callId).filter((x): x is string => Boolean(x));
+    const calls = callIds.length ? await this.prisma.call.findMany({ where: { organizationId, id: { in: callIds } }, select: { id: true, status: true, outcome: true, durationSec: true, summary: true, answeredAt: true, endedAt: true } }) : [];
+    return rows.map((r) => ({ ...r, call: calls.find((c) => c.id === r.callId) ?? null }));
+  }
+
+  @Get('followups/summary')
+  async followUpSummary(@Org() organizationId: string) {
+    const cfg = followUpConfig();
+    const [byStatus, byKind, rated, complaintsOpen, complaintsResolved, demoOrders] = await Promise.all([
+      this.prisma.orderFollowUp.groupBy({ by: ['status', 'channel'], where: { organizationId }, _count: { _all: true } }),
+      this.prisma.orderFollowUp.groupBy({ by: ['kind'], where: { organizationId }, _count: { _all: true } }),
+      this.prisma.order.aggregate({ where: { organizationId, feedbackRating: { not: null } }, _avg: { feedbackRating: true }, _count: { feedbackRating: true } }),
+      this.prisma.order.count({ where: { organizationId, complaintStatus: 'open' } }),
+      this.prisma.order.count({ where: { organizationId, complaintStatus: 'resolved' } }),
+      this.prisma.order.findMany({ where: { organizationId, isDemo: true, status: 'completed' }, orderBy: { orderNumber: 'asc' }, select: { id: true, orderNumber: true, customerName: true, demoScenario: true } }),
+    ]);
+    const count = (pred: (r: (typeof byStatus)[number]) => boolean) => byStatus.filter(pred).reduce((a, r) => a + r._count._all, 0);
+    return {
+      mode: cfg.dryRun ? 'dry_run' : 'live',
+      liveTestRecipients: cfg.liveTestRecipients.length,
+      liveAllowAll: cfg.liveAllowAll,
+      settings: { feedbackDelayMinutes: cfg.feedbackDelayMinutes, callDelayMinutes: cfg.callDelayMinutes, callMaxAttempts: cfg.callMaxAttempts, callRetryMinutes: cfg.callRetryMinutes, feedbackTemplateSet: Boolean(cfg.feedbackTemplate), confirmationTemplateSet: Boolean(cfg.confirmationTemplate) },
+      scheduled: count((r) => ['scheduled', 'retrying', 'processing', 'calling'].includes(r.status)),
+      whatsappSent: count((r) => r.channel === 'whatsapp' && ['sent', 'delivered', 'read', 'completed'].includes(r.status)),
+      whatsappDelivered: count((r) => r.channel === 'whatsapp' && ['delivered', 'read'].includes(r.status)),
+      callsAnswered: count((r) => r.channel === 'voice' && r.status === 'completed'),
+      callsNoAnswer: count((r) => r.channel === 'voice' && r.status === 'no_answer'),
+      failed: count((r) => r.status === 'failed'),
+      skipped: count((r) => ['skipped', 'cancelled'].includes(r.status)),
+      byKind: Object.fromEntries(byKind.map((k) => [k.kind, k._count._all])),
+      averageRating: rated._avg.feedbackRating ? Math.round(rated._avg.feedbackRating * 10) / 10 : null,
+      ratings: rated._count.feedbackRating,
+      complaintsOpen,
+      complaintsResolved,
+      demoOrders,
+      scenarios: DEMO_SCENARIOS,
+    };
+  }
+
+  /** Dashboard "Run demo follow-up": always simulated, through the real queue + processor. */
+  @Post('followups/demo-run')
+  async demoRun(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { orderId?: unknown; scenario?: unknown }) {
+    requireStaff(user);
+    const scenario = String(body?.scenario ?? 'call_happy') as DemoScenario;
+    if (!DEMO_SCENARIOS.includes(scenario)) throw new BadRequestException(`scenario must be one of ${DEMO_SCENARIOS.join(', ')}`);
+    try {
+      return await this.followUps.runDemo(organizationId, { orderId: typeof body?.orderId === 'string' ? body.orderId : undefined, scenario });
+    } catch (e) {
+      throw new BadRequestException(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  @Post('followups/:id/cancel')
+  async cancelFollowUp(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string) {
+    requireStaff(user);
+    const r = await this.prisma.orderFollowUp.updateMany({ where: { id, organizationId, status: { in: ['scheduled', 'retrying'] } }, data: { status: 'cancelled', lastError: `Cancelled by staff`, completedAt: new Date() } });
+    if (!r.count) throw new BadRequestException('Only scheduled follow-ups can be cancelled.');
+    return { ok: true };
+  }
+
+  /** Feedback and complaints, newest first. */
+  @Get('feedback')
+  async feedbackList(@Org() organizationId: string, @Query('filter') filter?: string) {
+    const rows = await this.prisma.order.findMany({
+      where: {
+        organizationId,
+        ...(filter === 'complaints' ? { complaintStatus: { not: null } } : filter === 'open' ? { complaintStatus: 'open' } : { OR: [{ feedbackRating: { not: null } }, { complaintStatus: { not: null } }] }),
+      },
+      orderBy: { feedbackAt: 'desc' },
+      take: 200,
+      select: { id: true, orderNumber: true, customerName: true, customerPhone: true, customerId: true, conversationId: true, feedbackRating: true, feedbackComment: true, feedbackAt: true, feedbackChannel: true, complaintStatus: true, complaintNote: true, isDemo: true, total: true },
+    });
+    return rows.map((r) => ({ ...r, total: Number(r.total) }));
+  }
+
+  @Patch('orders/:id/complaint')
+  async updateComplaint(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { status?: unknown; note?: unknown }) {
+    requireStaff(user);
+    if (body?.status !== 'resolved' && body?.status !== 'open') throw new BadRequestException('status must be resolved or open.');
+    const order = await this.prisma.order.findFirst({ where: { id, organizationId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (!order.complaintStatus) throw new BadRequestException('This order has no complaint.');
+    const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) : '';
+    await this.prisma.order.update({ where: { id: order.id }, data: { complaintStatus: body.status } });
+    await this.prisma.orderEvent.create({ data: { organizationId, orderId: order.id, type: 'complaint', actor: `user:${user.sub}`, note: `Complaint ${body.status === 'resolved' ? 'resolved' : 're-opened'} by staff${note ? `: ${note}` : ''}` } });
+    if (body.status === 'resolved' && order.conversationId) await this.prisma.conversation.updateMany({ where: { id: order.conversationId, organizationId, status: 'human_handoff' }, data: { status: 'active', updatedAt: new Date() } });
+    return { ok: true, status: body.status };
   }
 
   // ---- Settings & integrations (status only, never secret values) -----------------------------
@@ -370,10 +541,23 @@ export class RestaurantController {
     ]);
     const waMapped = channels.some((c) => c.kind === 'whatsapp_phone_number_id') || (organizationId === config.defaultOrganizationId && Boolean(config.whatsapp.phoneNumberId));
     const voice = this.ready.voiceStatus();
+    const fu = followUpConfig();
+    // Where this deployment's WhatsApp / Plivo numbers are routed: an unmapped number reaches DEFAULT_ORGANIZATION_ID.
+    const routing = (await this.tenancy.mappingReport().catch(() => [])).map((r) => ({
+      kind: r.kind,
+      configured: r.configured,
+      number: r.masked,
+      toThisBusiness: r.organizationId === organizationId,
+      via: r.via,
+      vertical: r.vertical,
+    }));
     return {
+      routing,
       tenant: org,
       outlets,
       health: { database: db, redis },
+      // Safety mode of this server: in dry-run nothing is sent and no restaurant call is placed.
+      mode: { dryRun: fu.dryRun, liveTestRecipients: fu.liveTestRecipients.length, liveAllowAll: fu.liveAllowAll },
       llm,
       channels: {
         whatsapp: {
@@ -393,6 +577,7 @@ export class RestaurantController {
           missing: voice.missing,
           callingHours: `${config.voice.callWindowStartHour}:00–${config.voice.callWindowEndHour}:00 IST`,
           answerUrl: `${config.publicBaseUrl}/voice/ready/answer`,
+          signatureCheck: config.plivo.validateSignature,
           note: voice.ready ? 'The assistant calls the customer in Tamil when staff mark an order Ready; WhatsApp if unanswered.' : 'Ready calls are off until these are set; the ready message goes on WhatsApp instead.',
         },
         website: { keyConfigured: channels.some((c) => c.kind === 'website_api_key'), endpoint: `${config.publicBaseUrl}/public/offers` },

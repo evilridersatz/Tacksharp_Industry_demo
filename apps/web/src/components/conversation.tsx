@@ -6,6 +6,16 @@ import type { Call, Message } from '@/lib/types';
 import { dayLabel, timeOnly } from '@/lib/format';
 import { Empty, cx } from './ui';
 
+/** Only Meta's delivery receipts say delivered / read; "accepted" means WhatsApp took the request. */
+const DELIVERY: Record<string, { label: string; bad?: boolean }> = {
+  accepted: { label: 'sent to WhatsApp' },
+  sent: { label: 'sent' },
+  delivered: { label: 'delivered' },
+  read: { label: 'read' },
+  failed: { label: 'not delivered', bad: true },
+  unknown: { label: 'delivery unknown', bad: true },
+};
+
 export function Thread({ messages, name }: { messages: Message[]; name: string }) {
   if (messages.length === 0) {
     return <Empty icon={<MessageSquare className="size-6" />} title="No WhatsApp messages yet">The thread appears here once {name} replies or the AI sends a message.</Empty>;
@@ -34,6 +44,9 @@ export function Thread({ messages, name }: { messages: Message[]; name: string }
               <span className="mt-0.5 text-[11px] text-faint">
                 {mine ? 'AI · ' : ''}
                 {timeOnly(m.createdAt)}
+                {mine && m.deliveryStatus && DELIVERY[m.deliveryStatus] && (
+                  <span className={cx('ml-1', DELIVERY[m.deliveryStatus].bad && 'font-semibold text-rose')}> · {DELIVERY[m.deliveryStatus].label}</span>
+                )}
               </span>
             </div>
           </div>

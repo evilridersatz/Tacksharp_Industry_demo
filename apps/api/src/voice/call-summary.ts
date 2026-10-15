@@ -14,6 +14,7 @@ const OUTCOME_TEXT: Record<string, string> = {
   busy: 'Line was busy.',
   failed: 'Call could not be connected.',
   invalid_number: 'Phone number is invalid.',
+  order_placed: 'Customer placed an order on the call.',
 };
 
 const IST: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' };

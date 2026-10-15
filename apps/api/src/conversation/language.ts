@@ -22,7 +22,17 @@ const TANGLISH = new Set([
   'enoda', 'unga', 'nammala', 'kitta', 'vachu', 'vechu', 'pottu', 'sollu', 'solla', 'pannu', 'pannuven', 'pannidunga', 'podunga', 'aamanga', 'seringa',
   'saringa', 'okayanga', 'sollungalen', 'pakka', 'paaka', 'vaanganum', 'vangalam', 'vaangalam', 'veedu', 'idam', 'manai', 'kammi', 'jaasthi', 'adhigam',
   'koncham', 'naalai', 'nalaiku', 'naalaiku', 'sayangalam', 'saayangalam', 'kaalaila', 'maalai', 'raathiri', 'pesalaam', 'pesunga', 'aamaa', 'aamam',
+  // Ordering / pickup Tanglish (restaurant): these were read as "English" and switched the chat to English.
+  'mani', 'manikku', 'ethana', 'ethanai', 'varanum', 'varren', 'varuvom', 'varalaam', 'varalam', 'kudukaren', 'kudukkaren', 'kudukiren', 'pannuren',
+  'pannuven', 'innum', 'innoru', 'inoru', 'adha', 'adhu', 'idha', 'idhu', 'irukkura', 'irukura', 'nerathula', 'nimisham', 'kadaila', 'vaangikiren',
+  'eduthudunga', 'vendaam', 'venaam',
 ]);
+/**
+ * Romanized Tamil verb / case endings ("pannuren", "varanum", "manikku", "vandhuchu"): one such word is Tanglish
+ * evidence even when the word itself is not in the list. A few English words share an ending and are excluded.
+ */
+const TANGLISH_ENDING = /^[a-z]{3,}(?:nga|kku|num|ren|ven|laam|chu|dhu|ttu|kiren|karen|kaaren)$/;
+const ENDING_EXCEPTIONS = new Set(['seven', 'eleven', 'given', 'heaven', 'oven', 'children', 'siren', 'warren', 'karen', 'driven', 'proven', 'raven', 'woven', 'forgiven']);
 const ENGLISH_COMMON = new Set([
   'the', 'is', 'are', 'i', 'you', 'we', 'it', 'and', 'or', 'to', 'for', 'in', 'on', 'at', 'with', 'my', 'me', 'your', 'what', 'when', 'where', 'how', 'can',
   'could', 'would', 'please', 'want', 'need', 'looking', 'budget', 'bedroom', 'flat', 'apartment', 'villa', 'visit', 'site', 'yes', 'no', 'ok', 'okay',
@@ -49,7 +59,7 @@ export function detectLanguage(text: string): Detection {
   if (tamilShare > 0.15) return { lang: 'tanglish', confidence: conf, words }; // Tamil words + English words
 
   const latin = toks.filter((t) => /^[a-z']+$/.test(t));
-  const tl = latin.filter((t) => TANGLISH.has(t) && !ENGLISH_COMMON.has(t)).length;
+  const tl = latin.filter((t) => !ENGLISH_COMMON.has(t) && (TANGLISH.has(t) || (TANGLISH_ENDING.test(t) && !ENDING_EXCEPTIONS.has(t)))).length;
   const en = latin.filter((t) => ENGLISH_COMMON.has(t)).length;
   if (tl >= 1 && tl / Math.max(1, latin.length) >= 0.2) return { lang: 'tanglish', confidence: conf, words };
   if (en >= 1 || latin.length >= 2) return { lang: 'english', confidence: en >= 2 ? conf : Math.min(conf, 0.5), words };

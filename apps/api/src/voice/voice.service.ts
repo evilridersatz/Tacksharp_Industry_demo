@@ -12,13 +12,18 @@ import { nextAllowedCallTime } from '../common/time.js';
 import { effectiveCallWindow, nextRetryAt } from '../settings/tenant-settings.js';
 import { errorMessage, log, timer } from '../common/logger.js';
 import { mask } from '../whatsapp/whatsapp-sender.service.js';
+import { firstName } from '../whatsapp/message-templates.js';
 import { HANGUP, escapeXml, recordXml, response, sayXml, streamXml } from './plivo-xml.js';
 import { buildCallSummary } from './call-summary.js';
 import { recordTurn } from '../common/latency.js';
 import { KeyedMutex } from '../common/keyed-mutex.js';
-import { TenancyService } from '../tenancy/tenancy.service.js';
+import { TenancyService, type Vertical } from '../tenancy/tenancy.service.js';
+import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
+import { spoken } from '../restaurant/replies.js';
 import { assessTranscript } from '../conversation/transcript-gate.js';
 import { ACK_LINES, staticVoiceLines } from '../conversation/replies.js';
+import { TurnDedupe, type DedupeRedis } from './turn-dedupe.js';
+import { queueRedis } from '../queues/queues.js';
 import {
   ENGLISH_FALLBACK,
   FILLERS,
@@ -32,6 +37,24 @@ import {
 
 const MAX_TURNS = 24;
 const MAX_SILENT_TURNS = 2;
+/** Restaurant goodbyes that promise nothing the system does not do. */
+const RESTAURANT_TOO_LONG = 'இந்த call ரொம்ப நேரம் ஆயிடுச்சு. மீதி details WhatsApp-ல சொல்லுங்க. நன்றி!';
+const RESTAURANT_NO_RESPONSE = 'சரிங்க, இப்போ பேச முடியல போல. எப்போ வேணும்னாலும் WhatsApp-ல order பண்ணலாம். நன்றி!';
+
+/**
+ * When does a call end after a customer turn? Documented terminal conditions only:
+ *  - the conversation engine says the customer ended it (explicit goodbye, done after their order, asked for staff);
+ *  - the call reached MAX_TURNS (bounded length);
+ *  - real estate only: the engine failed (it says sorry and that the team will call back, and a task is created).
+ * A restaurant turn whose processing failed already asked the customer to repeat: the call stays open.
+ * Every other answer keeps the call open.
+ */
+export function decideCallEnd(p: { vertical: Vertical; turns: number; maxTurns: number; endCall: boolean; endReason?: string; failed: boolean }): { end: boolean; reason?: string } {
+  if (p.endCall) return { end: true, reason: p.endReason ?? 'conversation_end' };
+  if (p.turns >= p.maxTurns) return { end: true, reason: 'max_turns' };
+  if (p.failed && p.vertical !== 'restaurant') return { end: true, reason: 'technical' };
+  return { end: false };
+}
 
 export type StartCallResult =
   | { started: true; callId: string }
@@ -46,6 +69,12 @@ type PlivoParams = Record<string, string | undefined>;
 export type CallRuntime = {
   callId: string;
   organizationId: string;
+  /** The organization's product: decides the opening line, the conversation engine and the STT vocabulary. */
+  vertical: Vertical;
+  /** Speech-to-text vocabulary for this business (restaurant: its products, cuts, shops). Undefined = service default. */
+  keyterms?: string[];
+  /** Why WE ended the call (customer_goodbye, max_turns, no_response, technical...). */
+  endReason?: string;
   customerId: string;
   leadId?: string;
   phone: string;
@@ -73,6 +102,15 @@ export type CallRuntime = {
 };
 
 type GenerateResult = Awaited<ReturnType<AiService['generateResponse']>>;
+/**
+ * A reply that names one customer's order (order number) or contains a phone-length number is personal: its audio
+ * is made for this call only and deleted after it, never stored in the shared disk cache (which is keyed by text and
+ * kept for days). Generic rule replies ("How many kg of Boneless Chicken?") are still cached and reused.
+ */
+export function isPersonalLine(text: string): boolean {
+  return /\b[A-Z]{2,4}-[A-Z0-9]{4,}\b/.test(text) || /\d[\d\s-]{6,}\d/.test(text);
+}
+
 export type ReplyTurn = { kind: 'reply'; turns: number; result: GenerateResult; finalText: string; end: boolean; cacheable: boolean };
 export type UnclearTurn = { kind: 'unclear'; text: string; english: string; replayUrl?: string; end: boolean };
 export type DecidedTurn = ReplyTurn | UnclearTurn;
@@ -107,6 +145,8 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
   /** Voice lines with no customer-specific content: synthesized once, then played from the audio cache. */
   private readonly staticReplies = new Set<string>(staticVoiceLines().map((line) => VoiceService.cleanForSpeech(line)));
   private sweeper?: NodeJS.Timeout;
+  /** One AI turn per recording across restarts and instances (Redis); see TurnDedupe. */
+  readonly turnDedupe = new TurnDedupe(queueRedis as unknown as DedupeRedis);
 
   private trackAudio(callId: string, url: string) {
     if (!url) return;
@@ -180,24 +220,68 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
    * One request at a time, background priority, never while a call is live, and a 429 ends the warm-up
    * (no retries): Sarvam capacity belongs to callers.
    */
-  private async warmStaticAudio() {
-    if (!this.sarvam.enabled) return;
+  async warmStaticAudio() {
+    if (!this.sarvam.enabled) {
+      // Without TTS every reply falls back to Plivo's English <Speak> (or silence for Tamil): say so at startup.
+      log.error('voice.tts_disabled', { key: 'SARVAM_API_KEY', effect: 'calls have no Tamil audio; replies fall back to Plivo English speech' });
+      return;
+    }
     const lines = startupAudioLines();
     let made = 0;
+    let cached = 0;
+    let sample = '';
     for (const line of lines) {
       while (this.calls.size > 0) await new Promise((resolve) => setTimeout(resolve, 2000)); // a live call has priority
       const r = await this.sarvam.textToSpeech(line, { cache: true, priority: 'background' }).catch(() => undefined);
+      if (r?.url) sample ||= r.url;
+      if (r?.url && r.cached) cached++;
       if (r && !r.cached && r.url) {
         made++;
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
       if (!r?.url) {
         // Rate limit, wrong key or outage: stop. Calls still work - each line is synthesized when first needed.
-        log.warn('voice.static_audio_stopped', { reason: r?.error ?? 'tts failed', synthesized: made, remaining: lines.length - lines.indexOf(line) - 1 });
+        log.warn('voice.static_audio_stopped', { reason: r?.error ?? 'tts failed', synthesized: made, alreadyCached: cached, remaining: lines.length - lines.indexOf(line) - 1 });
         return;
       }
     }
-    log.info('voice.static_audio_ready', { lines: lines.length, synthesized: made });
+    // synthesized = new Sarvam requests now; alreadyCached = valid audio files from an earlier run (synthesized: 0
+    // with alreadyCached = lines is normal after a restart — it does NOT mean audio failed).
+    log.info('voice.static_audio_ready', { lines: lines.length, synthesized: made, alreadyCached: cached });
+    if (sample) void this.checkAudioReachable(sample);
+  }
+
+  /**
+   * Can Plivo fetch our audio? In record mode Plivo downloads every reply from PUBLIC_BASE_URL/voice/audio/...; if
+   * that URL is not public, or a tunnel answers with an HTML page instead of the WAV, the transcript still appears on
+   * the dashboard but the caller hears nothing. One GET of a cached prompt at startup, logged (no audio, no secrets).
+   */
+  async checkAudioReachable(url: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; reason?: string; status?: number; contentType?: string }> {
+    const base = config.publicBaseUrl;
+    let result: { ok: boolean; reason?: string; status?: number; contentType?: string };
+    if (!/^https:\/\//i.test(base) || /^https?:\/\/(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/i.test(base)) {
+      result = { ok: false, reason: 'not_public_https' };
+    } else {
+      try {
+        const res = await fetchImpl(url, { method: 'GET', signal: AbortSignal.timeout(5000), headers: { 'user-agent': 'tacksharp-audio-check' } });
+        const contentType = res.headers.get('content-type') ?? '';
+        const head = Buffer.from(await res.arrayBuffer()).subarray(0, 12).toString('ascii');
+        result = res.ok && /audio\/(x-)?wav/i.test(contentType) && head.startsWith('RIFF')
+          ? { ok: true, status: res.status, contentType }
+          : { ok: false, reason: res.ok ? 'not_audio' : 'http_error', status: res.status, contentType };
+      } catch (error) {
+        result = { ok: false, reason: `unreachable:${errorMessage(error).slice(0, 80)}` };
+      }
+    }
+    if (result.ok) log.info('voice.audio_url_check', { ok: true, status: result.status, contentType: result.contentType, mode: config.voice.mode });
+    else
+      log.error('voice.audio_url_check', {
+        ...result,
+        key: 'PUBLIC_BASE_URL',
+        mode: config.voice.mode,
+        effect: config.voice.mode === 'record' ? 'Plivo cannot download reply audio: callers hear silence' : 'stream mode sends audio over the socket; the URL is still needed for webhooks',
+      });
+    return result;
   }
 
   private async orgName(organizationId: string): Promise<string> {
@@ -207,6 +291,12 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const name = org?.name ?? config.defaultOrganizationName;
     this.orgNames.set(organizationId, { at: Date.now(), name });
     return name;
+  }
+
+  /** The opening line for a call WE placed: a restaurant never mentions property, a real-estate lead its enquiry. */
+  private outboundOpeningFor(vertical: Vertical, customer: Parameters<typeof outboundOpening>[0] & { language?: string | null }, orgName: string) {
+    if (vertical === 'restaurant') return spoken.outboundOpening(customer.language === 'english' ? 'en' : 'ta', { name: firstName(customer.name) || undefined, business: orgName });
+    return outboundOpening(customer, orgName, config.voice.agentName);
   }
 
   private plivo() {
@@ -232,6 +322,18 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const customer = await this.prisma.customer.findFirst({ where: { id: params.customerId, organizationId } });
     if (!customer?.phone) return { started: false, reason: 'customer_has_no_phone' };
     if (customer.doNotContact) return { started: false, reason: 'do_not_contact' };
+    const vertical = await this.tenancy.vertical(organizationId);
+    if (vertical === 'restaurant') {
+      // Restaurant customers: the same consent and dry-run rules as order follow-ups. A dashboard or script
+      // "call now" never rings a number that is not explicitly approved for live testing.
+      if (customer.optedOutAt) return { started: false, reason: 'opted_out' };
+      if (!customer.callingConsent) return { started: false, reason: 'no_calling_consent' };
+      const gate = liveGate(followUpConfig(), customer);
+      if (!gate.live) {
+        log.info('voice.call_not_live', { customerId: customer.id, reason: gate.reason });
+        return { started: false, reason: `not_live: ${gate.reason}` };
+      }
+    }
     if (!config.plivo.fromNumber) return { started: false, reason: 'PLIVO_FROM_NUMBER missing' };
 
     if (!params.ignoreCallWindow) {
@@ -253,19 +355,23 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     });
     if (live) return { started: false, reason: 'call_already_in_progress' };
 
-    const lead = params.leadId
-      ? await this.prisma.lead.findFirst({ where: { id: params.leadId, organizationId } })
-      : await this.leads.ensureActiveLead(organizationId, customer.id, 'voice');
-    if (!lead) return { started: false, reason: 'lead_not_found' };
+    // Leads are the real-estate pipeline; a restaurant call belongs to the customer only.
+    const lead =
+      vertical === 'restaurant'
+        ? null
+        : params.leadId
+          ? await this.prisma.lead.findFirst({ where: { id: params.leadId, organizationId } })
+          : await this.leads.ensureActiveLead(organizationId, customer.id, 'voice');
+    if (!lead && vertical !== 'restaurant') return { started: false, reason: 'lead_not_found' };
 
     const attempt =
-      (await this.prisma.call.count({ where: { leadId: lead.id, direction: 'outbound' } })) + 1;
+      (await this.prisma.call.count({ where: lead ? { leadId: lead.id, direction: 'outbound' } : { customerId: customer.id, direction: 'outbound' } })) + 1;
 
     const call = await this.prisma.call.create({
       data: {
         organizationId,
         customerId: customer.id,
-        leadId: lead.id,
+        leadId: lead?.id ?? null,
         direction: 'outbound',
         status: 'queued',
         toNumber: customer.phone,
@@ -278,7 +384,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     // Prepare the opening line before dialing (TTS ~1s) so there is no silence on answer.
     const organization = await this.prisma.organization.findUnique({ where: { id: organizationId } });
     const orgName = organization?.name ?? config.defaultOrganizationName;
-    const openingText = outboundOpening(customer, orgName, config.voice.agentName);
+    const openingText = this.outboundOpeningFor(vertical, customer, orgName);
     const openingUrl = await this.sarvam.textToSpeechUrl(openingText);
     this.trackAudio(call.id, openingUrl);
     this.openingAudio.set(call.id, { url: openingUrl, text: openingText });
@@ -306,7 +412,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
           providerRequestId: Array.isArray(requestUuid) ? requestUuid[0] : requestUuid,
         },
       });
-      log.info('voice.dialing', { callId: call.id, leadId: lead.id, to: mask(customer.phone), attempt });
+      log.info('voice.dialing', { callId: call.id, leadId: lead?.id, vertical, to: mask(customer.phone), attempt });
       return { started: true, callId: call.id };
     } catch (error) {
       await this.prisma.call.update({
@@ -333,41 +439,54 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     }
     const alreadyAnswered = Boolean(call.answeredAt);
     const orgName = await this.orgName(call.organizationId);
+    const vertical = await this.tenancy.vertical(call.organizationId);
 
     let opening = this.openingAudio.get(call.id);
     if (!opening) {
-      const text = outboundOpening(call.customer, orgName, config.voice.agentName);
+      const text = this.outboundOpeningFor(vertical, call.customer, orgName);
       opening = { text, url: await this.sarvam.textToSpeechUrl(text) };
     }
 
-    const rt = this.newRuntime(call, call.customer.phone!, 'outbound', callReason(call.customer, call.lead?.source), call.lead?.id);
+    const reason = vertical === 'restaurant' ? 'Restaurant call: help the customer order or answer questions about their order.' : callReason(call.customer, call.lead?.source);
+    const rt = this.newRuntime(call, call.customer.phone!, 'outbound', reason, call.lead?.id, vertical);
     rt.providerCallId = params.CallUUID;
-    // The call row and the call-scoped conversation session are independent: do both at once.
-    const [session] = await Promise.all([
-      this.ai.openCallSession({
-        organizationId: call.organizationId,
-        callId: call.id,
-        phone: call.customer.phone!,
-        leadId: call.leadId ?? undefined,
-        customerName: call.customer.name ?? undefined,
-        openingText: opening.text,
-        direction: 'outbound',
-      }),
-      this.prisma.call.update({
-        where: { id: call.id },
-        data: { status: 'in_progress', answeredAt: call.answeredAt ?? new Date(), providerCallId: params.CallUUID ?? call.providerCallId },
-      }),
-    ]);
-    if (!alreadyAnswered) this.saveOpeningLine(session.key, call.organizationId, session.conversationId, opening.text);
-    this.prefetchFirstReply(session);
+    const markAnswered = this.prisma.call.update({
+      where: { id: call.id },
+      data: { status: 'in_progress', answeredAt: call.answeredAt ?? new Date(), providerCallId: params.CallUUID ?? call.providerCallId },
+    });
+    if (vertical === 'restaurant') {
+      // The restaurant ordering session (shared customer, same rules as WhatsApp); no real-estate session or lead.
+      const [, keyterms] = await Promise.all([
+        alreadyAnswered ? undefined : this.ai.openRestaurantCall({ organizationId: call.organizationId, phone: call.customer.phone!, customerName: call.customer.name ?? undefined, openingText: opening.text, callId: call.id }),
+        this.ai.restaurantKeyterms(call.organizationId).catch(() => undefined),
+        markAnswered,
+      ]);
+      rt.keyterms = keyterms;
+    } else {
+      // The call row and the call-scoped conversation session are independent: do both at once.
+      const [session] = await Promise.all([
+        this.ai.openCallSession({
+          organizationId: call.organizationId,
+          callId: call.id,
+          phone: call.customer.phone!,
+          leadId: call.leadId ?? undefined,
+          customerName: call.customer.name ?? undefined,
+          openingText: opening.text,
+          direction: 'outbound',
+        }),
+        markAnswered,
+      ]);
+      if (!alreadyAnswered) this.saveOpeningLine(session.key, call.organizationId, session.conversationId, opening.text);
+      this.prefetchFirstReply(session);
+    }
 
-    log.info('voice.answered', { callId, leadId: call.leadId, providerCallId: params.CallUUID, direction: 'outbound' });
+    log.info('voice.answered', { callId, leadId: call.leadId, vertical, providerCallId: params.CallUUID, direction: 'outbound' });
     rt.openingUrl = opening.url;
     rt.openingText = opening.text;
     const xml =
       config.voice.mode === 'stream' && opening.url
         ? response(streamXml(call.id))
-        : response(sayXml(opening.url, outboundOpeningEnglish(call.customer, orgName)) + '\n' + recordXml(call.id));
+        : response(sayXml(opening.url, vertical === 'restaurant' ? spoken.outboundOpening('en', { business: orgName }) : outboundOpeningEnglish(call.customer, orgName)) + '\n' + recordXml(call.id));
     this.answerXml.set(call.id, xml);
     return xml;
   }
@@ -401,22 +520,26 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       return response('<Speak voice="WOMAN" language="en-US">Sorry, this number is not in service. Goodbye.</Speak>\n' + HANGUP);
     }
 
-    // Unknown callers become new customers + leads; they are never rejected.
+    // Unknown callers become new customers (+ leads for real estate); they are never rejected.
+    const vertical = await this.tenancy.vertical(organizationId);
     const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound' });
     if (customer.doNotContact) {
       // They chose to call us: allow follow-up again.
       await this.prisma.customer.update({ where: { id: customer.id }, data: { doNotContact: false } });
     }
-    const lead = await this.leads.ensureActiveLead(organizationId, customer.id, 'voice_inbound');
+    const lead = vertical === 'restaurant' ? null : await this.leads.ensureActiveLead(organizationId, customer.id, 'voice_inbound');
     const orgName = await this.orgName(organizationId);
-    const text = inboundOpening(orgName, customer.name);
+    const text =
+      vertical === 'restaurant'
+        ? spoken.inboundOpening(customer.language === 'english' ? 'en' : 'ta', { name: firstName(customer.name) || undefined, business: orgName })
+        : inboundOpening(orgName, customer.name);
     // The call row and the opening audio do not depend on each other.
     const [call, url] = await Promise.all([
       this.prisma.call.create({
         data: {
           organizationId,
           customerId: customer.id,
-          leadId: lead.id,
+          leadId: lead?.id ?? null,
           direction: 'inbound',
           status: 'in_progress',
           toNumber: dialed ?? '',
@@ -429,20 +552,35 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     ]);
     if (customer.name) this.trackAudio(call.id, url);
 
-    const rt = this.newRuntime(call, phone, 'inbound', inboundCallReason(customer, lead.status), lead.id);
-    rt.providerCallId = params.CallUUID;
-    const session = await this.ai.openCallSession({
-      organizationId,
-      callId: call.id,
+    const rt = this.newRuntime(
+      call,
       phone,
-      leadId: lead.id,
-      customerName: customer.name ?? undefined,
-      openingText: text,
-      direction: 'inbound',
-    });
-    this.saveOpeningLine(session.key, organizationId, session.conversationId, text);
+      'inbound',
+      lead ? inboundCallReason(customer, lead.status) : 'The customer called the shop. Help them order or answer questions about their order.',
+      lead?.id,
+      vertical,
+    );
+    rt.providerCallId = params.CallUUID;
+    if (vertical === 'restaurant') {
+      const [, keyterms] = await Promise.all([
+        this.ai.openRestaurantCall({ organizationId, phone, customerName: customer.name ?? undefined, openingText: text, callId: call.id }),
+        this.ai.restaurantKeyterms(organizationId).catch(() => undefined),
+      ]);
+      rt.keyterms = keyterms;
+    } else {
+      const session = await this.ai.openCallSession({
+        organizationId,
+        callId: call.id,
+        phone,
+        leadId: lead!.id,
+        customerName: customer.name ?? undefined,
+        openingText: text,
+        direction: 'inbound',
+      });
+      this.saveOpeningLine(session.key, organizationId, session.conversationId, text);
+    }
 
-    log.info('voice.answered', { callId: call.id, leadId: lead.id, providerCallId: params.CallUUID, direction: 'inbound', known: Boolean(customer.name) });
+    log.info('voice.answered', { callId: call.id, leadId: lead?.id, vertical, providerCallId: params.CallUUID, direction: 'inbound', known: Boolean(customer.name) });
     rt.openingUrl = url;
     rt.openingText = text;
     const xml =
@@ -476,7 +614,9 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       }
     }
     const work = this.mutex
-      .run(rt.callId, () => this.processTurn(rt, params))
+      // Shared across restarts / instances: a retry that reaches a restarted or different API process gets the reply
+      // the first delivery produced, instead of a second AI turn (the duplicate transcript + reply on the dashboard).
+      .run(rt.callId, async () => (key ? (await this.turnDedupe.run(rt.callId, key, () => this.processTurn(rt, params), () => response(recordXml(rt.callId)))).xml : this.processTurn(rt, params)))
       .then((xml) => {
         if (key) rt.last = { key, xml };
         return xml;
@@ -500,7 +640,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       try {
         const audio = await this.downloadRecording(params.RecordUrl);
         t.lap('download');
-        const stt = await this.sarvam.speechToText(audio, 'turn.wav', 'audio/wav');
+        const stt = await this.sarvam.speechToText(audio, 'turn.wav', 'audio/wav', rt.keyterms);
         transcript = stt.transcript;
         sttLanguage = stt.languageCode;
         t.lap('stt');
@@ -512,7 +652,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const decided = await this.understand(rt, transcript, sttLanguage, durationMs);
     t.lap('ai');
     if (decided.kind === 'unclear') {
-      if (decided.end) return this.goodbye(decided.text, ENGLISH_FALLBACK.goodbye);
+      if (decided.end) return this.goodbye(decided.text, rt.vertical === 'restaurant' ? 'Thank you. Goodbye.' : ENGLISH_FALLBACK.goodbye);
       if (decided.replayUrl) return response(`<Play>${escapeXml(decided.replayUrl)}</Play>` + '\n' + recordXml(rt.callId));
       const url = await this.sarvam.textToSpeechUrl(decided.text, { cache: true });
       return response(sayXml(url, decided.english) + '\n' + recordXml(rt.callId));
@@ -532,7 +672,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     t.lap('tts');
     this.logTurn(rt, decided, t.done(), { languageCode: tts.languageCode, cached: tts.cached, attempts: tts.attempts, fallback: ttsFallback, mode: 'record' });
 
-    if (end) return response(sayXml(audioUrl, ENGLISH_FALLBACK.goodbye) + '\n' + HANGUP);
+    if (end) return response(sayXml(audioUrl, rt.vertical === 'restaurant' ? 'Thank you. Goodbye.' : ENGLISH_FALLBACK.goodbye) + '\n' + HANGUP);
     // English reply whose audio failed: Plivo speaks the same words (not a generic line).
     return response(sayXml(audioUrl, ttsFallback === 'plivo_speak' ? finalText : ENGLISH_FALLBACK.unclear) + '\n' + recordXml(rt.callId));
   }
@@ -564,10 +704,19 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     if (result.language) rt.english = result.language.startsWith('en');
     if (result.actions.outcome) rt.outcome = result.actions.outcome;
 
-    const tooLong = turns >= MAX_TURNS && !result.actions.endCall;
-    const end = Boolean(result.actions.endCall) || tooLong || Boolean(result.failed);
+    const decision = decideCallEnd({
+      vertical: rt.vertical,
+      turns,
+      maxTurns: MAX_TURNS,
+      endCall: Boolean(result.actions.endCall),
+      endReason: (result as { endReason?: string }).endReason,
+      failed: Boolean(result.failed),
+    });
+    const tooLong = decision.reason === 'max_turns';
+    const end = decision.end;
     const reply = VoiceService.cleanForSpeech(result.response);
-    const finalText = tooLong ? `${reply} ${PROMPTS.tooLongGoodbye}` : reply;
+    const finalText = tooLong ? `${reply} ${rt.vertical === 'restaurant' ? RESTAURANT_TOO_LONG : PROMPTS.tooLongGoodbye}` : reply;
+    if (end) rt.endReason = decision.reason;
 
     // The call row is updated after the audio is on its way. The hang-up handler waits for these writes.
     this.persistCall(rt, {
@@ -575,8 +724,9 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       silentTurns: 0,
       ...(result.language ? { language: result.language } : {}),
       ...(result.actions.outcome ? { outcome: result.actions.outcome } : {}),
+      ...(end ? { endReason: decision.reason } : {}),
     });
-    if (tooLong) {
+    if (tooLong && rt.leadId) {
       // The goodbye promises a team contact: make it true.
       this.ai.background(rt.sessionKey, () =>
         this.followUps.createHumanTask({
@@ -589,7 +739,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     }
     // Rule replies are deterministic text: cache them (a repeated question costs no TTS request). Model replies are
     // one-off and are deleted after the call.
-    return { kind: 'reply', turns, result, finalText, end, cacheable: result.path === 'rules' && !tooLong };
+    return { kind: 'reply', turns, result, finalText, end, cacheable: result.path === 'rules' && !tooLong && !isPersonalLine(finalText) };
   }
 
   /**
@@ -650,6 +800,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       ...(tts.firstAudioMs !== undefined ? { firstAudioMs: tts.firstAudioMs, sentences: tts.sentences, filler: tts.filler } : {}),
       aiRequests: result.aiUsage?.requests ?? 0,
       llmFallbackReason: result.llmFallbackReason,
+      llm: result.llm,
       currentLanguage: result.languageInfo?.current,
       languageChanged: result.languageInfo?.changed,
       ttsLanguage: tts.languageCode,
@@ -705,8 +856,9 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     rt.silentTurns += 1;
     this.persistCall(rt, { silentTurns: rt.silentTurns });
     if (rt.silentTurns > MAX_SILENT_TURNS) {
-      this.persistCall(rt, { outcome: rt.outcome ?? 'connected' });
-      return { kind: 'unclear', text: PROMPTS.noResponseGoodbye, english: ENGLISH_FALLBACK.goodbye, end: true };
+      rt.endReason = 'no_response';
+      this.persistCall(rt, { outcome: rt.outcome ?? 'connected', endReason: 'no_response' });
+      return { kind: 'unclear', text: rt.vertical === 'restaurant' ? RESTAURANT_NO_RESPONSE : PROMPTS.noResponseGoodbye, english: ENGLISH_FALLBACK.goodbye, end: true };
     }
     const heardSomething = durationMs >= 600;
     // Second empty / garbled turn in a row: say our last question again (its audio is already made) instead of
@@ -748,10 +900,12 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     direction: 'outbound' | 'inbound',
     reason: string,
     leadId?: string,
+    vertical: Vertical = 'real_estate',
   ): CallRuntime {
     const rt: CallRuntime = {
       callId: call.id,
       organizationId: call.organizationId,
+      vertical,
       customerId: call.customerId,
       leadId,
       phone,
@@ -776,8 +930,10 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const call = await this.prisma.call.findUnique({ where: { id: callId }, include: { customer: true, lead: true } });
     if (!call?.customer.phone || call.endedAt) return undefined;
     const direction = call.direction === 'inbound' ? 'inbound' : 'outbound';
+    const vertical = await this.tenancy.vertical(call.organizationId);
     const reason = direction === 'inbound' ? inboundCallReason(call.customer, call.lead?.status) : callReason(call.customer, call.lead?.source);
-    const rt = this.newRuntime(call, call.customer.phone, direction, reason, call.leadId ?? undefined);
+    const rt = this.newRuntime(call, call.customer.phone, direction, reason, call.leadId ?? undefined, vertical);
+    if (vertical === 'restaurant') rt.keyterms = await this.ai.restaurantKeyterms(call.organizationId).catch(() => undefined);
     rt.providerCallId = call.providerCallId ?? undefined;
     rt.outcome = call.outcome ?? undefined;
     return rt;
@@ -843,11 +999,14 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       outcome = 'failed';
     }
 
+    // Who ended it: our own reason (goodbye, max turns, no response) if we did, otherwise the customer / network.
+    const endReason = call.endReason ?? (call.answeredAt ? 'customer_or_network_hangup' : status);
     await this.prisma.call.update({
       where: { id: call.id },
       data: {
         status,
         outcome,
+        endReason,
         endedAt: new Date(),
         durationSec: duration,
         hangupCause: (params.HangupCauseName ?? params.HangupCause ?? params.CallStatus ?? '').slice(0, 190) || null,
@@ -862,6 +1021,8 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       direction: call.direction,
       status,
       outcome,
+      endReason,
+      turns: call.turns,
       durationSec: duration,
       attempt: call.attempt,
     });

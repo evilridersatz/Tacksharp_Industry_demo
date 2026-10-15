@@ -5,12 +5,13 @@ import { useState } from 'react';
 import { Check, Clock, Gift, IndianRupee, MessageSquare, Phone, PhoneCall, Store, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { dateTime, displayName, formatPhone } from '@/lib/format';
-import { ACTION_LABEL, CHANNEL_LABEL, ORDER_STATUS, READY_NOTICE, SOURCE_LABEL, actorLabel, inr, paymentLabel, pickupLabel, qty, type Order, type OrderStatus } from '@/lib/restaurant';
+import { ACTION_LABEL, CHANNEL_LABEL, FOLLOWUP_KIND, FOLLOWUP_STATUS, ORDER_STATUS, READY_NOTICE, SOURCE_LABEL, actorLabel, inr, paymentLabel, pickupLabel, qty, type FollowUpRow, type Order, type OrderStatus } from '@/lib/restaurant';
 import { Badge, Button, Card, ErrorBanner, Field, Skeleton } from '@/components/ui';
 
 /** One pickup order: what to cut, when they come, payment, offer, ready call and the audit trail. */
 export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: string; onClose?: () => void; onChanged?: () => void; canEdit: boolean }) {
   const { data: order, error, reload } = useApi<Order>(`/restaurant/orders/${orderId}`, 6_000);
+  const { data: followUps } = useApi<FollowUpRow[]>(`/restaurant/followups?orderId=${orderId}`, 6_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -170,6 +171,41 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
           )}
         </section>
       </div>
+
+      {(order.feedbackRating !== null || order.complaintStatus || (followUps && followUps.length > 0)) && (
+        <section className="border-t border-line px-5 py-4 text-[13px]">
+          <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">Feedback & follow-ups</h3>
+          {order.collectedAt && <p className="text-muted">Collected {dateTime(order.collectedAt)}{order.nextFollowUpAt ? ` · next follow-up ${dateTime(order.nextFollowUpAt)}` : ''}</p>}
+          {order.feedbackRating !== null && (
+            <p className="mt-1 text-ink">
+              Rating <b>{order.feedbackRating}/5</b> {order.feedbackChannel === 'voice' ? 'on the call' : 'on WhatsApp'}
+              {order.feedbackComment ? ` — “${order.feedbackComment}”` : ''}
+            </p>
+          )}
+          {order.complaintStatus && (
+            <p className="mt-1">
+              <Badge tone={order.complaintStatus === 'open' ? 'rose' : 'brand'}>{order.complaintStatus === 'open' ? 'Complaint open — call the customer' : 'Complaint resolved'}</Badge>
+              {order.complaintNote && <span className="ml-2 text-body">“{order.complaintNote}”</span>}
+            </p>
+          )}
+          {followUps && followUps.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {followUps.map((f) => (
+                <li key={f.id} className="flex flex-wrap items-center gap-2 rounded-[8px] bg-slate-50 px-3 py-1.5">
+                  <span className="font-semibold text-ink">{FOLLOWUP_KIND[f.kind] ?? f.kind}</span>
+                  <Badge tone={FOLLOWUP_STATUS[f.status]?.tone ?? 'slate'}>{FOLLOWUP_STATUS[f.status]?.label ?? f.status}</Badge>
+                  {f.dryRun && <Badge tone="violet">Simulated</Badge>}
+                  <span className="text-[12px] text-muted">{dateTime(['scheduled', 'retrying'].includes(f.status) ? f.scheduledAt : f.completedAt ?? f.updatedAt)}</span>
+                  {f.lastError && <span className="w-full text-[11.5px] text-muted">{f.lastError}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <Link href="/follow-ups" className="mt-2 inline-block text-[12.5px] font-semibold text-brand">
+            All follow-ups →
+          </Link>
+        </section>
+      )}
 
       <section className="border-t border-line px-5 py-4">
         <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">History</h3>

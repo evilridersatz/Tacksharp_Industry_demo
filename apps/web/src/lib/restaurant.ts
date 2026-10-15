@@ -49,6 +49,16 @@ export type Order = {
   readyNoticeAt: string | null;
   readyNoticeNote: string | null;
   readyCallId: string | null;
+  collectedAt: string | null;
+  feedbackRating: number | null;
+  feedbackComment: string | null;
+  feedbackAt: string | null;
+  feedbackChannel: string | null;
+  complaintStatus: 'open' | 'resolved' | null;
+  complaintNote: string | null;
+  followUpStatus: string | null;
+  lastContactAt: string | null;
+  nextFollowUpAt: string | null;
   customerName: string | null;
   customerPhone: string | null;
   customerId: string;
@@ -92,7 +102,15 @@ export type MenuItem = {
   minQty: number;
   maxQty: number;
   qtyStep: number;
+  /** Can be sold now (switched on and not out of stock). */
   available: boolean;
+  /** The staff on/off switch. */
+  listed?: boolean;
+  /** Stock on hand in kg / pieces; null = not tracked. */
+  stockQty?: number | null;
+  lowStockThreshold?: number | null;
+  stockStatus?: 'unknown' | 'in_stock' | 'low' | 'out';
+  stockIsDemo?: boolean;
   imageUrl: string | null;
   aliases: string[];
   isDemo: boolean;
@@ -157,7 +175,7 @@ export type RConversationDetail = {
   status: string;
   createdAt: string;
   customer: { id: string; name: string | null; phone: string | null; doNotContact: boolean } | null;
-  messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata: Record<string, unknown> | null }>;
+  messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata: Record<string, unknown> | null; deliveryStatus?: string | null }>;
   orders: Order[];
 };
 
@@ -173,6 +191,101 @@ export type RCustomer = {
   orders: number;
   totalSpend: number;
   lastOrderAt: string | null;
+  messagingConsent: boolean;
+  callingConsent: boolean;
+  optedOutAt: string | null;
+  isDemo: boolean;
+};
+
+export type FollowUpRow = {
+  id: string;
+  kind: 'order_confirmation' | 'status_update' | 'feedback_request' | 'feedback_call';
+  channel: 'whatsapp' | 'voice';
+  status: string;
+  scheduledAt: string;
+  attempts: number;
+  maxAttempts: number;
+  dryRun: boolean;
+  payload: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  providerMessageId: string | null;
+  callId: string | null;
+  lastError: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  order: { id: string; orderNumber: string; isDemo: boolean; status: string };
+  customer: { id: string; name: string | null; phone: string | null; isDemo: boolean };
+  call: { id: string; status: string; outcome: string | null; durationSec: number | null; summary: string | null; answeredAt: string | null; endedAt: string | null } | null;
+};
+
+export type FollowUpSummary = {
+  mode: 'dry_run' | 'live';
+  liveTestRecipients: number;
+  liveAllowAll: boolean;
+  settings: { feedbackDelayMinutes: number; callDelayMinutes: number; callMaxAttempts: number; callRetryMinutes: number; feedbackTemplateSet: boolean; confirmationTemplateSet: boolean };
+  scheduled: number;
+  whatsappSent: number;
+  whatsappDelivered: number;
+  callsAnswered: number;
+  callsNoAnswer: number;
+  failed: number;
+  skipped: number;
+  byKind: Record<string, number>;
+  averageRating: number | null;
+  ratings: number;
+  complaintsOpen: number;
+  complaintsResolved: number;
+  demoOrders: Array<{ id: string; orderNumber: string; customerName: string | null; demoScenario: string | null }>;
+  scenarios: string[];
+};
+
+export type FeedbackRow = {
+  id: string;
+  orderNumber: string;
+  customerName: string | null;
+  customerPhone: string | null;
+  customerId: string;
+  conversationId: string | null;
+  feedbackRating: number | null;
+  feedbackComment: string | null;
+  feedbackAt: string | null;
+  feedbackChannel: string | null;
+  complaintStatus: 'open' | 'resolved' | null;
+  complaintNote: string | null;
+  isDemo: boolean;
+  total: number;
+};
+
+export const FOLLOWUP_KIND: Record<string, string> = {
+  order_confirmation: 'Order confirmation',
+  status_update: 'Status update',
+  feedback_request: 'Feedback request',
+  feedback_call: 'Feedback call',
+};
+
+export const FOLLOWUP_STATUS: Record<string, { label: string; tone: Tone }> = {
+  scheduled: { label: 'Scheduled', tone: 'sky' },
+  retrying: { label: 'Retrying', tone: 'amber' },
+  processing: { label: 'Processing', tone: 'violet' },
+  calling: { label: 'Calling…', tone: 'violet' },
+  sent: { label: 'Sent', tone: 'sky' },
+  delivered: { label: 'Delivered', tone: 'brand' },
+  read: { label: 'Read', tone: 'brand' },
+  completed: { label: 'Completed', tone: 'brand' },
+  no_answer: { label: 'No answer', tone: 'amber' },
+  failed: { label: 'Failed', tone: 'rose' },
+  skipped: { label: 'Skipped', tone: 'slate' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+};
+
+export const SCENARIO_LABEL: Record<string, string> = {
+  whatsapp_5: 'Customer replies 5 on WhatsApp',
+  whatsapp_complaint: 'Customer replies 2 + complaint on WhatsApp',
+  call_happy: 'No WhatsApp reply → call: happy, 5/5',
+  call_complaint: 'No WhatsApp reply → call: complaint, 2/5',
+  no_answer: 'No WhatsApp reply → call not answered (retry)',
+  stop: 'Customer replies STOP',
 };
 
 /** Exact rupees (orders need ₹390, not ₹0.4 K). */
@@ -258,3 +371,29 @@ export function actorLabel(actor: string) {
 export function plain(text: string) {
   return text.replace(/\*([^*\n]+)\*/g, '$1');
 }
+
+/** GET /restaurant/carts — carts customers are building now. */
+export type ActiveCart = {
+  key: string;
+  channel: 'whatsapp' | 'voice' | 'test';
+  customerName: string | null;
+  phone: string;
+  conversationId: string | null;
+  step: 'collecting' | 'awaiting_confirmation';
+  awaitingConfirmation: boolean;
+  lines: Array<{ name: string; unit: 'kg' | 'piece'; quantity: number | null; cut: string | null; lineTotal: number | null; stockKnown: boolean }>;
+  total: number;
+  payment: string | null;
+  pickupAt: string | null;
+  language: string;
+  updatedAt: string;
+};
+
+/** GET /restaurant/inventory-movements */
+export type StockMovement = { id: string; createdAt: string; product: string; unit: 'kg' | 'piece'; delta: number; balanceAfter: number; reason: string; actor: string | null; orderId: string | null };
+
+/** GET /restaurant/whatsapp-inbound */
+export type InboundStatus = {
+  counts: Record<string, number>;
+  messages: Array<{ id: string; providerMessageId: string; fromPhone: string; messageType: string; status: string; attempts: number; replyStatus: string | null; replyProviderId: string | null; lastError: string | null; receivedAt: string; processedAt: string | null; conversationId: string | null }>;
+};

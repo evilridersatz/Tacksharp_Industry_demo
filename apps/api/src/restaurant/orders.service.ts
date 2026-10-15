@@ -1,10 +1,12 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomInt } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { log } from '../common/logger.js';
 import { formatQty } from './chicken-parse.js';
 import { outletView, type OutletView } from './catalog.service.js';
+import { InsufficientStockError, releaseStockForOrder, reserveStockForOrder, stockStatus, stockText } from './inventory.js';
+import { StockAlertService } from './stock-alerts.service.js';
 
 export const MAX_LINES = 10;
 /** Furthest ahead a pickup can be booked. */
@@ -37,6 +39,8 @@ export type Quote = {
   total: number;
   outlet?: OutletView & { openAtPickup: boolean };
   isDemo: boolean;
+  /** Products in the quote whose stock is not recorded (NULL): the shop confirms them. */
+  unknownStock?: string[];
 };
 
 export const ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'] as const;
@@ -89,7 +93,11 @@ const onStep = (q: number, step: number) => Math.abs(Math.round(q / step) * step
  */
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Low-stock alerts after stock changes (optional: absent in some tests and scripts). */
+    @Optional() private readonly stockAlerts?: StockAlertService,
+  ) {}
 
   async quote(input: QuoteInput, tx: Prisma.TransactionClient = this.prisma): Promise<Quote> {
     const problems: string[] = [];
@@ -112,7 +120,12 @@ export class OrdersService {
       const max = num(item.maxQty);
       const step = num(item.qtyStep);
       const cuts = Array.isArray(item.cutOptions) ? (item.cutOptions as unknown[]).map(String) : [];
-      if (!item.available) problems.push(`${item.name} is not available today.`);
+      const stock = stockStatus(item);
+      if (!item.available || stock === 'out') problems.push(`${item.name} is not available today.`);
+      else if (item.stockQty !== null && Number.isFinite(l.quantity) && l.quantity > Number(item.stockQty)) {
+        // Tracked stock: never promise more than the shop has.
+        problems.push(`Only ${stockText(Number(item.stockQty), item.unit)} of ${item.name} left today.`);
+      }
       if (!Number.isFinite(l.quantity) || l.quantity <= 0) problems.push(`How much ${item.name} do you need?`);
       else if (l.quantity < min) problems.push(`Minimum for ${item.name} is ${formatQty(min, unit)}.`);
       else if (l.quantity > max) problems.push(`For more than ${formatQty(max, unit)} of ${item.name}, please talk to our staff (bulk order).`);
@@ -154,9 +167,13 @@ export class OrdersService {
       else if (claim.expiresAt.getTime() < now.getTime()) offerNote = 'offer_expired';
       else if (!claim.campaign.active) offerNote = 'offer_ended';
       else if (subtotal < num(claim.campaign.minOrderValue)) offerNote = `offer_min:${num(claim.campaign.minOrderValue)}`;
+      // The offer takes money off an order; it never makes the order free. With no minimum configured (the seeded ₹50
+      // offer has 0), a ₹48 egg order became "₹48 offer, ₹0 to pay". The order must be above the offer amount; the
+      // claim stays open for a bigger order. A campaign minimum, when set higher, still applies as before.
+      else if (subtotal <= num(claim.amount)) offerNote = `offer_min:${num(claim.amount)}`;
       else discount = Math.min(num(claim.amount), subtotal);
     }
-    return { ok: problems.length === 0, problems, lines, subtotal, discount: round2(discount), offerNote, total: round2(subtotal - discount), outlet, isDemo };
+    return { ok: problems.length === 0, problems, lines, subtotal, discount: round2(discount), offerNote, total: round2(subtotal - discount), outlet, isDemo, unknownStock: items.filter((i) => i.stockQty === null).map((i) => i.id) };
   }
 
   /**
@@ -244,6 +261,8 @@ export class OrdersService {
               },
             },
           });
+          // The customer confirmed: take the stock now (conditional update, never below zero, once per order).
+          const reserved = await reserveStockForOrder(tx, { organizationId: input.organizationId, orderId: order.id, lines: quote.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })), now: input.now });
           if (quote.discount > 0 && input.claimId) {
             // Compare-and-set: a claim that was claimed in parallel aborts this order.
             const swapped = await tx.offerClaim.updateMany({
@@ -252,16 +271,27 @@ export class OrdersService {
             });
             if (swapped.count !== 1) throw new OfferRaceError();
           }
-          return { status: 'created' as const, orderId: order.id };
+          return { status: 'created' as const, orderId: order.id, reserved };
         });
         if (result.status === 'rejected') return result;
-        log.info('order.created', { organizationId: input.organizationId, orderId: result.orderId, channel: input.channel });
+        log.info('order.created', { organizationId: input.organizationId, orderId: result.orderId, channel: input.channel, stockReserved: result.reserved.length });
+        this.stockAlerts?.checkInBackground(input.organizationId, result.reserved);
         return { status: 'created', order: await this.getOrder(input.organizationId, result.orderId) };
       } catch (error) {
+        if (error instanceof InsufficientStockError) {
+          // Another order took the stock between the summary and this "yes": nothing was created or taken.
+          return { status: 'rejected', problems: [`Only ${stockText(error.remaining, error.unit)} of ${error.itemName} left today.`] };
+        }
         if (error instanceof OfferRaceError) {
           const raced = await this.prisma.order.findUnique({ where: { organizationId_idempotencyKey: { organizationId: input.organizationId, idempotencyKey: input.idempotencyKey } } });
           if (raced) return { status: 'duplicate', order: await this.getOrder(input.organizationId, raced.id) };
           return { status: 'rejected', problems: ['This offer has already been used.'] };
+        }
+        // Two confirmations for the last stock at the same moment: MySQL resolves the lock conflict by aborting one
+        // transaction (nothing of it was written). Try again; the conditional stock update then decides cleanly.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034' && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 20 + Math.random() * 80));
+          continue;
         }
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           const raced = await this.prisma.order.findUnique({ where: { organizationId_idempotencyKey: { organizationId: input.organizationId, idempotencyKey: input.idempotencyKey } } });
@@ -339,13 +369,16 @@ export class OrdersService {
         if (!TRANSITIONS[from]?.includes(to)) throw new BadRequestException(`An order that is ${from} cannot be moved to ${to}.`);
         const swapped = await this.prisma.order.updateMany({
           where: { id: order.id, organizationId, status: from },
-          data: { status: to, ...(to === 'ready' ? { readyNotice: 'pending', readyNoticeAt: new Date() } : {}) },
+          data: { status: to, ...(to === 'ready' ? { readyNotice: 'pending', readyNoticeAt: new Date() } : {}), ...(to === 'completed' ? { collectedAt: new Date() } : {}) },
         });
         if (swapped.count !== 1) throw new BadRequestException('The order was just changed by someone else. Refresh and try again.');
         await this.prisma.orderEvent.create({ data: { organizationId, orderId: order.id, type: 'status_changed', fromStatus: from, toStatus: to, actor, note } });
         // A cancelled order gives the offer back so the customer can use it on a new order.
         if (to === 'cancelled') {
           await this.prisma.offerClaim.updateMany({ where: { organizationId, orderId: order.id, status: 'claimed' }, data: { status: 'started', orderId: null } });
+          // ...and its reserved stock back to the shelf (once, however often this is repeated).
+          const released = await releaseStockForOrder(this.prisma, { organizationId, orderId: order.id, actor });
+          this.stockAlerts?.checkInBackground(organizationId, released);
         }
         changedTo = to;
         log.info('order.status_changed', { organizationId, orderId: order.id, from, to, actor });
@@ -395,6 +428,16 @@ export function serializeOrder(o: OrderWithRelations) {
     readyNoticeAt: o.readyNoticeAt,
     readyNoticeNote: o.readyNoticeNote,
     readyCallId: o.readyCallId,
+    collectedAt: o.collectedAt,
+    feedbackRating: o.feedbackRating,
+    feedbackComment: o.feedbackComment,
+    feedbackAt: o.feedbackAt,
+    feedbackChannel: o.feedbackChannel,
+    complaintStatus: o.complaintStatus,
+    complaintNote: o.complaintNote,
+    followUpStatus: o.followUpStatus,
+    lastContactAt: o.lastContactAt,
+    nextFollowUpAt: o.nextFollowUpAt,
     customerName: o.customerName ?? o.customer.name,
     customerPhone: o.customerPhone ?? o.customer.phone,
     customerId: o.customerId,

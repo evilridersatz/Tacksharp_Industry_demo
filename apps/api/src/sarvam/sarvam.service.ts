@@ -48,7 +48,8 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     return Boolean(config.sarvam.apiKey);
   }
 
-  async speechToText(audio: Buffer, filename = 'audio.wav', mimeType = 'audio/wav'): Promise<SttResult> {
+  /** `keyterms`: this call's vocabulary (a restaurant's products); defaults to the service-wide list. */
+  async speechToText(audio: Buffer, filename = 'audio.wav', mimeType = 'audio/wav', keyterms?: string[]): Promise<SttResult> {
     const startedAt = Date.now();
     if (!this.enabled) throw new Error('SARVAM_API_KEY is missing');
 
@@ -60,8 +61,9 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     }
     form.append('language_code', config.sarvam.sttLanguage);
     // Bias recognition toward local place / project names (saaras:v4 only, max 50).
-    if (config.sarvam.sttModel === 'saaras:v4' && this.keyterms.length > 0) {
-      form.append('keyterms', JSON.stringify(this.keyterms.slice(0, 50)));
+    const terms = keyterms ?? this.keyterms;
+    if (config.sarvam.sttModel === 'saaras:v4' && terms.length > 0) {
+      form.append('keyterms', JSON.stringify(terms.slice(0, 50)));
     }
 
     const response = await fetch('https://api.sarvam.ai/speech-to-text', {
@@ -121,7 +123,7 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     const cachedName = `prompt-${crypto.createHash('sha1').update(cacheKey).digest('hex').slice(0, 16)}.wav`;
     if (options.cache) {
       // Deterministic file name: the disk copy survives API restarts, so a restart does not re-pay for every prompt.
-      if (this.cache.has(cacheKey) || (await this.exists(cachedName))) {
+      if (this.cache.has(cacheKey) || (await this.validCachedFile(cachedName))) {
         this.cache.set(cacheKey, cachedName);
         return { url: this.publicUrl(cachedName), ms: 0, attempts: 0, cached: true, languageCode };
       }
@@ -143,17 +145,22 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     const startedAt = Date.now();
     const budget = priority === 'live' ? config.sarvam.ttsBudgetMs : 60_000;
     // Background (cache warm-up): one try, a 429 is skipped, never retried - it would eat capacity a caller needs.
-    // Live: one short retry, then the caller's fallback (cached line / alternate reply) takes over.
+    // Live: one short retry for a FAST failure (429 / 5xx / connection refused), then the caller's fallback.
+    // A request that TIMED OUT is not retried on a live call: the retry rarely beats an overloaded Sarvam and the
+    // caller waited timeout + retry (5 s + 3 s = the reported 8.15 s turn) before hearing anything.
     const maxAttempts = priority === 'live' ? 2 : 1;
+    let timedOut = false;
     let attempts = 0;
     let lastError = '';
-    while (attempts < maxAttempts) {
+    while (attempts < maxAttempts && !timedOut) {
       attempts++;
-      const remaining = budget - (Date.now() - startedAt);
-      if (remaining < 500) break;
+      if (budget - (Date.now() - startedAt) < 500) break;
       let retryAfter: string | null = null;
       try {
         const result = await this.limiter.run(priority, async () => {
+          // Measured when the request actually starts: time spent queued behind other calls' audio counts too.
+          const remaining = budget - (Date.now() - startedAt);
+          if (remaining < 500) return { status: 0, body: 'budget_exceeded_while_queued' };
           const response = await fetch('https://api.sarvam.ai/text-to-speech', {
             method: 'POST',
             headers: { 'api-subscription-key': config.sarvam.apiKey, 'Content-Type': 'application/json' },
@@ -177,10 +184,23 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
           return { status: response.status, audio: data.audios?.[0] };
         });
         if ('audio' in result && result.audio) {
+          const bytes = Buffer.from(result.audio, 'base64');
+          // Never hand Plivo a file it cannot play: a non-WAV / empty / zero-length answer is a failure (the caller
+          // falls back) instead of a URL that plays silence.
+          const info = inspectWav(bytes);
+          if (!info.ok) {
+            lastError = `invalid_audio:${info.reason}`;
+            log.warn('sarvam.tts_invalid_audio', { reason: info.reason, bytes: bytes.length, attempt: attempts, priority });
+            break;
+          }
           await fs.mkdir(config.voice.audioDir, { recursive: true });
-          await fs.writeFile(path.join(config.voice.audioDir, filename), Buffer.from(result.audio, 'base64'));
+          await fs.writeFile(path.join(config.voice.audioDir, filename), bytes);
+          log.info('sarvam.tts_audio', { codec: info.codec, sampleRate: info.sampleRate, channels: info.channels, bits: info.bits, durationMs: info.durationMs, bytes: bytes.length });
           const ms = Date.now() - startedAt;
-          log.info('sarvam.tts', { latencyMs: ms, languageCode, chars: clean.length, attempts, priority, cached: filename.startsWith('prompt-') });
+          // This line is only written for a real Sarvam request (a cache hit returns earlier and makes no request):
+          // cacheHit is always false here; storedInCache says whether the new audio is kept for reuse. (The old field
+          // name "cached" read as a cache hit, so slow provider calls looked like slow cache reads.)
+          log.info('sarvam.tts', { latencyMs: ms, languageCode, chars: clean.length, attempts, priority, cacheHit: false, storedInCache: filename.startsWith('prompt-') });
           return { url: this.publicUrl(filename), ms, attempts, cached: false, languageCode };
         }
         if ('audio' in result) {
@@ -188,13 +208,14 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
         } else {
           lastError = `http_${result.status}`;
           log.warn('sarvam.tts_error', { status: result.status, attempt: attempts, priority, body: result.body });
-          if (!retryableTtsStatus(result.status)) break;
+          if (result.status === 0 || !retryableTtsStatus(result.status)) break;
         }
       } catch (error) {
         lastError = errorMessage(error).slice(0, 120);
-        log.warn('sarvam.tts_failed', { error: lastError, attempt: attempts, priority, latencyMs: Date.now() - startedAt });
+        timedOut = (error as { name?: string })?.name === 'TimeoutError' || /timeout|timed out|aborted/i.test(lastError);
+        log.warn('sarvam.tts_failed', { error: lastError, attempt: attempts, priority, latencyMs: Date.now() - startedAt, timedOut });
       }
-      if (attempts < maxAttempts) await new Promise((r) => setTimeout(r, ttsBackoffMs(attempts, retryAfter, 400)));
+      if (attempts < maxAttempts && !timedOut) await new Promise((r) => setTimeout(r, ttsBackoffMs(attempts, retryAfter, 400)));
     }
     const ms = Date.now() - startedAt;
     log.error('sarvam.tts_gave_up', { error: lastError, attempts, priority, latencyMs: ms, chars: clean.length, languageCode });
@@ -243,6 +264,23 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     return `${config.publicBaseUrl}/voice/audio/${filename}`;
   }
 
+  /**
+   * A cached prompt is reused only if it is a playable WAV. A truncated / empty file (disk full, a crash mid-write)
+   * used to be served forever — that line was silent on every call. A bad file is deleted and made again.
+   */
+  private async validCachedFile(filename: string) {
+    if (!(await this.exists(filename))) return false;
+    try {
+      const info = inspectWav(await fs.readFile(path.join(config.voice.audioDir, filename)));
+      if (info.ok) return true;
+      log.warn('sarvam.tts_cached_audio_invalid', { reason: info.reason });
+      await fs.unlink(path.join(config.voice.audioDir, filename)).catch(() => undefined);
+    } catch {
+      /* unreadable: make it again */
+    }
+    return false;
+  }
+
   private async exists(filename: string) {
     try {
       await fs.access(path.join(config.voice.audioDir, filename));
@@ -270,4 +308,33 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
       log.warn('sarvam.cleanup_failed', { error: errorMessage(error) });
     }
   }
+}
+
+/** Format of a WAV file (no audio data is logged). ok=false says why Plivo / the stream could not play it. */
+export function inspectWav(file: Buffer): { ok: true; codec: string; sampleRate: number; channels: number; bits: number; durationMs: number } | { ok: false; reason: string } {
+  if (file.length < 44) return { ok: false, reason: 'too_short' };
+  if (file.toString('ascii', 0, 4) !== 'RIFF' || file.toString('ascii', 8, 12) !== 'WAVE') return { ok: false, reason: 'not_wav' };
+  let offset = 12;
+  let fmt: { format: number; channels: number; sampleRate: number; bits: number } | undefined;
+  let dataBytes = -1;
+  while (offset + 8 <= file.length) {
+    const id = file.toString('ascii', offset, offset + 4);
+    let size = file.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    if (id === 'data' && (size === 0 || size === 0xffffffff || start + size > file.length)) size = file.length - start;
+    if (id === 'fmt ' && start + 16 <= file.length) fmt = { format: file.readUInt16LE(start), channels: file.readUInt16LE(start + 2), sampleRate: file.readUInt32LE(start + 4), bits: file.readUInt16LE(start + 14) };
+    if (id === 'data') {
+      dataBytes = size;
+      break;
+    }
+    offset = start + size + (size % 2);
+  }
+  if (!fmt) return { ok: false, reason: 'no_fmt_chunk' };
+  if (dataBytes <= 0) return { ok: false, reason: 'no_audio_data' };
+  if (!fmt.sampleRate || !fmt.channels) return { ok: false, reason: 'bad_format' };
+  const codec = fmt.format === 1 ? 'pcm' : fmt.format === 7 ? 'mulaw' : fmt.format === 6 ? 'alaw' : `format_${fmt.format}`;
+  const bytesPerSample = Math.max(1, fmt.bits / 8) * fmt.channels;
+  const durationMs = Math.round((dataBytes / bytesPerSample / fmt.sampleRate) * 1000);
+  if (durationMs < 50) return { ok: false, reason: 'silent_or_empty' };
+  return { ok: true, codec, sampleRate: fmt.sampleRate, channels: fmt.channels, bits: fmt.bits, durationMs };
 }

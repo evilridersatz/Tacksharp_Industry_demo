@@ -38,7 +38,9 @@ export type CallOutcome =
   | 'site_visit_requested'
   | 'site_visit_booked'
   | 'wrong_number'
-  | 'connected';
+  | 'connected'
+  /** Restaurant: the customer confirmed an order on the call (created by the order service, not the model). */
+  | 'order_placed';
 
 export type CustomerMemoryUpdate = {
   name?: string;

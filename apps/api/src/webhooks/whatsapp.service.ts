@@ -6,6 +6,11 @@ import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
 import { normalizePhone } from '../common/phone.js';
 import { log } from '../common/logger.js';
+import { OrderFollowUpService } from '../restaurant/order-followup.service.js';
+import { ConversationsService } from '../conversations/conversations.service.js';
+import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
+
+type IncomingQueue = { add(name: string, data: unknown, opts: { jobId: string }): Promise<unknown> };
 
 type WhatsAppMessage = {
   from?: string;
@@ -27,6 +32,7 @@ type WhatsAppWebhookBody = {
         metadata?: { phone_number_id?: string };
         contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
         messages?: WhatsAppMessage[];
+        statuses?: Array<{ id?: string; status?: string; errors?: Array<{ title?: string; message?: string; code?: number }> }>;
       };
     }>;
   }>;
@@ -38,7 +44,13 @@ export class WhatsAppService {
     private readonly prisma: PrismaService,
     private readonly followUps: FollowUpsService,
     private readonly tenancy: TenancyService,
+    private readonly orderFollowUps: OrderFollowUpService,
+    private readonly conversations: ConversationsService,
+    private readonly inbound: InboundMessageService,
   ) {}
+
+  /** The BullMQ queue in production; tests swap in a fake. */
+  queue: IncomingQueue = whatsappQueue as unknown as IncomingQueue;
 
   /**
    * Fast path only: record that the customer replied, stop pending automation,
@@ -64,6 +76,15 @@ export class WhatsAppService {
           continue;
         }
 
+        // Delivery receipts for messages we sent (sent / delivered / read / failed): chat replies and follow-ups.
+        for (const st of value.statuses ?? []) {
+          if (!st.id || !st.status) continue;
+          const error = st.errors?.map((e) => `${e.code ?? ''} ${e.title ?? e.message ?? ''}`.trim()).join('; ');
+          await this.orderFollowUps.applyDeliveryStatus(organizationId, st.id, st.status, error);
+          await this.conversations.applyDeliveryStatus(organizationId, st.id, st.status, error);
+          if (st.status === 'failed') log.warn('whatsapp.delivery_failed', { messageId: st.id, error });
+        }
+
         for (const message of value.messages ?? []) {
           const from = normalizePhone(message.from);
           if (!from || !message.id) continue;
@@ -76,23 +97,43 @@ export class WhatsAppService {
           const audioId = message.type === 'audio' ? message.audio?.id : undefined;
           const contactName = value.contacts?.find((c) => normalizePhone(c.wa_id) === from)?.profile?.name;
 
-          await this.markInbound(organizationId, from, contactName);
-
-          await whatsappQueue.add(
-            'incoming-message',
-            {
-              organizationId,
-              phoneNumberId,
-              from,
-              messageId: message.id,
-              messageType: message.type ?? 'unknown',
-              text,
-              audioId,
-              customerName: contactName,
-              timestamp: message.timestamp,
-            },
-            { jobId: `whatsapp-${message.id}` }, // Meta retries the same id -> deduplicated
-          );
+          // Persisted first, keyed by Meta's message id (unique per organization): a re-delivered webhook — after a
+          // lost 200, or days later — is recognised here and never answered twice.
+          const accepted = await this.inbound.accept({
+            organizationId,
+            providerMessageId: message.id,
+            fromPhone: from,
+            messageType: message.type ?? 'unknown',
+            payload: { phoneNumberId, text: text ?? null, audioId: audioId ?? null, customerName: contactName ?? null, timestamp: message.timestamp ?? null },
+          });
+          if (accepted.outcome === 'duplicate') {
+            log.info('whatsapp.duplicate_inbound', { messageId: message.id, status: accepted.row.status });
+            continue;
+          }
+          try {
+            await this.markInbound(organizationId, from, contactName);
+            await this.queue.add(
+              'incoming-message',
+              {
+                organizationId,
+                phoneNumberId,
+                from,
+                messageId: message.id,
+                messageType: message.type ?? 'unknown',
+                text,
+                audioId,
+                customerName: contactName,
+                timestamp: message.timestamp,
+              },
+              { jobId: `whatsapp-${message.id}` }, // Meta retries the same id -> deduplicated
+            );
+          } catch (error) {
+            // Not queued: the row stays "received", so Meta's retry of this webhook (we answer 500) queues it, and
+            // the worker's sweep re-queues it if Meta does not retry.
+            log.error('whatsapp.queue_failed', { messageId: message.id, error: error instanceof Error ? error.message : String(error) });
+            throw error;
+          }
+          await this.inbound.markQueued(accepted.row.id);
           queued++;
           log.info('whatsapp.queued', { messageId: message.id, type: message.type });
         }

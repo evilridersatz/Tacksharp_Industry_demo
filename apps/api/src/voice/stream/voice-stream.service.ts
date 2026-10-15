@@ -94,7 +94,7 @@ export class VoiceStreamService implements OnApplicationBootstrap, OnModuleDestr
       }
     };
     return {
-      transcribe: (wav) => this.sarvam.speechToText(wav, 'turn.wav', 'audio/wav'),
+      transcribe: (wav) => this.sarvam.speechToText(wav, 'turn.wav', 'audio/wav', rt.keyterms),
       understand: (transcript, sttLanguage, durationMs) => this.voice.withCallLock(rt.callId, () => this.voice.understand(rt, transcript, sttLanguage, durationMs)),
       speak: async (text, cache) => {
         const tts = await this.voice.speakForStream(rt, text, cache);

@@ -21,13 +21,22 @@ Object.assign(process.env, {
   // The AI now calls ~1 minute after every lead. Stretch automatic steps x1000 so no scheduled call or reminder fires
   // in the middle of this run; each check drives the steps it needs explicitly.
   FOLLOWUP_TIME_SCALE: '1000', AUTH_SECRET: 'e2e-auth-secret-0123456789abcdef0123', META_APP_SECRET: 'e2e-meta-app-secret',
-  PLIVO_VALIDATE_SIGNATURE: 'true', RATE_LIMIT_LOGIN: '10', VOICE_CALL_WINDOW_START: process.env.E2E_WINDOW_START ?? '9', VOICE_CALL_WINDOW_END: process.env.E2E_WINDOW_END ?? '21', VOICE_AUDIO_DIR: '/tmp/tacksharp-e2e-audio',
+  PLIVO_VALIDATE_SIGNATURE: 'true', RATE_LIMIT_LOGIN: '10', VOICE_CALL_WINDOW_START: process.env.E2E_WINDOW_START ?? '9', VOICE_CALL_WINDOW_END: process.env.E2E_WINDOW_END ?? '21', // A fresh folder per run: cached audio from an earlier run skips the (fake) TTS call and hid what was spoken.
+  VOICE_AUDIO_DIR: `/tmp/tacksharp-e2e-audio-${process.pid}`,
 });
 
 const log = { stt: [], tts: [], wa: [], llm: [], plays: [] };
 const recordings = new Map();
 const realFetch = globalThis.fetch;
-const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(40), Buffer.alloc(800, 3)]);
+// A real (tiny) 8 kHz 16-bit mono WAV: the TTS layer rejects audio Plivo could not play (a bare 'RIFF' + zeros).
+const WAV = (() => {
+  const data = Buffer.alloc(1600, 3);
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + data.length, 4); h.write('WAVE', 8); h.write('fmt ', 12);
+  h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(8000, 24); h.writeUInt32LE(16000, 28);
+  h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(data.length, 40);
+  return Buffer.concat([h, data]);
+})();
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -466,10 +475,11 @@ if (stepResult.reason === 'outside_call_window') {
   check('20. (skipped: run with E2E_WINDOW_START=0 E2E_WINDOW_END=24 to dial now)', true);
 } else {
   const call5 = await waitFor(async () => { const c = await prisma.call.findFirst({ where: { leadId: c5.leadId }, orderBy: { createdAt: 'desc' } }); return c?.endedAt ? c : null; });
-  const retry = await waitFor(() => prisma.followUp.findFirst({ where: { customerId: c5.customerId, source: 'retry' } }));
+  // The retry CALL (the missed-call WhatsApp is also tagged source 'retry' and is not a call).
+  const retry = await waitFor(() => prisma.followUp.findFirst({ where: { customerId: c5.customerId, source: 'retry', channel: 'voice' } }));
   const retryHour = retry ? Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(retry.scheduledAt)) % 24 : -1;
   check('20. Sequence call unanswered → no_answer saved + ONE retry inside the calling window', !!stepResult.callId && call5?.outcome === 'no_answer'
-    && retryHour >= Number(process.env.VOICE_CALL_WINDOW_START) && retryHour < Number(process.env.VOICE_CALL_WINDOW_END) && (await prisma.followUp.count({ where: { customerId: c5.customerId, source: 'retry' } })) === 1,
+    && retryHour >= Number(process.env.VOICE_CALL_WINDOW_START) && retryHour < Number(process.env.VOICE_CALL_WINDOW_END) && (await prisma.followUp.count({ where: { customerId: c5.customerId, source: 'retry', channel: 'voice' } })) === 1,
     retry && `retry at ${retry.scheduledAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`);
 }
 const c6 = await testLead('Gopal', '9000088888');

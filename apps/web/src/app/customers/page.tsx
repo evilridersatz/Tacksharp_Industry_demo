@@ -17,6 +17,10 @@ type CustomerDetail = {
   email: string | null;
   source: string | null;
   doNotContact: boolean;
+  messagingConsent: boolean;
+  callingConsent: boolean;
+  optedOutAt: string | null;
+  isDemo: boolean;
   createdAt: string;
   lastInboundAt: string | null;
   orders: Order[];
@@ -82,7 +86,7 @@ function Customers() {
                   <th className="px-3 py-2 text-right">Orders</th>
                   <th className="px-3 py-2 text-right">Spend</th>
                   <th className="px-3 py-2">Last order</th>
-                  <th className="px-5 py-2">Marketing</th>
+                  <th className="px-5 py-2">Consent</th>
                 </tr>
               </thead>
               <tbody>
@@ -92,7 +96,7 @@ function Customers() {
                       <div className="flex items-center gap-2.5">
                         <Avatar person={c} size={30} />
                         <div>
-                          <p className="font-semibold text-ink">{displayName(c)}</p>
+                          <p className="flex items-center gap-1.5 font-semibold text-ink">{displayName(c)}{c.isDemo && <Badge tone="amber">Demo</Badge>}</p>
                           <p className="text-[11.5px] text-faint">{formatPhone(c.phone)}</p>
                         </div>
                       </div>
@@ -100,7 +104,16 @@ function Customers() {
                     <td className="tabular px-3 py-2.5 text-right font-semibold text-ink">{c.orders}</td>
                     <td className="tabular px-3 py-2.5 text-right">{inr(c.totalSpend)}</td>
                     <td className="px-3 py-2.5 text-muted">{c.lastOrderAt ? `${timeAgo(c.lastOrderAt)} ago` : '—'}</td>
-                    <td className="px-5 py-2.5">{c.doNotContact ? <Badge tone="rose">Opted out</Badge> : <Badge tone="slate">No opt-out recorded</Badge>}</td>
+                    <td className="px-5 py-2.5">
+                      {c.optedOutAt || c.doNotContact ? (
+                        <Badge tone="rose">{c.optedOutAt ? 'Replied STOP' : 'Do not contact'}</Badge>
+                      ) : (
+                        <span className="flex flex-wrap gap-1">
+                          <Badge tone={c.messagingConsent ? 'brand' : 'slate'}>{c.messagingConsent ? 'WhatsApp ✓' : 'No WhatsApp consent'}</Badge>
+                          <Badge tone={c.callingConsent ? 'brand' : 'slate'}>{c.callingConsent ? 'Calls ✓' : 'No call consent'}</Badge>
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -117,16 +130,20 @@ function CustomerPanel({ id, onClose, onChanged }: { id: string; onClose: () => 
   const me = useMe();
   const { data: c, error, reload } = useApi<CustomerDetail>(`/restaurant/customers/${id}`, 0);
   const [busy, setBusy] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
   if (error && !c) return <ErrorBanner message={error} onRetry={reload} />;
   if (!c) return <Skeleton className="h-[420px] rounded-[14px]" />;
   const spend = c.orders.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + o.total, 0);
 
-  async function toggleConsent() {
+  async function patch(body: Record<string, boolean>) {
     setBusy(true);
+    setConsentError(null);
     try {
-      await api.patch(`/restaurant/customers/${id}`, { doNotContact: !c!.doNotContact });
+      await api.patch(`/restaurant/customers/${id}`, body);
       await reload();
       onChanged();
+    } catch (e) {
+      setConsentError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -137,7 +154,9 @@ function CustomerPanel({ id, onClose, onChanged }: { id: string; onClose: () => 
       <div className="flex items-start gap-3 border-b border-line px-5 py-4">
         <Avatar person={c} size={44} />
         <div className="min-w-0 flex-1">
-          <p className="text-[16px] font-bold text-ink">{displayName(c)}</p>
+          <p className="flex items-center gap-2 text-[16px] font-bold text-ink">
+            {displayName(c)} {c.isDemo && <Badge tone="amber">Demo · synthetic number</Badge>}
+          </p>
           <p className="text-[12.5px] text-muted">{formatPhone(c.phone)}</p>
         </div>
         <button onClick={onClose} aria-label="Close customer" className="text-muted hover:text-ink">
@@ -149,13 +168,32 @@ function CustomerPanel({ id, onClose, onChanged }: { id: string; onClose: () => 
         <Field label="First channel">{CHANNEL_LABEL[c.source ?? ''] ?? c.source ?? '—'}</Field>
         <Field label="Orders">{c.orders.length}</Field>
         <Field label="Spend (excl. cancelled)">{inr(spend)}</Field>
-        <Field label="Promotional messages">{c.doNotContact ? 'Opted out' : 'No opt-out recorded (opt-in not captured yet)'}</Field>
-        {me && me.role !== 'viewer' && (
-          <Button className="mt-2 w-full" busy={busy} onClick={toggleConsent}>
-            {c.doNotContact ? <ShieldCheck className="size-4" /> : <ShieldOff className="size-4" />}
-            {c.doNotContact ? 'Remove opt-out' : 'Record opt-out (do not contact)'}
-          </Button>
-        )}
+        {c.optedOutAt && <p className="my-2 rounded-[8px] bg-rose-soft px-3 py-2 text-[12.5px] text-rose">Replied STOP on {dateTime(c.optedOutAt)}. No messages or calls until the customer replies START.</p>}
+        <div className="mt-2 flex flex-col gap-2">
+          {([
+            ['messagingConsent', 'WhatsApp messages (confirmation, updates, feedback)'],
+            ['callingConsent', 'Follow-up calls'],
+          ] as const).map(([key, label]) => (
+            <label key={key} className="flex items-center justify-between gap-3 rounded-[10px] border border-line px-3 py-2">
+              <span className="text-body">{label}</span>
+              <input
+                type="checkbox"
+                checked={c[key]}
+                disabled={busy || !me || me.role === 'viewer' || (Boolean(c.optedOutAt) && !c[key])}
+                onChange={(e) => patch({ [key]: e.target.checked })}
+                className="size-4 accent-[var(--color-brand)]"
+                aria-label={label}
+              />
+            </label>
+          ))}
+          {me && me.role !== 'viewer' && (
+            <Button className="w-full" busy={busy} onClick={() => patch({ doNotContact: !c.doNotContact })}>
+              {c.doNotContact ? <ShieldCheck className="size-4" /> : <ShieldOff className="size-4" />}
+              {c.doNotContact ? 'Remove do-not-contact' : 'Mark do-not-contact'}
+            </Button>
+          )}
+          {consentError && <p className="text-[12px] text-rose">{consentError}</p>}
+        </div>
       </div>
       <div className="border-t border-line px-5 py-3">
         <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">Orders</h3>

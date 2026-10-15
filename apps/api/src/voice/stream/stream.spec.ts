@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { decodeMulaw, encodeMulaw, linearToMulaw, mulawToLinear, parseWav, pcmToWav, resample, wavToPhoneMulaw, mulawMs } from './audio.js';
 import { DEFAULT_ENDPOINTER, Endpointer, type EndpointEvent } from './endpointer.js';
-import { StreamCall, implausibleTranscript, isBareHello, isEchoOf, splitForSpeech, type StreamDeps } from './stream-call.js';
+import { StreamCall, implausibleTranscript, isBareHello, isEchoOf, splitForSpeech, tailWords, type StreamDeps } from './stream-call.js';
 import { streamToken, validStreamToken, streamXml } from '../plivo-xml.js';
 
 const RATE = 8000;
@@ -664,11 +664,68 @@ describe('P0 2026-10-10 (21:20): silent caller, agent heard its own voice - spee
     expect(h.deps.understand).not.toHaveBeenCalled();
   });
 
+  it('9b: a real "ஆமா" said over the END of our question (and going on after it) reaches the engine', async () => {
+    // Audio time and the call clock move together, as on a live call.
+    let clock = 1_000_000;
+    const question = 'Confirm பண்ணட்டுமா? ஆமா, இல்ல வேண்டாம்னு சொல்லுங்க.';
+    const transcripts = ['ரெண்டு கிலோ boneless', 'ஆமா.'];
+    const h = harness({
+      now: () => clock,
+      transcribe: vi.fn(async () => ({ transcript: transcripts.shift() ?? '', languageCode: 'ta-IN' })),
+      understand: vi.fn(async () => ({ kind: 'reply' as const, turns: 1, finalText: question, end: false, cacheable: false, result: { path: 'rules', actions: {}, aiUsage: { requests: 0 } } as any })),
+    });
+    const feed = async (pcm: Int16Array) => {
+      for (let i = 0; i < pcm.length; i += 160) {
+        clock += 20;
+        await h.media(pcm.subarray(i, i + 160));
+      }
+    };
+    await h.start();
+    await h.played('opening');
+    clock += 2000;
+    await feed(cat(quiet(200), tone(900), quiet(900)));
+    await h.settle();
+    expect(h.deps.understand).toHaveBeenCalledTimes(1);
+    const reply = [...h.sent].reverse().find((m) => m.event === 'checkpoint' && /^reply-/.test(m.name));
+    // The customer starts "ஆமா" in the last moment of our question and finishes after it.
+    await feed(cat(quiet(100), tone(100)));
+    await h.played(reply!.name);
+    await feed(cat(tone(280), quiet(900)));
+    await h.settle();
+    expect(h.deps.understand).toHaveBeenCalledTimes(2);
+    expect((h.deps.understand as any).mock.calls[1][0]).toBe('ஆமா.');
+  });
+
+  it('two turns back to back are answered one after the other: never two decisions or two replies at once', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const h = harness({
+      understand: vi.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await wait(60);
+        inFlight--;
+        return { kind: 'reply' as const, turns: 1, finalText: 'Sari.', end: false, cacheable: true, result: { path: 'rules', actions: {}, aiUsage: { requests: 0 } } as any };
+      }),
+    });
+    await h.start();
+    await h.played('opening');
+    await wait(1500);
+    await feedPcm(h, cat(quiet(200), tone(800), quiet(800), tone(800), quiet(900)));
+    await wait(250);
+    expect(h.deps.understand).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(1);
+    expect(h.deps.speak).toHaveBeenCalledTimes(2);
+  });
+
   it('echo / plausibility helpers', () => {
     expect(isEchoOf('Porur Premium Residency.', 'Porur-ல Porur Premium Residency 1.2 crore இருக்கு')).toBe(true);
     expect(isEchoOf('Guduvanchery.', 'Porur, OMR, Guduvanchery - இதுல எந்த area பாக்கலாம்?')).toBe(true);
     expect(isEchoOf('illa Velachery venum', 'Porur-ல Porur Premium Residency இருக்கு')).toBe(false);
     expect(isEchoOf('ஆமா', '')).toBe(false);
+    // After our audio ended only its last words can still echo: "ஆமா" is an answer, "சொல்லுங்க" may be echo.
+    expect(isEchoOf('ஆமா', tailWords('Confirm பண்ணட்டுமா? ஆமா, இல்ல வேண்டாம்னு சொல்லுங்க.'))).toBe(false);
+    expect(isEchoOf('சொல்லுங்க', tailWords('Confirm பண்ணட்டுமா? ஆமா, இல்ல வேண்டாம்னு சொல்லுங்க.'))).toBe(true);
     expect(implausibleTranscript('ஆமா', 400)).toBe(false);
     expect(implausibleTranscript('Porur Premium Residency', 1200)).toBe(false);
     expect(implausibleTranscript('நாளைக்கு சாயங்காலம் நாலு மணிக்கு வரேன்', 1500)).toBe(false); // real Tamil

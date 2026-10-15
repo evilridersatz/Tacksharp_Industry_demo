@@ -17,6 +17,7 @@
  *   GR_OFFER_AMOUNT                default 50
  */
 import 'dotenv/config';
+import { normalizePhone } from '../src/common/phone.js';
 import { randomBytes, createHash } from 'node:crypto';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -158,6 +159,20 @@ async function main() {
       create: { organizationId, kind: 'whatsapp_phone_number_id', externalId: waId },
       update: { organizationId },
     });
+  }
+  // GR Chicken's Plivo number: inbound calls to it must reach GR Chicken, not DEFAULT_ORGANIZATION_ID (real estate).
+  const plivoNumber = normalizePhone(process.env.GR_PLIVO_NUMBER);
+  if (plivoNumber) {
+    await prisma.organizationChannel.upsert({
+      where: { kind_externalId: { kind: 'plivo_number', externalId: plivoNumber } },
+      create: { organizationId, kind: 'plivo_number', externalId: plivoNumber },
+      update: { organizationId },
+    });
+  } else if (process.env.PLIVO_FROM_NUMBER) {
+    console.log('Note: GR_PLIVO_NUMBER not set — inbound calls to PLIVO_FROM_NUMBER go to DEFAULT_ORGANIZATION_ID unless mapped. Set GR_PLIVO_NUMBER if that number is GR Chicken\'s.');
+  }
+  if (!waId && process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    console.log('Note: GR_WHATSAPP_PHONE_NUMBER_ID not set — WhatsApp to WHATSAPP_PHONE_NUMBER_ID goes to DEFAULT_ORGANIZATION_ID unless mapped.');
   }
   const display = (process.env.GR_WHATSAPP_DISPLAY_NUMBER ?? '').replace(/\D/g, '');
   if (display) {

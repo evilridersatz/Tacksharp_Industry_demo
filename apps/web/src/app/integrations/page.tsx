@@ -26,11 +26,13 @@ type Integrations = {
       orderReadyTemplateSet: boolean;
       webhookUrl: string;
     };
-    voice: { connected: boolean; missing: string[]; callingHours: string; answerUrl: string; note: string };
+    voice: { connected: boolean; missing: string[]; callingHours: string; answerUrl: string; note: string; signatureCheck?: boolean };
     website: { keyConfigured: boolean; endpoint: string };
   };
   pos: { status: string; note: string };
   payments: { status: string; note: string };
+  mode?: { dryRun: boolean; liveTestRecipients: number; liveAllowAll: boolean };
+  routing?: Array<{ kind: string; configured: boolean; number?: string; toThisBusiness: boolean; via?: string; vertical?: string }>;
 };
 
 function Status({ ok, label, neutral }: { ok: boolean | null; label: string; neutral?: boolean }) {
@@ -90,6 +92,25 @@ export default function IntegrationsPage() {
                 </p>
               )}
               <Field label="Calling hours">{d.channels.voice.callingHours}</Field>
+              {d.channels.voice.signatureCheck !== undefined && (
+                <Field label="Plivo signature check">{d.channels.voice.signatureCheck ? 'On' : <span className="text-[#b45309]">Off — PLIVO_VALIDATE_SIGNATURE</span>}</Field>
+              )}
+              {d.routing
+                ?.filter((r) => r.configured)
+                .map((r) => (
+                  <Field key={r.kind} label={r.kind === 'plivo_number' ? 'Calls to the Plivo number go to' : 'WhatsApp number goes to'}>
+                    {r.toThisBusiness ? (
+                      `This business${r.via === 'default_fallback' ? ' (default organization)' : ''}`
+                    ) : (
+                      <span className="text-rose">Another business ({r.vertical}) — map {r.number} to this business</span>
+                    )}
+                  </Field>
+                ))}
+              {d.mode && (
+                <Field label="Sending mode">
+                  {d.mode.dryRun ? 'Dry run — nothing is sent, no call is placed' : d.mode.liveAllowAll ? 'Live — all consenting customers' : `Live — ${d.mode.liveTestRecipients} approved test number(s) only`}
+                </Field>
+              )}
               <p className="mt-2 text-[12px] text-muted">Plivo answer URL (set automatically per call):</p>
               <p className="break-all font-mono text-[12px] text-ink">{d.channels.voice.answerUrl}</p>
             </div>

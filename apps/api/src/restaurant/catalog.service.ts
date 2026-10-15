@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { log } from '../common/logger.js';
 import type { Product } from './chicken-parse.js';
+import { stockStatus, type StockStatus } from './inventory.js';
 
 const CACHE_MS = 30_000;
 const MAX_PRICE = 100_000;
@@ -17,7 +18,19 @@ export type MenuItemView = {
   minQty: number;
   maxQty: number;
   qtyStep: number;
+  /**
+   * Can be sold right now: staff have it switched on AND (stock not tracked, or at least the minimum quantity in
+   * stock). Everything that decides availability (replies, menu, quote, order) reads this one field.
+   */
   available: boolean;
+  /** The staff on/off switch alone (dashboard). */
+  listed: boolean;
+  /** Stock on hand in the product's unit; null = not tracked. */
+  stockQty: number | null;
+  lowStockThreshold: number | null;
+  stockStatus: StockStatus;
+  /** Stock numbers are demo / sample values, not counted shop inventory. */
+  stockIsDemo: boolean;
   imageUrl: string | null;
   aliases: string[];
   isDemo: boolean;
@@ -85,7 +98,9 @@ export class CatalogService {
     ]);
     const value: Catalog = {
       categories: categories.map((c) => ({ id: c.id, name: c.name, sortOrder: c.sortOrder })),
-      items: items.map((i) => ({
+      items: items.map((i) => {
+        const status = stockStatus(i);
+        return {
         id: i.id,
         name: i.name,
         description: i.description,
@@ -95,14 +110,20 @@ export class CatalogService {
         minQty: num(i.minQty),
         maxQty: num(i.maxQty),
         qtyStep: num(i.qtyStep),
-        available: i.available,
+        available: i.available && status !== 'out',
+        listed: i.available,
+        stockQty: i.stockQty === null ? null : Number(i.stockQty),
+        lowStockThreshold: i.lowStockThreshold === null ? null : Number(i.lowStockThreshold),
+        stockStatus: status,
+        stockIsDemo: i.stockIsDemo,
         imageUrl: i.imageUrl,
         aliases: splitAliases(i.aliases),
         isDemo: i.isDemo,
         categoryId: i.categoryId,
         categoryName: i.category.name,
         sortOrder: i.sortOrder,
-      })),
+        };
+      }),
       outlets: outlets.map(outletView),
     };
     this.cache.set(organizationId, { at: Date.now(), value });
