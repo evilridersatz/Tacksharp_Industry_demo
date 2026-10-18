@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { ConversationEngine, type GenerateResponseInput, type GenerateResponseResult } from './conversation-engine.service.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
 import { OrderingEngine } from '../restaurant/ordering-engine.service.js';
 import { config } from '../common/config.js';
+import { SettingsService } from '../settings/settings.service.js';
+import { VERTICAL_INDUSTRIES, VerticalAssistant, type VerticalIndustry } from '../verticals/vertical-assistant.service.js';
 
 export type { GenerateResponseInput, GenerateResponseResult } from './conversation-engine.service.js';
 export type { AiUsageMetrics } from './llm-runner.service.js';
@@ -20,12 +22,25 @@ export class AiService {
     private readonly engine: ConversationEngine,
     private readonly tenancy: TenancyService,
     private readonly ordering: OrderingEngine,
+    @Optional() private readonly settings?: SettingsService,
+    @Optional() private readonly verticals?: VerticalAssistant,
   ) {}
+
+  /** Food / hotel / hospital businesses (Settings → Industry) get their own assistant; null = not one of those. */
+  async verticalIndustry(organizationId: string): Promise<VerticalIndustry | null> {
+    if (!this.settings || !this.verticals) return null;
+    const industry = (await this.settings.get(organizationId)).industry;
+    return (VERTICAL_INDUSTRIES as string[]).includes(industry) ? (industry as VerticalIndustry) : null;
+  }
 
   /** Routes the turn to the tenant's product: real-estate lead follow-up (default) or restaurant ordering. */
   async generateResponse(input: GenerateResponseInput): Promise<GenerateResponseResult> {
     const organizationId = input.organizationId ?? config.defaultOrganizationId;
-    if ((await this.tenancy.vertical(organizationId)) !== 'restaurant') return this.engine.generate(input);
+    if ((await this.tenancy.vertical(organizationId)) !== 'restaurant') {
+      const vertical = await this.verticalIndustry(organizationId);
+      if (vertical) return this.verticals!.generate(vertical, { ...input, organizationId });
+      return this.engine.generate(input);
+    }
     const result = await this.ordering.generate({
       organizationId,
       // Phone calls use the same ordering rules with spoken replies. The authenticated /ai/chat test endpoint

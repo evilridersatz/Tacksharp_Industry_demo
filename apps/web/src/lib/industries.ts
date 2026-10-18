@@ -1,7 +1,7 @@
 import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
-  TrendingUp, UtensilsCrossed, Users, Wrench, type LucideIcon,
+  TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound, type LucideIcon,
 } from 'lucide-react';
 
 /**
@@ -9,7 +9,7 @@ import {
  * how that industry looks: navigation, terminology, accent, settings sections and playground examples. Every nav entry
  * points to a page that exists; nothing here grants access (the API checks every request).
  */
-export const INDUSTRY_IDS = ['textile', 'restaurant', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
+export const INDUSTRY_IDS = ['textile', 'restaurant', 'food', 'hotel', 'hospital', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
 export type IndustryId = (typeof INDUSTRY_IDS)[number];
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; badge?: 'live' | 'handoff' | 'orders' };
@@ -29,11 +29,16 @@ export type IndustryDef = {
   nav: NavGroup[];
   terms: { customer: string; customers: string; lead: string; leads: string; order: string; orders: string; product: string; products: string };
   /** Settings sections that apply (ids used by the Settings page). */
-  settings: Array<'industry' | 'speed' | 'calling' | 'nurture' | 'visits' | 'team' | 'roi' | 'textile' | 'finance' | 'restaurant'>;
+  settings: Array<'industry' | 'speed' | 'calling' | 'nurture' | 'visits' | 'team' | 'roi' | 'textile' | 'finance' | 'restaurant' | 'food' | 'hotel' | 'hospital'>;
   search: { placeholder: string; href: string };
 };
 
-const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }] };
+/** Every workspace: settings, the demo data explorer and the safe scenario runner. */
+const WORKSPACE_TOOLS: NavItem[] = [
+  { href: '/demo-data', label: 'Data & APIs', icon: Database },
+  { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
+];
+const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
 
 export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
   textile: {
@@ -64,7 +69,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
     search: { placeholder: 'Search enquiries…', href: '/leads' },
   },
   restaurant: {
-    id: 'restaurant', label: 'Restaurant & Food Service', short: 'Restaurant', tagline: 'WhatsApp ordering, live orders, follow-ups and feedback.', icon: UtensilsCrossed,
+    id: 'restaurant', label: 'GR Chicken Restaurant', short: 'GR Chicken', tagline: 'GR Chicken: WhatsApp and phone ordering by the kg, live orders, follow-ups and feedback.', icon: UtensilsCrossed,
     accent: '#ea580c', accentSoft: '#fff1e8', onDark: '#fb923c',
     nav: [
       { section: 'Main', items: [
@@ -80,11 +85,80 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/follow-ups', label: 'Follow-ups & feedback', icon: ListChecks },
       ] },
       { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/test-chat', label: 'Test chat', icon: FlaskConical }, { href: '/analytics', label: 'Sales & analytics', icon: BarChart3 }] },
-      { section: 'Setup', items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }] },
+      { section: 'Setup', items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }, ...WORKSPACE_TOOLS] },
     ],
     terms: { customer: 'customer', customers: 'customers', lead: 'customer', leads: 'customers', order: 'order', orders: 'orders', product: 'menu item', products: 'menu items' },
     settings: ['restaurant'],
     search: { placeholder: 'Search orders…', href: '/orders' },
+  },
+  food: {
+    id: 'food', label: 'Restaurant & Food Ordering', short: 'Restaurant', tagline: 'Menu, WhatsApp and phone orders, pickup and delivery, kitchen status and feedback.', icon: ConciergeBell,
+    accent: '#c2410c', accentSoft: '#fff1e6', onDark: '#fdba74',
+    nav: [
+      { section: 'Main', items: [
+        { href: '/', label: 'Restaurant overview', icon: LayoutDashboard },
+        { href: '/food/orders', label: 'Orders & kitchen', icon: ShoppingBag },
+        { href: '/conversations', label: 'WhatsApp conversations', icon: MessageSquare },
+        { href: '/leads', label: 'Customers', icon: Users },
+      ] },
+      { section: 'Menu', items: [
+        { href: '/food/menu', label: 'Menu & availability', icon: UtensilsCrossed },
+        { href: '/follow-ups', label: 'Follow-ups & feedback', icon: ListChecks },
+        { href: '/handoffs', label: 'Complaints & handoffs', icon: Headset, badge: 'handoff' },
+      ] },
+      { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/analytics', label: 'Sales & analytics', icon: BarChart3 }] },
+      SETUP,
+    ],
+    terms: { customer: 'customer', customers: 'customers', lead: 'customer', leads: 'customers', order: 'order', orders: 'orders', product: 'menu item', products: 'menu items' },
+    settings: ['industry', 'food', 'team'],
+    search: { placeholder: 'Search orders…', href: '/food/orders' },
+  },
+  hotel: {
+    id: 'hotel', label: 'Hotel & Room Booking', short: 'Hotel', tagline: 'Room availability, rates, bookings, front desk and guest follow-ups.', icon: BedDouble,
+    accent: '#0e7490', accentSoft: '#e4f5f8', onDark: '#67e8f9',
+    nav: [
+      { section: 'Front desk', items: [
+        { href: '/', label: 'Hotel overview', icon: LayoutDashboard },
+        { href: '/hotel/reservations', label: 'Reservations', icon: CalendarCheck },
+        { href: '/hotel/availability', label: 'Availability calendar', icon: CalendarDays },
+        { href: '/hotel/rooms', label: 'Rooms & rates', icon: DoorOpen },
+      ] },
+      { section: 'Guests', items: [
+        { href: '/conversations', label: 'Guest conversations', icon: MessageSquare },
+        { href: '/leads', label: 'Booking enquiries', icon: Columns3 },
+        { href: '/follow-ups', label: 'Guest follow-ups', icon: ListChecks },
+        { href: '/handoffs', label: 'Guest service', icon: Headset, badge: 'handoff' },
+      ] },
+      { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/analytics', label: 'Occupancy & revenue', icon: BarChart3 }] },
+      SETUP,
+    ],
+    terms: { customer: 'guest', customers: 'guests', lead: 'enquiry', leads: 'enquiries', order: 'reservation', orders: 'reservations', product: 'room', products: 'rooms' },
+    settings: ['industry', 'hotel', 'team'],
+    search: { placeholder: 'Search reservations…', href: '/hotel/reservations' },
+  },
+  hospital: {
+    id: 'hospital', label: 'Hospital & Healthcare', short: 'Hospital', tagline: 'Appointments on real OPD slots, campaign leads, reminders and insurance paperwork.', icon: HeartPulse,
+    accent: '#be123c', accentSoft: '#fdecef', onDark: '#fda4af',
+    nav: [
+      { section: 'Clinic', items: [
+        { href: '/', label: 'Hospital overview', icon: LayoutDashboard },
+        { href: '/hospital/appointments', label: 'Appointments', icon: CalendarCheck },
+        { href: '/hospital/doctors', label: 'Doctors & OPD hours', icon: Stethoscope },
+        { href: '/hospital/patients', label: 'Patients', icon: UserRound },
+      ] },
+      { section: 'Patient care', items: [
+        { href: '/hospital/insurance', label: 'Insurance & claims', icon: ShieldCheck },
+        { href: '/conversations', label: 'Patient conversations', icon: MessageSquare },
+        { href: '/leads', label: 'Campaign leads', icon: Columns3 },
+        { href: '/follow-ups', label: 'Reminders & follow-ups', icon: ListChecks },
+        { href: '/handoffs', label: 'Escalations', icon: Headset, badge: 'handoff' },
+      ] },
+      { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/analytics', label: 'Hospital analytics', icon: BarChart3 }] },
+      SETUP,
+    ],
+    terms: { customer: 'patient', customers: 'patients', lead: 'lead', leads: 'leads', order: 'appointment', orders: 'appointments', product: 'service', products: 'services' },
+    settings: ['industry', 'hospital', 'team'],
+    search: { placeholder: 'Search appointments…', href: '/hospital/appointments' },
   },
   real_estate: {
     id: 'real_estate', label: 'Real Estate', short: 'Real estate', tagline: 'Lead qualification, AI calls and site visits.', icon: Building2,

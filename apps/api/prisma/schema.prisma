@@ -60,6 +60,15 @@ model Organization {
   expenses            Expense[]
   memberships         OrganizationMembership[]
   qualityInspections  QualityInspection[]
+  agentSessions       AgentSession[]
+  roomTypes           RoomType[]
+  rooms               Room[]
+  roomRates           RoomRate[]
+  reservations        Reservation[]
+  departments         Department[]
+  doctors             Doctor[]
+  appointments        Appointment[]
+  insuranceCases      InsuranceCase[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -147,6 +156,9 @@ model Customer {
   orders         Order[]
   offerClaims    OfferClaim[]
   orderFollowUps OrderFollowUp[]
+  reservations   Reservation[]
+  appointments   Appointment[]
+  insuranceCases InsuranceCase[]
 
   quotations     Quotation[]
   salesOrders    SalesOrder[]
@@ -430,6 +442,12 @@ model MenuItem {
   stockUpdatedAt    DateTime?
   /// Last stock alert sent for this product: low | out | NULL (none since stock was last above the threshold).
   stockAlertLevel   String?
+  /// Food menus: sizes / portions [{name, price}] (when present the chosen variant's price applies), add-ons
+  /// [{name, price}], tax rate and veg flag. NULL for GR Chicken items (kg / cuts).
+  variants          Json?
+  addOns            Json?
+  taxRatePct        Decimal?  @db.Decimal(5, 2)
+  isVeg             Boolean?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -550,6 +568,13 @@ model Order {
   nextFollowUpAt DateTime?
   /// Demo orders only: how the simulated customer behaves in dry-run follow-ups.
   demoScenario   String?
+  /// Food ordering: pickup | delivery (GR Chicken is always pickup).
+  fulfilment      String      @default("pickup")
+  deliveryAddress String?     @db.Text
+  deliveryZone    String?
+  deliveryFee     Decimal     @default(0) @db.Decimal(10, 2)
+  taxAmount       Decimal     @default(0) @db.Decimal(10, 2)
+  dispatchedAt    DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -580,6 +605,9 @@ model OrderItem {
   unitPrice  Decimal  @db.Decimal(10, 2)
   quantity   Decimal  @db.Decimal(8, 3)
   lineTotal  Decimal  @db.Decimal(10, 2)
+  /// Food: chosen size / portion and add-ons [{name, price}] (snapshot).
+  variant    String?
+  addOns     Json?
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
 
@@ -1454,4 +1482,280 @@ model QualityInspection {
   @@unique([organizationId, batchCode])
   @@index([organizationId, inspectedAt])
   @@index([organizationId, status])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Agent conversation state for the food, hotel and hospital assistants (cart, dates, slot offers).
+// One row per conversation key; durable across restarts. Never holds prices as truth: totals are recomputed.
+// ---------------------------------------------------------------------------------------------
+model AgentSession {
+  id             String       @id
+  organizationId String
+  /// food | hotel | hospital
+  kind           String
+  data           Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hotel & room booking. Rates and availability are computed by the server from these tables only.
+// ---------------------------------------------------------------------------------------------
+model RoomType {
+  id             String        @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  description    String?       @db.Text
+  bedType        String?
+  sizeSqft       Int?
+  maxAdults      Int           @default(2)
+  maxChildren    Int           @default(1)
+  /// Adults + children per room.
+  maxOccupancy   Int           @default(3)
+  /// Per room per night (weekday).
+  baseRate       Decimal       @db.Decimal(10, 2)
+  /// Friday / Saturday nights; NULL = base rate.
+  weekendRate    Decimal?      @db.Decimal(10, 2)
+  amenities      Json?
+  active         Boolean       @default(true)
+  isDemo         Boolean       @default(false)
+  sortOrder      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rooms          Room[]
+  rates          RoomRate[]
+  reservations   Reservation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+/// A physical room. Rooms that are out of service do not count as sellable inventory.
+model Room {
+  id             String        @id @default(cuid())
+  organizationId String
+  roomTypeId     String
+  number         String
+  floor          String?
+  /// available | occupied | out_of_service
+  status         String        @default("available")
+  /// clean | dirty | inspecting
+  housekeeping   String        @default("clean")
+  notes          String?       @db.Text
+  isDemo         Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roomType       RoomType      @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  reservations   Reservation[]
+
+  @@unique([organizationId, number])
+  @@index([roomTypeId])
+}
+
+/// Seasonal rate: applies to nights from startDate to endDate (inclusive).
+model RoomRate {
+  id             String       @id @default(cuid())
+  organizationId String
+  roomTypeId     String
+  name           String
+  startDate      DateTime     @db.Date
+  endDate        DateTime     @db.Date
+  rate           Decimal      @db.Decimal(10, 2)
+  isDemo         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roomType       RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@index([roomTypeId, startDate])
+  @@index([organizationId])
+}
+
+model Reservation {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// Shown to the guest, e.g. HB-7K2Q9X.
+  reference          String
+  customerId         String
+  leadId             String?
+  roomTypeId         String
+  /// Assigned at check-in.
+  roomId             String?
+  checkIn            DateTime     @db.Date
+  checkOut           DateTime     @db.Date
+  nights             Int
+  rooms              Int          @default(1)
+  adults             Int
+  children           Int          @default(0)
+  /// pending_confirmation | confirmed | checked_in | checked_out | cancelled | no_show | expired
+  status             String       @default("pending_confirmation")
+  /// A pending reservation holds inventory until this time, then expires.
+  holdExpiresAt      DateTime?
+  subtotal           Decimal      @db.Decimal(10, 2)
+  taxAmount          Decimal      @default(0) @db.Decimal(10, 2)
+  total              Decimal      @db.Decimal(10, 2)
+  /// Per-night rates as charged [{date, rate, source}].
+  rateBreakdown      Json
+  /// not_required | pending | simulated_paid | simulated_failed | paid_verified
+  paymentStatus      String       @default("not_required")
+  depositAmount      Decimal      @default(0) @db.Decimal(10, 2)
+  channel            String
+  guestName          String?
+  guestPhone         String?
+  specialRequests    String?      @db.Text
+  /// Same request retried (webhook retry, double tap) -> the same reservation.
+  idempotencyKey     String
+  cancellationReason String?      @db.Text
+  cancelledAt        DateTime?
+  checkedInAt        DateTime?
+  checkedOutAt       DateTime?
+  feedbackRating     Int?
+  feedbackComment    String?      @db.Text
+  isDemo             Boolean      @default(false)
+  createdBy          String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  roomType           RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  room               Room?        @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, reference])
+  @@index([organizationId, checkIn])
+  @@index([roomTypeId, checkIn, checkOut])
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hospital & healthcare (administrative only: no diagnosis, prescriptions or insurance decisions by AI).
+// ---------------------------------------------------------------------------------------------
+model Department {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?       @db.Text
+  active         Boolean       @default(true)
+  isDemo         Boolean       @default(false)
+  sortOrder      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  doctors        Doctor[]
+  appointments   Appointment[]
+
+  @@unique([organizationId, name])
+}
+
+model Doctor {
+  id              String        @id @default(cuid())
+  organizationId  String
+  departmentId    String
+  name            String
+  qualification   String?
+  specialty       String?
+  languages       String?
+  consultationFee Decimal       @db.Decimal(10, 2)
+  slotMinutes     Int           @default(15)
+  /// Weekly OPD hours, IST: [{day: 0-6 (Sun-Sat), start: "09:00", end: "13:00"}].
+  schedule        Json
+  /// "YYYY-MM-DD" dates the doctor is not available.
+  leaveDates      Json?
+  active          Boolean       @default(true)
+  isDemo          Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department      Department    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  appointments    Appointment[]
+
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+model Appointment {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// Shown to the patient, e.g. AP-7K2Q9X.
+  reference          String
+  customerId         String
+  leadId             String?
+  doctorId           String
+  departmentId       String
+  startAt            DateTime
+  endAt              DateTime
+  /// booked | confirmed | checked_in | completed | cancelled | no_show
+  status             String       @default("booked")
+  /// new | follow_up
+  visitType          String       @default("new")
+  /// What the patient said they are coming for (administrative note, never a diagnosis).
+  reasonNote         String?      @db.Text
+  channel            String
+  patientName        String?
+  patientPhone       String?
+  idempotencyKey     String
+  /// Reference of the appointment this one replaced (reschedule).
+  rescheduledFrom    String?
+  cancellationReason String?      @db.Text
+  feedbackRating     Int?
+  feedbackComment    String?      @db.Text
+  isDemo             Boolean      @default(false)
+  createdBy          String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  doctor             Doctor       @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  department         Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, reference])
+  @@index([doctorId, startAt])
+  @@index([organizationId, startAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+/// Insurance administration: eligibility, pre-authorisation, claim, reimbursement. Statuses are recorded by staff
+/// from the insurer / TPA response; the assistant only reports them and chases missing documents.
+model InsuranceCase {
+  id               String       @id @default(cuid())
+  organizationId   String
+  reference        String
+  customerId       String
+  appointmentId    String?
+  /// eligibility | pre_authorisation | claim | reimbursement
+  kind             String
+  insurer          String
+  tpa              String?
+  /// Masked policy number (last 4 digits only).
+  policyRef        String
+  /// documents_pending | ready_to_submit | submitted | query_raised | approved | partially_approved | rejected | settled | closed
+  status           String       @default("documents_pending")
+  requiredDocs     Json
+  receivedDocs     Json
+  amountRequested  Decimal?     @db.Decimal(12, 2)
+  amountApproved   Decimal?     @db.Decimal(12, 2)
+  insurerReference String?
+  decisionNote     String?      @db.Text
+  /// Staff member who recorded the insurer's decision.
+  decidedBy        String?
+  lastFollowUpAt   DateTime?
+  isDemo           Boolean      @default(false)
+  createdBy        String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([customerId])
 }

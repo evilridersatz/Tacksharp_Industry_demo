@@ -208,6 +208,56 @@ export default function SettingsPage() {
             </div>
           </Card>
 
+          {show('food') && d.food && <Card className="xl:col-span-2">
+            <CardHeader title="Restaurant ordering" subtitle="Used by the ordering assistant and the phone-order screen to price every cart on the server" />
+            <div className="px-5 pb-3">
+              <Row label="Tax on food" hint="Applied to items without their own tax rate">
+                <Num label="Food tax percent" value={d.food.taxPct} onChange={(v) => set('food', { taxPct: v })} suffix="%" max={28} step={0.5} />
+              </Row>
+              <Row label="Packing charge" hint="Per order">
+                <Num label="Packing charge" value={d.food.packagingFee} onChange={(v) => set('food', { packagingFee: v })} suffix="₹" max={500} />
+              </Row>
+              <Row label="Pickup orders"><Toggle label="Pickup orders" checked={d.food.pickupEnabled} onChange={(v) => set('food', { pickupEnabled: v })} /></Row>
+              <Row label="Delivery orders"><Toggle label="Delivery orders" checked={d.food.deliveryEnabled} onChange={(v) => set('food', { deliveryEnabled: v })} /></Row>
+              <Row label="Delivery zones" hint="One per line: Zone name | area words (comma separated) | fee | minimum order | minutes">
+                <textarea
+                  aria-label="Delivery zones"
+                  rows={Math.max(3, d.food.deliveryZones.length + 1)}
+                  defaultValue={d.food.deliveryZones.map((z) => `${z.name} | ${z.keywords.join(', ')} | ${z.fee} | ${z.minOrder} | ${z.etaMinutes}`).join('\n')}
+                  onBlur={(e) => set('food', { deliveryZones: e.target.value.split('\n').map((l) => l.split('|').map((x) => x.trim())).filter((p) => p[0]).map(([name, kw, fee, min, eta]) => ({ name, keywords: (kw ?? name).split(',').map((k) => k.trim().toLowerCase()).filter(Boolean), fee: Number(fee) || 0, minOrder: Number(min) || 0, etaMinutes: Number(eta) || 45 })) })}
+                  className="w-full rounded-[10px] border border-line bg-white px-2.5 py-2 font-mono text-[12px] text-ink outline-none focus:border-brand sm:w-[460px]"
+                />
+              </Row>
+            </div>
+          </Card>}
+
+          {show('hotel') && d.hotel && <Card className="xl:col-span-2">
+            <CardHeader title="Hotel & booking rules" subtitle="Used by the booking assistant and the front desk" />
+            <div className="px-5 pb-3">
+              <Row label="Check-in / check-out (IST)">
+                <Text label="Check-in time" value={d.hotel.checkInTime} onChange={(v) => set('hotel', { checkInTime: v })} placeholder="14:00" />
+                <Text label="Check-out time" value={d.hotel.checkOutTime} onChange={(v) => set('hotel', { checkOutTime: v })} placeholder="11:00" />
+              </Row>
+              <Row label="Room tax"><Num label="Room tax percent" value={d.hotel.taxPct} onChange={(v) => set('hotel', { taxPct: v })} suffix="%" max={28} step={0.5} /></Row>
+              <Row label="Confirm bookings automatically" hint="Off: assistant bookings wait for the front desk and hold the room meanwhile">
+                <Toggle label="Auto-confirm bookings" checked={d.hotel.autoConfirm} onChange={(v) => set('hotel', { autoConfirm: v })} />
+              </Row>
+              <Row label="Hold a pending booking for"><Num label="Hold minutes" value={d.hotel.holdMinutes} onChange={(v) => set('hotel', { holdMinutes: v })} suffix="min" min={10} max={1440} /></Row>
+              <Row label="Deposit" hint="No payment gateway is connected: recorded by staff or simulated in demo"><Num label="Deposit percent" value={d.hotel.depositPct} onChange={(v) => set('hotel', { depositPct: v })} suffix="% of total" max={100} /></Row>
+              <Row label="Free cancellation until"><Num label="Free cancellation hours" value={d.hotel.freeCancellationHours} onChange={(v) => set('hotel', { freeCancellationHours: v })} suffix="hours before check-in" max={720} /></Row>
+              <Row label="Cancellation policy (told to guests)"><Text wide label="Cancellation policy" value={d.hotel.cancellationPolicy} onChange={(v) => set('hotel', { cancellationPolicy: v })} /></Row>
+            </div>
+          </Card>}
+
+          {show('hospital') && d.hospital && <Card className="xl:col-span-2">
+            <CardHeader title="Hospital assistant" subtitle="Administrative assistant: it never gives medical advice or decides insurance" />
+            <div className="px-5 pb-3">
+              <Row label="Emergency number" hint="Shown at once when a message sounds like an emergency"><Text label="Emergency number" value={d.hospital.emergencyNumber} onChange={(v) => set('hospital', { emergencyNumber: v })} placeholder="108" /></Row>
+              <Row label="Booking window"><Num label="Booking window days" value={d.hospital.bookingWindowDays} onChange={(v) => set('hospital', { bookingWindowDays: v })} suffix="days ahead" min={1} max={90} /></Row>
+              <Row label="Appointment reminder" hint="0 = off"><Num label="Reminder hours before" value={d.hospital.reminderHoursBefore} onChange={(v) => set('hospital', { reminderHoursBefore: v })} suffix="hours before" max={72} /></Row>
+            </div>
+          </Card>}
+
           {show('speed') && <Card>
             <CardHeader title="Speed to lead" subtitle="How fast the AI reaches a new Meta lead" />
             <div className="px-5 pb-3">

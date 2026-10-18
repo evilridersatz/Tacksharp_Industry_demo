@@ -22,6 +22,7 @@ import { TextileModule } from './textile/textile.module.js';
 import { GovernanceModule } from './governance/governance.module.js';
 import { AgentsModule } from './agents/agents.module.js';
 import { MarketingModule } from './marketing/marketing.module.js';
+import { VerticalsModule } from './verticals/verticals.module.js';
 import { IndustryModule } from './industry/industry.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -53,6 +54,7 @@ import { PrivacyController } from './privacy.controller.js';
     AgentsModule,
     MarketingModule,
     IndustryModule,
+    VerticalsModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

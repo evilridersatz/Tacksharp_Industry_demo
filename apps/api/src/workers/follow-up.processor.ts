@@ -1,4 +1,5 @@
 import { Injectable, Optional } from '@nestjs/common';
+import { VERTICAL_SOURCES, VerticalFollowUps } from '../verticals/vertical-followups.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { LeadsService } from '../leads/leads.service.js';
@@ -33,6 +34,7 @@ export class FollowUpProcessor {
     private readonly whatsapp: WhatsAppSenderService,
     @Optional() private readonly followUps?: FollowUpsService,
     @Optional() private readonly collections?: CollectionsService,
+    @Optional() private readonly verticals?: VerticalFollowUps,
   ) {}
 
   private settingsFor(organizationId: string): Promise<TenantSettings> {
@@ -63,6 +65,8 @@ export class FollowUpProcessor {
     // Textile customer messages (quotation reminder, order update, feedback request): only an opt-out or a missing
     // customer stops them; a lead's sales status does not (an order update is owed whatever the funnel says).
     const textileStep = ['quote', 'order', 'feedback', 'invoice', 'payment'].includes(followUp.source);
+    // Food orders, hotel reservations, hospital appointments and insurance cases: the step re-checks its own record.
+    const verticalStep = (VERTICAL_SOURCES as readonly string[]).includes(followUp.source);
     const cancelReason = (() => {
       if (!customer || !lead) return 'customer_or_lead_missing';
       // Team alerts go to the business's own staff: a customer's opt-out does not silence them.
@@ -71,7 +75,7 @@ export class FollowUpProcessor {
       // STOP stops EVERY business-initiated message and call: sequences, callbacks, visit reminders, AI calls,
       // textile updates and payment reminders. Only the customer's own START lifts it.
       if (customer.optedOutAt) return 'opted_out';
-      if (textileStep) return null;
+      if (textileStep || verticalStep) return null;
       // Visit reminders keep running after the customer replies or a human takes over; they stop only when the
       // customer opts out or the lead is closed as lost / not interested (the visit itself is re-checked later).
       if (automation) return ['lost', 'not_interested'].includes(lead.status) ? `lead_${lead.status}` : null;
@@ -106,6 +110,13 @@ export class FollowUpProcessor {
     if (followUp.source === 'alert') return this.sendTeamAlert(followUp, customer!, lead!);
     if (followUp.source === 'visit') return this.runVisitStep(followUp, customer!);
     if (textileStep) return this.runTextileStep(followUp, customer!);
+    if (verticalStep) {
+      if (!this.verticals) {
+        await this.complete(followUp.id);
+        return { skipped: 'vertical_module_unavailable' };
+      }
+      return this.verticals.execute(followUp.id);
+    }
     if (followUp.channel === 'whatsapp') {
       return this.sendWhatsApp(followUp, customer!, lead!);
     }

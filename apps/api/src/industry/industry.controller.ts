@@ -4,11 +4,29 @@ import type { SessionClaims } from '../auth/token.js';
 import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
 import { IndustryService } from './industry.service.js';
 import { QualityService } from './quality.service.js';
+import { ScenarioService } from './scenario.service.js';
 
 /** Multi-industry experience. Organization always from the session; nothing here reads another tenant. */
 @Controller('industry')
 export class IndustryController {
-  constructor(private readonly industry: IndustryService) {}
+  constructor(
+    private readonly industry: IndustryService,
+    private readonly scenarios: ScenarioService,
+  ) {}
+
+  @Get('scenarios')
+  async scenarioList(@Org() org: string) {
+    const ws = await this.industry.workspace(org);
+    return { industry: ws.industry, demo: ws.isDemo, scenarios: this.scenarios.list(ws.industry) };
+  }
+
+  /** Demo workspaces only (refused otherwise). Drives the real assistants and services with a synthetic customer. */
+  @Post('scenarios/run')
+  async scenarioRun(@Org() org: string, @CurrentUser() u: SessionClaims, @Body() body: { scenarioId?: string }) {
+    requirePermission(u, PERMISSIONS.agentsRun);
+    const ws = await this.industry.workspace(org);
+    return this.scenarios.run(org, ws.industry, String(body?.scenarioId ?? ''));
+  }
 
   @Get('workspace')
   workspace(@Org() org: string) {
@@ -18,6 +36,11 @@ export class IndustryController {
   @Get('dashboard')
   dashboard(@Org() org: string, @Query('days') days?: string) {
     return this.industry.dashboard(org, Number(days) || 30);
+  }
+
+  @Get('data')
+  data(@Org() org: string) {
+    return this.industry.data(org);
   }
 
   @Get('agents')

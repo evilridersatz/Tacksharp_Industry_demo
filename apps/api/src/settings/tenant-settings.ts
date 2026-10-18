@@ -11,7 +11,41 @@ import { nextAllowedCallTime } from '../common/time.js';
 export type TenantSettings = {
   /** Which sales assistant this business uses. real_estate (default) is unchanged; textile switches the AI agent,
    *  dashboard pages and follow-ups to the textile catalogue / quotation / order flow. */
-  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency';
+  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency' | 'food' | 'hotel' | 'hospital';
+  /** Restaurant & food ordering (cafes, cloud kitchens, takeaway). GR Chicken keeps its own engine and settings. */
+  food: {
+    /** Tax % applied to items without their own tax rate (GST on restaurant food is usually 5%). */
+    taxPct: number;
+    packagingFee: number;
+    pickupEnabled: boolean;
+    deliveryEnabled: boolean;
+    /** Delivery zones: area keywords the customer may say, a fee, a minimum order and an ETA. */
+    deliveryZones: Array<{ name: string; keywords: string[]; fee: number; minOrder: number; etaMinutes: number }>;
+    faqs: Array<{ q: string; a: string }>;
+  };
+  /** Hotel & room booking. Rates and availability always come from room types / rates / reservations. */
+  hotel: {
+    checkInTime: string;
+    checkOutTime: string;
+    taxPct: number;
+    /** false = a reservation made by the assistant waits for staff confirmation (it holds the room meanwhile). */
+    autoConfirm: boolean;
+    /** Minutes a pending reservation holds inventory before it expires. */
+    holdMinutes: number;
+    /** Deposit % of the total. There is no payment integration: deposits are recorded manually or simulated. */
+    depositPct: number;
+    freeCancellationHours: number;
+    cancellationPolicy: string;
+    maxNights: number;
+    faqs: Array<{ q: string; a: string }>;
+  };
+  /** Hospital & healthcare (administrative assistant only). */
+  hospital: {
+    emergencyNumber: string;
+    bookingWindowDays: number;
+    reminderHoursBefore: number;
+    faqs: Array<{ q: string; a: string }>;
+  };
   textile: {
     /** Days after a quotation is sent before the customer gets one reminder (0 = no reminder). */
     quoteReminderDays: number;
@@ -96,6 +130,12 @@ export type TenantSettings = {
 
 export const DEFAULT_SETTINGS: TenantSettings = {
   industry: 'real_estate',
+  food: { taxPct: 5, packagingFee: 0, pickupEnabled: true, deliveryEnabled: false, deliveryZones: [], faqs: [] },
+  hotel: {
+    checkInTime: '14:00', checkOutTime: '11:00', taxPct: 12, autoConfirm: false, holdMinutes: 120, depositPct: 0, freeCancellationHours: 24,
+    cancellationPolicy: 'Free cancellation up to 24 hours before check-in; after that the first night is charged.', maxNights: 30, faqs: [],
+  },
+  hospital: { emergencyNumber: '108', bookingWindowDays: 14, reminderHoursBefore: 24, faqs: [] },
   textile: { quoteReminderDays: 2, feedbackAfterHours: 24, notifyOrderStatus: true, maxDiscountPct: 10 },
   agents: { paused: [] },
   finance: { paymentTermsDays: 15, dispatchPaymentRule: 'none', autoDraftInvoice: true },
@@ -117,6 +157,9 @@ const num = (v: unknown, fallback: number, min: number, max: number, integer = t
 const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);
 const str = (v: unknown, fallback: string, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : fallback);
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+const hhmm = (v: unknown, fallback: string) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v.trim()) ? v.trim() : fallback);
+const faqs = (v: unknown, fallback: Array<{ q: string; a: string }>) =>
+  Array.isArray(v) ? v.slice(0, 30).map((f) => ({ q: str(obj(f).q, '', 200), a: str(obj(f).a, '', 600) })).filter((f) => f.q && f.a) : fallback;
 
 /** Only http(s) links are stored, so a reminder can never carry a javascript: or data: URL. */
 function safeUrl(v: unknown): string | undefined {
@@ -165,8 +208,46 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
     ? [...new Set(t.alertPhones.map((p) => normalizePhone(String(p ?? ''))).filter((p): p is string => Boolean(p) && p!.length >= 10))].slice(0, 10)
     : base.team.alertPhones;
 
+  const fd = obj(i.food), ht = obj(i.hotel), hp = obj(i.hospital);
+  const bf = base.food ?? DEFAULT_SETTINGS.food, bh = base.hotel ?? DEFAULT_SETTINGS.hotel, bp = base.hospital ?? DEFAULT_SETTINGS.hospital;
+  const zones = Array.isArray(fd.deliveryZones)
+    ? fd.deliveryZones.slice(0, 20).map((z) => {
+        const o = obj(z);
+        const name = str(o.name, '', 60);
+        const keywords = (Array.isArray(o.keywords) ? o.keywords : String(o.keywords ?? '').split(','))
+          .map((k) => String(k).trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 15);
+        return { name, keywords: keywords.length ? keywords : name ? [name.toLowerCase()] : [], fee: num(o.fee, 0, 0, 2000, false), minOrder: num(o.minOrder, 0, 0, 100_000, false), etaMinutes: num(o.etaMinutes, 45, 5, 240) };
+      }).filter((z) => z.name)
+    : bf.deliveryZones;
+
   return {
-    industry: (['real_estate', 'textile', 'retail', 'manufacturing', 'agency'] as const).includes(i.industry as never) ? (i.industry as TenantSettings['industry']) : base.industry,
+    industry: (['real_estate', 'textile', 'retail', 'manufacturing', 'agency', 'food', 'hotel', 'hospital'] as const).includes(i.industry as never) ? (i.industry as TenantSettings['industry']) : base.industry,
+    food: {
+      taxPct: num(fd.taxPct, bf.taxPct, 0, 28, false),
+      packagingFee: num(fd.packagingFee, bf.packagingFee, 0, 500, false),
+      pickupEnabled: bool(fd.pickupEnabled, bf.pickupEnabled),
+      deliveryEnabled: bool(fd.deliveryEnabled, bf.deliveryEnabled),
+      deliveryZones: zones,
+      faqs: faqs(fd.faqs, bf.faqs),
+    },
+    hotel: {
+      checkInTime: hhmm(ht.checkInTime, bh.checkInTime),
+      checkOutTime: hhmm(ht.checkOutTime, bh.checkOutTime),
+      taxPct: num(ht.taxPct, bh.taxPct, 0, 28, false),
+      autoConfirm: bool(ht.autoConfirm, bh.autoConfirm),
+      holdMinutes: num(ht.holdMinutes, bh.holdMinutes, 10, 24 * 60),
+      depositPct: num(ht.depositPct, bh.depositPct, 0, 100),
+      freeCancellationHours: num(ht.freeCancellationHours, bh.freeCancellationHours, 0, 24 * 30),
+      cancellationPolicy: str(ht.cancellationPolicy, bh.cancellationPolicy, 600),
+      maxNights: num(ht.maxNights, bh.maxNights, 1, 90),
+      faqs: faqs(ht.faqs, bh.faqs),
+    },
+    hospital: {
+      emergencyNumber: /^[0-9+ -]{3,20}$/.test(str(hp.emergencyNumber, bp.emergencyNumber, 20)) ? str(hp.emergencyNumber, bp.emergencyNumber, 20) : bp.emergencyNumber,
+      bookingWindowDays: num(hp.bookingWindowDays, bp.bookingWindowDays, 1, 90),
+      reminderHoursBefore: num(hp.reminderHoursBefore, bp.reminderHoursBefore, 0, 72),
+      faqs: faqs(hp.faqs, bp.faqs),
+    },
     textile: {
       quoteReminderDays: num(tx.quoteReminderDays, base.textile.quoteReminderDays, 0, 30),
       feedbackAfterHours: num(tx.feedbackAfterHours, base.textile.feedbackAfterHours, 0, 24 * 14),

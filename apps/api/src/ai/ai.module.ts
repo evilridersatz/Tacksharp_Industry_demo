@@ -11,9 +11,10 @@ import { SiteVisitsModule } from '../site-visits/site-visits.module.js';
 import { FollowUpsModule } from '../follow-ups/follow-ups.module.js';
 import { RestaurantModule } from '../restaurant/restaurant.module.js';
 import { TextileModule } from '../textile/textile.module.js';
+import { VerticalsModule } from '../verticals/verticals.module.js';
 
 @Module({
-  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule, RestaurantModule, TextileModule],
+  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule, RestaurantModule, TextileModule, VerticalsModule],
   controllers: [AiController],
   providers: [AiService, ConversationEngine, SessionStore, LlmRunner],
   exports: [AiService],

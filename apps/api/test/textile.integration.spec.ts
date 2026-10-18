@@ -388,7 +388,7 @@ describe.skipIf(!enabled)('Textile sales (integration)', () => {
       const lead = await newLead();
       await engine.openCallSession({ organizationId: TORG, callId: `call-${lead.leadId}`, phone: lead.phone, leadId: lead.leadId, openingText: 'Hi Ravi, Sri Lakshmi Textiles calling.' });
       const r = await chat(lead, 'voice')('cotton shirting 500 metres');
-      expect(r.response).toMatch(/Cotton Poplin Shirting, ₹182\.50\//); // voice calls speak Tamil: "/மீட்டர்"
+      expect(r.response).toMatch(/Cotton Poplin Shirting, ₹182\.50\//); // voice calls speak Tamil: "/மீட்டர்" 
       expect(r.response).not.toMatch(/https?:|GSM|CT-POP/);
     });
 

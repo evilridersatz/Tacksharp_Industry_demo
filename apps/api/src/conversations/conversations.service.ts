@@ -212,7 +212,13 @@ export class ConversationsService {
     if (!input.content?.trim()) {
       throw new BadRequestException('Message content is required');
     }
-    const [message] = await this.prisma.$transaction([
+    // Conversation row first: it takes the row lock before the message insert's foreign-key check, so two messages
+    // written to the same conversation at the same moment (a reply and a follow-up) queue instead of deadlocking.
+    const [, message] = await this.prisma.$transaction([
+      this.prisma.conversation.update({
+        where: { id: input.conversationId },
+        data: { updatedAt: new Date() },
+      }),
       this.prisma.message.create({
         data: {
           id: randomUUID(),
@@ -223,10 +229,6 @@ export class ConversationsService {
           externalId: input.externalId,
           metadata: input.metadata,
         },
-      }),
-      this.prisma.conversation.update({
-        where: { id: input.conversationId },
-        data: { updatedAt: new Date() },
       }),
     ]);
     return message;

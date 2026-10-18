@@ -7,6 +7,8 @@ import { errorMessage, log } from '../common/logger.js';
 import { Orchestrator } from '../agents/orchestrator.service.js';
 import { AiService } from '../ai/ai.service.js';
 import { QualityService } from './quality.service.js';
+import { foodDashboard, hospitalDashboard, hotelDashboard } from './vertical-dashboards.js';
+import { dataInventory } from './data-inventory.js';
 import { AGENT_CATALOGUE, INDUSTRY_LABEL, SETTABLE_INDUSTRIES, catalogueFor, effectiveIndustry, type CatalogueAgent, type IndustryId } from './industries.js';
 
 const DAY = 86_400_000;
@@ -106,6 +108,9 @@ export class IndustryService {
       : ws.industry === 'real_estate' ? await this.realEstate(organizationId, days, since)
       : ws.industry === 'manufacturing' ? await this.manufacturing(organizationId, days)
       : ws.industry === 'agency' ? await this.agency(organizationId, days, since)
+      : ws.industry === 'food' ? await foodDashboard(this.prisma, organizationId, days, since)
+      : ws.industry === 'hotel' ? await hotelDashboard(this.prisma, organizationId, days, since)
+      : ws.industry === 'hospital' ? await hospitalDashboard(this.prisma, organizationId, days, since)
       : await this.sales(organizationId, days, since, ws.industry === 'retail');
     return { ...base, kpis: built.kpis, charts: built.charts, notes: [...notes, ...built.notes] };
   }
@@ -427,6 +432,12 @@ export class IndustryService {
       };
     }
     throw new BadRequestException('This agent has no runnable test (it is a workflow, a dashboard or not built).');
+  }
+
+  /** Record counts per entity for this workspace and the API that returns each (Demo data page, API sweep). */
+  async data(organizationId: string) {
+    const ws = await this.workspace(organizationId);
+    return { ...(await dataInventory(this.prisma, organizationId, ws.industry)), name: ws.name, isDemo: ws.isDemo, label: ws.label };
   }
 
   /** For tests / admin views. */

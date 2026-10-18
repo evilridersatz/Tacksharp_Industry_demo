@@ -35,6 +35,9 @@ MENU = {
     'retail': (['Product catalogue', 'Orders & fulfilment', 'Offers & campaigns', 'Revenue analytics'], ['Quotations', 'Site visits', 'Inspections & defects', 'Menu & stock']),
     'manufacturing': (['Inspections & defects', 'Corrective actions', 'Quality analytics'], ['Quotations', 'Site visits', 'Leads & CRM', 'Product catalogue', 'Orders & tracking']),
     'agency': (['Lead management', 'Campaign management', 'ROI reporting', 'Conversion analytics'], ['Quotations', 'Site visits', 'Inspections & defects', 'Menu & stock']),
+    'food': (['Orders & kitchen', 'Menu & availability', 'Complaints & handoffs', 'Sales & analytics'], ['Quotations', 'Site visits', 'Menu & stock', 'Reservations', 'Appointments']),
+    'hotel': (['Reservations', 'Availability calendar', 'Rooms & rates', 'Occupancy & revenue'], ['Quotations', 'Site visits', 'Menu & availability', 'Appointments', 'Orders & kitchen']),
+    'hospital': (['Appointments', 'Doctors & OPD hours', 'Insurance & claims', 'Patients'], ['Quotations', 'Site visits', 'Reservations', 'Orders & kitchen', 'Menu & stock']),
 }
 # A KPI label that must be on the overview, and one that must not.
 KPI = {
@@ -42,9 +45,18 @@ KPI = {
     'retail': ('Sales (confirmed orders)', 'Pending quotations'),
     'manufacturing': ('Rejection rate', 'Sales (confirmed orders)'),
     'agency': ('Leads processed', 'Rejection rate'),
+    'food': ('Delivery share', 'Occupancy tonight'),
+    'hotel': ('Occupancy tonight', 'Delivery share'),
+    'hospital': ('No-show rate', 'Occupancy tonight'),
 }
 # Overflow pages per industry (besides / and /agents).
-EXTRA_PAGE = {'textile': '/catalogue', 'restaurant': '/orders', 'real_estate': '/leads', 'retail': '/sales-orders', 'manufacturing': '/quality', 'agency': '/leads'}
+EXTRA_PAGE = {'textile': '/catalogue', 'restaurant': '/orders', 'real_estate': '/leads', 'retail': '/sales-orders', 'manufacturing': '/quality', 'agency': '/leads', 'food': '/food/orders', 'hotel': '/hotel/availability', 'hospital': '/hospital/appointments'}
+# Module pages that must load with data (heading text expected on the page).
+MODULE_PAGES = {
+    'food': [('/food/orders', 'Waiting to be accepted'), ('/food/menu', 'Delivery zones'), ('/demo-data', 'Orders'), ('/scenarios', 'Order on WhatsApp')],
+    'hotel': [('/hotel/reservations', 'Arrivals today'), ('/hotel/availability', 'sellable'), ('/hotel/rooms', 'Need housekeeping'), ('/demo-data', 'Reservations'), ('/scenarios', 'Room booking')],
+    'hospital': [('/hospital/appointments', 'Still to come today'), ('/hospital/doctors', 'OPD hours / week'), ('/hospital/insurance', 'Documents pending'), ('/hospital/patients', 'From campaigns'), ('/demo-data', 'Insurance cases'), ('/scenarios', 'Campaign lead')],
+}
 
 with sync_playwright() as p:
     b = p.chromium.launch()
@@ -82,7 +94,7 @@ with sync_playwright() as p:
     home = api('/auth/me')['body']['organizationId']
     spaces = api('/auth/workspaces')['body']
     demos = {w['industry']: w for w in spaces if w['isDemo'] and w['organizationId'].startswith('org_demo_')}
-    check('owner can open all six demo workspaces', set(demos) == set(MENU), ', '.join(sorted(demos)))
+    check('owner can open all nine demo workspaces', set(demos) == set(MENU), ', '.join(sorted(demos)))
 
     def switch_to(w):
         pg.get_by_role('button', name='Switch workspace').first.click(); pg.wait_for_timeout(700)
@@ -121,8 +133,14 @@ with sync_playwright() as p:
             check(f'{ind}: no property assistant offered', 'Property' not in pg.get_by_role('list', name='AI agents').inner_text())
         pg.screenshot(path=os.path.join(SHOTS, f'agents-{ind}.png'), full_page=True)
 
+        for path, text in MODULE_PAGES.get(ind, []):
+            pg.goto(WEB + path); pg.wait_for_timeout(2200)
+            body = pg.locator('main').inner_text()
+            check(f'{ind}: {path} shows its data', text in body and 'Not part of' not in body, body[:120].replace(chr(10), ' '))
+            pg.screenshot(path=os.path.join(SHOTS, f"page-{ind}-{path.strip('/').replace('/', '-')}.png"), full_page=True)
+
         # Isolation: what the API shows equals this organization's rows.
-        if ind in ('real_estate', 'agency', 'textile', 'retail'):
+        if ind in ('real_estate', 'agency', 'textile', 'retail', 'food', 'hotel', 'hospital'):
             leads = api('/leads')['body']
             db = int(sql(f"SELECT COUNT(*) FROM Lead WHERE organizationId='{w['organizationId']}'"))
             check(f'{ind}: leads shown = this workspace\'s leads only', len(leads) == db, f'{len(leads)} vs {db}')
