@@ -5,14 +5,20 @@ import { errorMessage, log } from '../common/logger.js';
 import { ErrorThrottle, dependencyOf, describeError } from '../common/errors.js';
 import {
   closeRedisConnections,
+  agentQueue,
+  marketingQueue,
+  MARKETING_QUEUE,
+  type CampaignJobData,
   followUpQueue,
   whatsappQueue,
   orderFollowUpQueue,
+  AGENT_QUEUE,
   FOLLOW_UP_QUEUE,
   WHATSAPP_QUEUE,
   ORDER_FOLLOW_UP_QUEUE,
   type OrderFollowUpJobData,
   createRedisConnection,
+  type AgentTaskJobData,
   type FollowUpJobData,
   type WhatsAppMessageJobData,
 } from '../queues/queues.js';
@@ -20,6 +26,8 @@ import { FollowUpProcessor } from './follow-up.processor.js';
 import { WhatsAppMessageProcessor } from './whatsapp-message.processor.js';
 import { OrderFollowUpService } from '../restaurant/order-followup.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
+import { Orchestrator } from '../agents/orchestrator.service.js';
+import { MarketingService } from '../marketing/marketing.service.js';
 
 /**
  * Runs the BullMQ workers inside the API process (RUN_WORKERS=true, default).
@@ -37,6 +45,8 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     private readonly whatsapp: WhatsAppMessageProcessor,
     private readonly orderFollowUps: OrderFollowUpService,
     private readonly inbound: InboundMessageService,
+    private readonly orchestrator: Orchestrator,
+    private readonly marketing: MarketingService,
   ) {}
 
   onModuleInit() {
@@ -86,18 +96,34 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     );
     orderFollowUpWorker.on('failed', (job, error) => log.warn('worker.order_followup_retry', { jobId: job?.id, attempts: job?.attemptsMade, dependency: dependencyOf(error), error: describeError(error) }));
 
+    // AI agent tasks: the task row decides (status / attempts / retry time); a job only triggers a run.
+    const agentWorker = new Worker<AgentTaskJobData>(
+      AGENT_QUEUE,
+      (job) => this.orchestrator.run(job.data.organizationId, job.data.taskId),
+      { connection: createRedisConnection('worker-agent'), concurrency: 5 },
+    );
+    agentWorker.on('failed', (job, error) => log.error('worker.agent_failed', { jobId: job?.id, taskId: job?.data.taskId, error: errorMessage(error) }));
+
+    // Approved marketing campaigns: one recipient per job, rate-limited well under Meta's messaging throughput.
+    const marketingWorker = new Worker<CampaignJobData>(
+      MARKETING_QUEUE,
+      (job) => this.marketing.processRecipient(job.data),
+      { connection: createRedisConnection('worker-marketing'), concurrency: 2, limiter: { max: 10, duration: 1000 } },
+    );
+    marketingWorker.on('failed', (job, error) => log.error('worker.marketing_failed', { jobId: job?.id, campaignId: job?.data.campaignId, error: errorMessage(error) }));
+
     // A worker 'error' is the worker's own Redis connection failing (e.g. "connect ETIMEDOUT" while Redis is
     // unreachable); BullMQ re-emits it on every reconnect attempt. Named and logged once a minute.
-    for (const [name, worker] of [['whatsapp', whatsappWorker], ['followup', followUpWorker], ['order_followup', orderFollowUpWorker]] as const) {
+    for (const [name, worker] of [['whatsapp', whatsappWorker], ['followup', followUpWorker], ['order_followup', orderFollowUpWorker], ['agent', agentWorker], ['marketing', marketingWorker]] as const) {
       worker.on('error', (error) => this.throttle.report('worker.error', error, { worker: name }, 'redis'));
     }
 
-    this.workers = [whatsappWorker, followUpWorker, orderFollowUpWorker];
+    this.workers = [whatsappWorker, followUpWorker, orderFollowUpWorker, agentWorker, marketingWorker];
     // Inbound messages persisted but never queued (queue add failed) or whose job was lost: queue them again with
     // the same job id. The claim in the database still guarantees one reply.
     this.sweeper = setInterval(() => void this.requeueStuckInbound().catch((e) => log.warn('whatsapp.requeue_failed', { error: describeError(e) })), 60_000);
     this.sweeper.unref();
-    log.info('workers.started', { queues: [WHATSAPP_QUEUE, FOLLOW_UP_QUEUE, ORDER_FOLLOW_UP_QUEUE] });
+    log.info('workers.started', { queues: [WHATSAPP_QUEUE, FOLLOW_UP_QUEUE, ORDER_FOLLOW_UP_QUEUE, AGENT_QUEUE, MARKETING_QUEUE] });
   }
 
   private sweeper?: NodeJS.Timeout;
@@ -125,7 +151,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     if (this.sweeper) clearInterval(this.sweeper);
     log.info('workers.stopping', { signal });
     await Promise.all(this.workers.map((w) => w.close()));
-    await Promise.allSettled([followUpQueue.close(), whatsappQueue.close(), orderFollowUpQueue.close()]);
+    await Promise.allSettled([followUpQueue.close(), whatsappQueue.close(), orderFollowUpQueue.close(), agentQueue.close(), marketingQueue.close()]);
     await closeRedisConnections();
     log.info('workers.stopped', {});
   }

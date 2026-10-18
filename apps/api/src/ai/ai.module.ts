@@ -10,9 +10,10 @@ import { PropertiesModule } from '../properties/properties.module.js';
 import { SiteVisitsModule } from '../site-visits/site-visits.module.js';
 import { FollowUpsModule } from '../follow-ups/follow-ups.module.js';
 import { RestaurantModule } from '../restaurant/restaurant.module.js';
+import { TextileModule } from '../textile/textile.module.js';
 
 @Module({
-  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule, RestaurantModule],
+  imports: [ConversationsModule, LeadsModule, PropertiesModule, SiteVisitsModule, FollowUpsModule, RestaurantModule, TextileModule],
   controllers: [AiController],
   providers: [AiService, ConversationEngine, SessionStore, LlmRunner],
   exports: [AiService],

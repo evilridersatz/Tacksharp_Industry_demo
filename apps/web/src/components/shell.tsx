@@ -1,90 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
-import {
-  BarChart3,
-  Bell,
-  CalendarCheck,
-  Columns3,
-  Headset,
-  LayoutDashboard,
-  ListChecks,
-  LogOut,
-  Menu,
-  MessageSquare,
-  Phone,
-  Search,
-  Settings,
-  ShoppingBag,
-  UtensilsCrossed,
-  Users,
-  Gift,
-  FlaskConical,
-  PlugZap,
-  Activity,
-  X,
-} from 'lucide-react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Bell, Check, ChevronsUpDown, FlaskConical, Loader2, LogOut, Menu, Search, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
+import { INDUSTRIES, industryDef, type IndustryDef, type NavItem } from '@/lib/industries';
+import { forgetWorkspace, switchWorkspace, useWorkspace, type WorkspaceOption } from '@/lib/industry';
 import { cx } from './ui';
 
 type Badges = { live?: number; handoff?: number; orders?: number };
-type NavGroup = { section: string; items: Array<{ href: string; label: string; icon: typeof LayoutDashboard; badge?: keyof Badges }> };
-
-/** Restaurant tenants (GR Chicken): orders-first navigation. */
-const RESTAURANT_NAV: NavGroup[] = [
-  {
-    section: 'Main',
-    items: [
-      { href: '/', label: 'Overview', icon: LayoutDashboard },
-      { href: '/orders', label: 'Live orders', icon: ShoppingBag, badge: 'orders' },
-      { href: '/conversations', label: 'Conversations', icon: MessageSquare, badge: 'handoff' },
-      { href: '/follow-ups', label: 'Follow-ups', icon: ListChecks },
-      { href: '/customers', label: 'Customers', icon: Users },
-    ],
-  },
-  {
-    section: 'Shop',
-    items: [
-      { href: '/offers', label: '₹50 Offer', icon: Gift },
-      { href: '/menu', label: 'Products & rates', icon: UtensilsCrossed },
-      { href: '/activity', label: 'Carts, stock & messages', icon: Activity },
-      { href: '/test-chat', label: 'Test chat', icon: FlaskConical },
-    ],
-  },
-  {
-    section: 'Setup',
-    items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }],
-  },
-];
-
-const NAV: NavGroup[] = [
-  {
-    section: 'Main',
-    items: [
-      { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-      { href: '/leads', label: 'Leads & CRM', icon: Columns3 },
-      { href: '/conversations', label: 'Conversations', icon: MessageSquare },
-      { href: '/calls', label: 'Voice calls', icon: Phone, badge: 'live' },
-      { href: '/performance', label: 'Performance & ROI', icon: BarChart3 },
-    ],
-  },
-  {
-    section: 'Pipeline',
-    items: [
-      { href: '/follow-ups', label: 'Follow-ups', icon: ListChecks },
-      { href: '/site-visits', label: 'Site visits', icon: CalendarCheck },
-      { href: '/handoffs', label: 'Human handoff', icon: Headset, badge: 'handoff' },
-    ],
-  },
-  {
-    section: 'Setup',
-    items: [{ href: '/settings', label: 'Settings', icon: Settings }],
-  },
-];
 
 function Logo() {
   return (
@@ -100,16 +27,36 @@ function Logo() {
   );
 }
 
-function NavList({ nav, badges, onNavigate }: { nav: NavGroup[]; badges: Badges; onNavigate?: () => void }) {
+/** The single best-matching nav item is active: path match, then every query param of the item must match. */
+function activeHref(items: NavItem[], pathname: string, search: URLSearchParams): string | null {
+  let best: { href: string; score: number } | null = null;
+  for (const item of items) {
+    const [path, query] = item.href.split('?');
+    const pathOk = path === '/' ? pathname === '/' : pathname === path || pathname.startsWith(`${path}/`);
+    if (!pathOk) continue;
+    const params = new URLSearchParams(query ?? '');
+    let ok = true;
+    params.forEach((v, k) => {
+      if (search.get(k) !== v) ok = false;
+    });
+    if (!ok) continue;
+    const score = 1 + [...params.keys()].length;
+    if (!best || score > best.score) best = { href: item.href, score };
+  }
+  return best?.href ?? null;
+}
+
+function NavListInner({ def, badges, onNavigate, search }: { def: IndustryDef; badges: Badges; onNavigate?: () => void; search: URLSearchParams }) {
   const pathname = usePathname();
+  const active = activeHref(def.nav.flatMap((g) => g.items), pathname, search);
   return (
-    <nav aria-label="Main" className="mt-6 flex flex-col gap-5">
-      {nav.map((group) => (
+    <nav aria-label="Main" className="mt-5 flex flex-col gap-5">
+      {def.nav.map((group) => (
         <div key={group.section}>
           <p className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{group.section}</p>
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => {
-              const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+              const isActive = item.href === active;
               const count = item.badge ? badges[item.badge] : undefined;
               const Icon = item.icon;
               return (
@@ -117,14 +64,14 @@ function NavList({ nav, badges, onNavigate }: { nav: NavGroup[]; badges: Badges;
                   <Link
                     href={item.href}
                     onClick={onNavigate}
-                    aria-current={active ? 'page' : undefined}
+                    aria-current={isActive ? 'page' : undefined}
                     className={cx(
-                      'flex h-9 items-center gap-3 rounded-[10px] px-3 text-[13.5px]',
-                      active ? 'bg-sidebar-2 font-semibold text-white' : 'text-slate-400 hover:bg-sidebar-2/60 hover:text-slate-200',
+                      'flex min-h-11 items-center gap-3 rounded-[10px] px-3 text-[13.5px] lg:min-h-9',
+                      isActive ? 'bg-sidebar-2 font-semibold text-white' : 'text-slate-400 hover:bg-sidebar-2/60 hover:text-slate-200',
                     )}
                   >
-                    <Icon className={cx('size-[17px]', active && 'text-brand')} />
-                    <span className="flex-1">{item.label}</span>
+                    <Icon className="size-[17px] shrink-0" style={isActive ? { color: def.onDark } : undefined} aria-hidden />
+                    <span className="flex-1 truncate">{item.label}</span>
                     {!!count && (
                       <span
                         className={cx(
@@ -143,6 +90,118 @@ function NavList({ nav, badges, onNavigate }: { nav: NavGroup[]; badges: Badges;
         </div>
       ))}
     </nav>
+  );
+}
+
+function NavWithParams(props: { def: IndustryDef; badges: Badges; onNavigate?: () => void }) {
+  const params = useSearchParams();
+  return <NavListInner {...props} search={new URLSearchParams(params.toString())} />;
+}
+
+function NavList(props: { def: IndustryDef; badges: Badges; onNavigate?: () => void }) {
+  // useSearchParams needs a Suspense boundary on statically rendered pages; the fallback ignores the query.
+  return (
+    <Suspense fallback={<NavListInner {...props} search={new URLSearchParams()} />}>
+      <NavWithParams {...props} />
+    </Suspense>
+  );
+}
+
+/** Workspace (industry) switcher. Lists only workspaces the server says this user belongs to. */
+function WorkspaceSwitcher({ def }: { def: IndustryDef | null }) {
+  const { workspace } = useWorkspace();
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<WorkspaceOption[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!list) api.get<WorkspaceOption[]>('/auth/workspaces').then(setList).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const onClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onClick);
+    };
+  }, [open, list]);
+
+  async function pick(id: string) {
+    setBusy(id);
+    setError(null);
+    try {
+      await switchWorkspace(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }
+
+  if (!workspace || !def) return <div className="mt-5 h-[58px] rounded-[12px] bg-white/[0.03]" />;
+  const Icon = def.icon;
+  return (
+    <div ref={ref} className="relative mt-5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Workspace: ${workspace.name}, ${def.label}. Switch workspace`}
+        className="flex min-h-[58px] w-full items-center gap-3 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-left hover:bg-white/[0.07]"
+      >
+        <span className="grid size-9 shrink-0 place-items-center rounded-[10px]" style={{ background: `${def.onDark}26`, color: def.onDark }}>
+          <Icon className="size-[18px]" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1 leading-tight">
+          <span className="block truncate text-[13px] font-semibold text-white">{workspace.name}</span>
+          <span className="block truncate text-[11px] text-slate-400">
+            {def.label}
+            {workspace.isDemo && ' · Demo'}
+          </span>
+        </span>
+        <ChevronsUpDown className="size-4 shrink-0 text-slate-500" aria-hidden />
+      </button>
+      {open && (
+        <div className="absolute inset-x-0 top-full z-30 mt-1.5 overflow-hidden rounded-[12px] border border-white/10 bg-sidebar-2 shadow-2xl">
+          <p className="px-3 pt-2.5 pb-1 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">Your workspaces</p>
+          {!list && !error && <p className="flex items-center gap-2 px-3 py-3 text-[12.5px] text-slate-400"><Loader2 className="size-4 animate-spin" /> Loading…</p>}
+          {error && <p role="alert" className="px-3 py-2 text-[12.5px] text-rose-300">{error}</p>}
+          <ul role="listbox" aria-label="Workspaces" className="max-h-[320px] overflow-y-auto pb-1.5">
+            {list?.map((w) => {
+              const d = INDUSTRIES[w.industry] ?? industryDef(w.industry);
+              const WIcon = d.icon;
+              return (
+                <li key={w.organizationId} role="option" aria-selected={w.current}>
+                  <button
+                    type="button"
+                    disabled={w.current || busy !== null}
+                    onClick={() => pick(w.organizationId)}
+                    className="flex min-h-11 w-full items-center gap-2.5 px-3 py-1.5 text-left hover:bg-white/[0.06] disabled:cursor-default"
+                  >
+                    <WIcon className="size-4 shrink-0" style={{ color: d.onDark }} aria-hidden />
+                    <span className="min-w-0 flex-1 leading-tight">
+                      <span className="block truncate text-[12.5px] font-semibold text-white">{w.name}</span>
+                      <span className="block truncate text-[11px] text-slate-400">
+                        {w.industryLabel}
+                        {w.isDemo ? ' · Demo data' : ''}
+                      </span>
+                    </span>
+                    {busy === w.organizationId ? <Loader2 className="size-4 animate-spin text-slate-400" /> : w.current && <Check className="size-4 text-slate-300" aria-label="Current" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {list && list.length < 2 && <p className="border-t border-white/10 px-3 py-2 text-[11.5px] text-slate-400">Ask an admin for access to other workspaces.</p>}
+          <Link href="/onboarding" className="flex min-h-11 items-center border-t border-white/10 px-3 text-[12.5px] font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white">
+            Setup guide
+          </Link>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -173,114 +232,168 @@ function UserCard() {
   async function logout() {
     await api.post('/auth/logout').catch(() => undefined);
     forgetMe();
+    forgetWorkspace();
     window.location.href = '/login';
   }
   return (
     <div className="flex items-center gap-3 px-1">
-      <span className="grid size-9 place-items-center rounded-full bg-gradient-to-br from-amber to-rose text-[14px] font-bold text-white">
+      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-amber to-rose text-[14px] font-bold text-white">
         {name.charAt(0).toUpperCase()}
       </span>
       <div className="min-w-0 flex-1 leading-tight">
         <p className="truncate text-[13px] font-semibold text-white">{name}</p>
-        <p className="truncate text-[11px] text-slate-400">{me ? `${me.organizationName} · ${me.role}` : ''}</p>
+        <p className="truncate text-[11px] text-slate-400">{me ? me.role : ''}</p>
       </div>
-      <button onClick={logout} aria-label="Log out" title="Log out" className="text-slate-500 hover:text-white">
+      <button onClick={logout} aria-label="Log out" title="Log out" className="grid size-11 place-items-center rounded-[10px] text-slate-500 hover:text-white lg:size-9">
         <LogOut className="size-4" />
       </button>
     </div>
   );
 }
 
+const BARE_ROUTES = ['/login', '/onboarding'];
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  if (pathname === '/login') return <>{children}</>;
+  if (BARE_ROUTES.includes(pathname)) return <>{children}</>;
   return <Shell>{children}</Shell>;
+}
+
+/** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */
+function Drawer({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      document.removeEventListener('keydown', onKey);
+      opener?.focus?.();
+    };
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden />
+      <aside className="absolute inset-y-0 left-0 w-[min(290px,86vw)] overflow-y-auto">
+        <button ref={closeRef} aria-label="Close menu" onClick={onClose} className="absolute top-4 right-2 z-10 grid size-11 place-items-center text-slate-400 hover:text-white">
+          <X className="size-5" />
+        </button>
+        {children}
+      </aside>
+    </div>
+  );
+}
+
+function DemoBanner({ def }: { def: IndustryDef }) {
+  return (
+    <div role="note" className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[12px] border px-4 py-2.5 text-[12.5px]" style={{ borderColor: `${def.accent}40`, background: def.accentSoft, color: '#1e293b' }}>
+      <FlaskConical className="size-4 shrink-0" style={{ color: def.accent }} aria-hidden />
+      <b>Demo workspace</b>
+      <span className="text-body">Sample {def.short.toLowerCase()} data. Nothing here is sent to real customers, charged or called.</span>
+    </div>
+  );
 }
 
 function Shell({ children }: { children: ReactNode }) {
   const me = useMe();
-  const restaurant = me?.vertical === 'restaurant';
-  const { data: summary } = useApi<Summary>(me && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
+  const { workspace } = useWorkspace();
+  const def = workspace ? industryDef(workspace.industry) : null;
+  const restaurant = workspace?.industry === 'restaurant';
+  const { data: summary } = useApi<Summary>(workspace && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
   const { data: overview } = useApi<Overview>(restaurant ? '/restaurant/overview?days=1' : null, 15_000);
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+  useEffect(() => setOpen(false), [pathname]);
   const badges: Badges = restaurant
     ? { orders: overview?.orders.byStatus.pending, handoff: overview?.handoffsOpen }
     : { live: summary?.voice.live, handoff: summary?.humanTasksOpen };
+  const showAutomation = workspace && ['real_estate', 'textile', 'agency'].includes(workspace.industry);
 
   const sidebar = (onNavigate?: () => void) => (
-    <div className="flex h-full flex-col bg-sidebar px-3 py-5">
+    <div className="flex min-h-full flex-col bg-sidebar px-3 py-5">
       <Logo />
-      {me && <NavList nav={restaurant ? RESTAURANT_NAV : NAV} badges={badges} onNavigate={onNavigate} />}
+      {me && <WorkspaceSwitcher def={def} />}
+      {def && <NavList def={def} badges={badges} onNavigate={onNavigate} />}
       <div className="mt-auto flex flex-col gap-4 pt-6">
-        {me && !restaurant && <AutomationCard summary={summary} />}
+        {showAutomation && <AutomationCard summary={summary} />}
         <UserCard />
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen lg:pl-[248px]">
-      <aside className="fixed inset-y-0 left-0 hidden w-[248px] lg:block">{sidebar()}</aside>
+    <div className="min-h-screen lg:pl-[256px]" style={def ? ({ '--industry-accent': def.accent, '--industry-soft': def.accentSoft } as React.CSSProperties) : undefined}>
+      <aside className="fixed inset-y-0 left-0 hidden w-[256px] overflow-y-auto bg-sidebar lg:block">{sidebar()}</aside>
 
-      <div className="flex h-14 items-center gap-3 bg-sidebar px-4 lg:hidden">
-        <button aria-label="Open menu" onClick={() => setOpen(true)} className="text-white">
+      <div className="sticky top-0 z-40 flex h-14 items-center gap-2 bg-sidebar px-2 lg:hidden">
+        <button aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)} className="grid size-11 place-items-center text-white">
           <Menu className="size-5" />
         </button>
-        <span className="text-[15px] font-bold text-white">Tacksharp.ai</span>
+        <span className="min-w-0 flex-1 truncate text-[15px] font-bold text-white">
+          {workspace?.name ?? 'Tacksharp.ai'}
+        </span>
+        {def && (
+          <span className="mr-2 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: `${def.onDark}26`, color: def.onDark }}>
+            {def.short}
+            {workspace?.isDemo ? ' · Demo' : ''}
+          </span>
+        )}
       </div>
-      {open && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[260px]">
-            <button aria-label="Close menu" onClick={() => setOpen(false)} className="absolute top-5 right-3 z-10 text-slate-400">
-              <X className="size-5" />
-            </button>
-            {sidebar(() => setOpen(false))}
-          </aside>
-        </div>
-      )}
+      <Drawer open={open} onClose={() => setOpen(false)}>
+        {sidebar(() => setOpen(false))}
+      </Drawer>
 
-      <main className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">{children}</main>
+      <main className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">
+        {workspace?.isDemo && def && <DemoBanner def={def} />}
+        {children}
+      </main>
     </div>
   );
 }
 
 export function PageHeader({ title, crumb, actions }: { title: string; crumb?: string; actions?: ReactNode }) {
   const router = useRouter();
-  const me = useMe();
-  const restaurant = me?.vertical === 'restaurant';
-  const { data: summary } = useApi<Summary>(me && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
+  const { workspace } = useWorkspace();
+  const def = industryDef(workspace?.industry);
+  const restaurant = workspace?.industry === 'restaurant';
+  const { data: summary } = useApi<Summary>(workspace && !restaurant ? '/dashboard/summary?days=7' : null, 15_000);
   const { data: overview } = useApi<Overview>(restaurant ? '/restaurant/overview?days=1' : null, 15_000);
   const waiting = restaurant ? overview?.handoffsOpen ?? 0 : summary?.humanTasksOpen ?? 0;
   const [q, setQ] = useState('');
   return (
     <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <p className="text-[12px] text-muted">Platform / {crumb ?? title}</p>
-        <h1 className="mt-0.5 text-[26px] font-bold tracking-[-0.01em] text-ink">{title}</h1>
+      <div className="min-w-0">
+        <p className="text-[12px] text-muted">{workspace ? def.short : 'Platform'} / {crumb ?? title}</p>
+        <h1 className="mt-0.5 text-[22px] font-bold tracking-[-0.01em] text-ink sm:text-[26px]">{title}</h1>
       </div>
-      <div className="flex flex-wrap items-center gap-2.5">
+      <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto">
         <form
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
-            router.push(`${restaurant ? '/orders' : '/leads'}?q=${encodeURIComponent(q)}`);
+            router.push(`${def.search.href}?q=${encodeURIComponent(q)}`);
           }}
-          className="relative"
+          className="relative min-w-0 flex-1 sm:flex-none"
         >
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={restaurant ? 'Search orders…' : 'Search leads…'}
-            aria-label={restaurant ? 'Search orders' : 'Search leads'}
-            className="h-9 w-[220px] rounded-[10px] border border-line bg-white pr-3 pl-9 text-[13px] text-ink placeholder:text-faint"
+            placeholder={def.search.placeholder}
+            aria-label={def.search.placeholder.replace('…', '')}
+            className="h-10 w-full rounded-[10px] border border-line bg-white pr-3 pl-9 text-[13px] text-ink placeholder:text-faint sm:h-9 sm:w-[220px]"
           />
         </form>
         <Link
           href={restaurant ? '/conversations?status=human_handoff' : '/handoffs'}
           aria-label={`${waiting} customers waiting for your team`}
-          className="relative grid size-9 place-items-center rounded-[10px] border border-line bg-white text-body hover:bg-slate-50"
+          className="relative grid size-10 shrink-0 place-items-center rounded-[10px] border border-line bg-white text-body hover:bg-slate-50 sm:size-9"
         >
           <Bell className="size-4" />
           {!!waiting && <span className="absolute top-2 right-2 size-2 rounded-full bg-rose ring-2 ring-white" />}

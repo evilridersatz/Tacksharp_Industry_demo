@@ -6,6 +6,7 @@ import { Suspense, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Columns3, List, MessageSquare, Phone, Search, Target, TrendingUp, UserPlus, Users } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Call, FollowUp, Lead, Summary } from '@/lib/types';
+import { useIndustry } from '@/lib/industry';
 import { LEAD_STATUS, callBadge, dateTime, displayName, formatPhone, pct, requirement, rupees, sourceLabel, timeAgo } from '@/lib/format';
 import { PageHeader } from '@/components/shell';
 import { AddLeadButton } from '@/components/add-lead';
@@ -20,8 +21,40 @@ const COLUMNS = [
   { key: 'converted', title: 'Converted', statuses: ['won'], color: '#0b7f58' },
 ] as const;
 
+/** Textile pipeline: enquiry -> catalogue -> quotation -> negotiation -> order. */
+const TEXTILE_COLUMNS = [
+  { key: 'new', title: 'New enquiry', statuses: ['new'], color: '#6366f1' },
+  { key: 'contacted', title: 'Contacted', statuses: ['contacted', 'callback', 'human_handoff', 'qualified'], color: '#0ea5e9' },
+  { key: 'catalogue', title: 'Catalogue shared', statuses: ['catalogue_shared'], color: '#7c5cf0' },
+  { key: 'quote', title: 'Quotation', statuses: ['quotation_requested', 'quotation_sent'], color: '#f59e0b' },
+  { key: 'negotiation', title: 'Negotiation', statuses: ['negotiation'], color: '#e11d48' },
+  { key: 'order', title: 'Order confirmed', statuses: ['order_confirmed', 'repeat_customer', 'won'], color: '#0b7f58' },
+] as const;
+
+/** Retail: enquiry -> catalogue -> order (no quotations). */
+const RETAIL_COLUMNS = [
+  { key: 'new', title: 'New enquiry', statuses: ['new'], color: '#6366f1' },
+  { key: 'contacted', title: 'Contacted', statuses: ['contacted', 'callback', 'human_handoff', 'qualified'], color: '#0ea5e9' },
+  { key: 'catalogue', title: 'Products shared', statuses: ['catalogue_shared', 'quotation_requested', 'quotation_sent', 'negotiation'], color: '#7c5cf0' },
+  { key: 'order', title: 'Ordered', statuses: ['order_confirmed', 'repeat_customer', 'won'], color: '#0b7f58' },
+] as const;
+
+/** Agency / generic business: lead -> contacted -> qualified -> converted. */
+const GENERIC_COLUMNS = [
+  { key: 'new', title: 'New lead', statuses: ['new'], color: '#6366f1' },
+  { key: 'contacted', title: 'Contacted', statuses: ['contacted', 'callback', 'human_handoff'], color: '#0ea5e9' },
+  { key: 'qualified', title: 'Qualified', statuses: ['qualified', 'property_interested', 'site_visit'], color: '#7c5cf0' },
+  { key: 'converted', title: 'Converted', statuses: ['won', 'order_confirmed', 'repeat_customer'], color: '#0b7f58' },
+] as const;
+
 const CLOSED = ['not_interested', 'lost'];
 const ORDER = ['new', 'contacted', 'qualified', 'site_visit', 'won'];
+const TEXTILE_ORDER = ['new', 'contacted', 'catalogue_shared', 'quotation_requested', 'quotation_sent', 'negotiation', 'order_confirmed'];
+const RETAIL_ORDER = ['new', 'contacted', 'catalogue_shared', 'order_confirmed'];
+const GENERIC_ORDER = ['new', 'contacted', 'qualified', 'won'];
+type Pipeline = 'real_estate' | 'textile' | 'retail' | 'generic';
+const pipelineOf = (industry: string | undefined): Pipeline =>
+  industry === 'textile' ? 'textile' : industry === 'retail' ? 'retail' : industry === 'real_estate' || !industry ? 'real_estate' : 'generic';
 
 export default function LeadsPage() {
   return (
@@ -42,6 +75,10 @@ function Leads() {
   const { data: calls } = useApi<Call[]>('/voice/calls', 15_000);
   const { data: followUps } = useApi<FollowUp[]>('/follow-ups?status=scheduled', 15_000);
   const { data: summary } = useApi<Summary>('/dashboard/summary?days=7');
+  const { industry } = useIndustry();
+  const pipeline = pipelineOf(industry);
+  const columns: ReadonlyArray<{ key: string; title: string; statuses: readonly string[]; color: string }> =
+    pipeline === 'textile' ? TEXTILE_COLUMNS : pipeline === 'retail' ? RETAIL_COLUMNS : pipeline === 'generic' ? GENERIC_COLUMNS : COLUMNS;
 
   const lastCall = useMemo(() => {
     const m = new Map<string, Call>();
@@ -129,7 +166,7 @@ function Leads() {
 
       {view === 'board' ? (
         <div className="mt-4 flex gap-4 overflow-x-auto pb-4 pane-scroll">
-          {[...COLUMNS, ...(showClosed ? [{ key: 'closed', title: 'Not interested', statuses: CLOSED, color: '#94a3b8' }] : [])].map((col) => {
+          {[...columns, ...(showClosed ? [{ key: 'closed', title: 'Not interested', statuses: CLOSED, color: '#94a3b8' }] : [])].map((col) => {
             const items = filtered.filter((l) => (col.statuses as readonly string[]).includes(l.status));
             return (
               <section key={col.key} aria-label={col.title} className="flex w-[272px] shrink-0 flex-col rounded-[14px] bg-[#e9edf4] p-2.5">
@@ -141,7 +178,7 @@ function Leads() {
                 <div className="mt-2 flex flex-col gap-2.5">
                   {!leads && [0, 1].map((i) => <Skeleton key={i} className="h-28 bg-white" />)}
                   {items.map((l) => (
-                    <LeadCard key={l.id} lead={l} call={lastCall.get(l.id)} next={nextStep.get(l.id)} onMove={move} />
+                    <LeadCard key={l.id} lead={l} call={lastCall.get(l.id)} next={nextStep.get(l.id)} onMove={move} pipeline={pipeline} />
                   ))}
                   {leads && items.length === 0 && <p className="px-2 py-6 text-center text-[12.5px] text-faint">No leads here</p>}
                 </div>
@@ -213,11 +250,14 @@ function Stat({ icon, tone, label, value, extra }: { icon: React.ReactNode; tone
   );
 }
 
-function LeadCard({ lead, call, next, onMove }: { lead: Lead; call?: Call; next?: FollowUp; onMove: (l: Lead, s: string) => Promise<void> }) {
+function LeadCard({ lead, call, next, onMove, pipeline }: { lead: Lead; call?: Call; next?: FollowUp; onMove: (l: Lead, s: string) => Promise<void>; pipeline: Pipeline }) {
+  const textile = pipeline === 'textile' || pipeline === 'retail';
   const [busy, setBusy] = useState(false);
-  const idx = ORDER.indexOf(lead.status === 'property_interested' ? 'qualified' : lead.status);
-  const prev = idx > 0 ? ORDER[idx - 1] : null;
-  const fwd = idx >= 0 && idx < ORDER.length - 1 ? ORDER[idx + 1] : lead.status === 'callback' || lead.status === 'human_handoff' ? 'qualified' : null;
+  const order = pipeline === 'textile' ? TEXTILE_ORDER : pipeline === 'retail' ? RETAIL_ORDER : pipeline === 'generic' ? GENERIC_ORDER : ORDER;
+  const norm = textile ? (lead.status === 'qualified' ? 'contacted' : lead.status === 'repeat_customer' ? 'order_confirmed' : lead.status) : lead.status === 'property_interested' ? 'qualified' : lead.status;
+  const idx = order.indexOf(norm);
+  const prev = idx > 0 ? order[idx - 1] : null;
+  const fwd = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : lead.status === 'callback' || lead.status === 'human_handoff' ? (textile ? 'catalogue_shared' : 'qualified') : null;
   const st = LEAD_STATUS[lead.status];
   const go = async (s: string) => {
     setBusy(true);
@@ -234,9 +274,9 @@ function LeadCard({ lead, call, next, onMove }: { lead: Lead; call?: Call; next?
         <p className="mt-0.5 truncate text-[11.5px] text-muted">
           {lead.campaign ?? sourceLabel(lead.source)} · {timeAgo(lead.createdAt)}
         </p>
-        <p className="mt-2 text-[12.5px] text-body">{requirement(lead) || 'Requirement not known yet'}</p>
+        <p className="mt-2 text-[12.5px] text-body">{(pipeline === 'real_estate' ? requirement(lead) : lead.notes) || 'Requirement not known yet'}</p>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-[14px] font-bold text-ink tabular">{rupees(lead.budget)}</span>
+          <span className="text-[14px] font-bold text-ink tabular">{pipeline === 'real_estate' || lead.budget ? rupees(lead.budget) : ''}</span>
           {call ? (
             <Badge tone={callBadge(call).tone}>
               <Phone className="size-3" /> {callBadge(call).label}

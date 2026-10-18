@@ -87,6 +87,13 @@ export const config = {
       visit_after: process.env.WHATSAPP_TEMPLATE_VISIT_AFTER ?? '',
       // Restaurant: "order ready" outside the 24h window, {{1}} = order number.
       order_ready: process.env.WHATSAPP_TEMPLATE_ORDER_READY ?? '',
+      // Textile messages outside the 24h window (optional): {{1}} customer name, {{2}} the message text.
+      textile_quote: process.env.WHATSAPP_TEMPLATE_TEXTILE_QUOTE ?? '',
+      textile_order: process.env.WHATSAPP_TEMPLATE_TEXTILE_ORDER ?? '',
+      textile_feedback: process.env.WHATSAPP_TEMPLATE_TEXTILE_FEEDBACK ?? '',
+      // Payment reminder (after approval) and payment-received receipt outside the 24h window: {{1}} name, {{2}} text.
+      textile_invoice: process.env.WHATSAPP_TEMPLATE_TEXTILE_INVOICE ?? '',
+      textile_payment: process.env.WHATSAPP_TEMPLATE_TEXTILE_PAYMENT ?? '',
     } as Record<string, string>,
     templateLanguage: process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? 'en',
     /** How long one send to Meta may take. A timeout after sending counts as "delivery unknown" (never resent). */

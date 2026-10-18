@@ -707,3 +707,12 @@ export function askWhichPropertyAgain(style: Style, props: PresentedProperty[]):
   const [a, b] = props.slice(0, 2).map((p) => shortName(p.name, props));
   return pick(style, { ta: `${a}-ஆ, ${b}-ஆ?`, tl: `${a}-aa, ${b}-aa?`, en: `${a}, or ${b}?` });
 }
+
+/** The staff handoff could not be recorded: never promise a call we could not record (from Phase 3 audit fixes). */
+export function handoffFailed(style: Style): string {
+  return pick(style, {
+    ta: 'Sorry, ஒரு technical problem-னால உங்க request-ஐ இப்போ save பண்ண முடியல. கொஞ்ச நேரம் கழிச்சு திரும்ப சொல்லுங்க.',
+    tl: 'Sorry, oru technical problem-naala unga request-ah ippo save panna mudiyala. Konja neram kazhichu thirumba sollunga.',
+    en: 'Sorry, I could not record your request because of a technical problem. Please try again in a few minutes.',
+  });
+}

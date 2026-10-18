@@ -6,9 +6,11 @@ import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
 import { DEFAULT_SETTINGS, effectiveCallWindow, type TenantSettings } from '../settings/tenant-settings.js';
 import { istHour } from '../common/time.js';
 import { VoiceService } from '../voice/voice.service.js';
-import { WhatsAppSenderService, WhatsAppWindowClosedError } from '../whatsapp/whatsapp-sender.service.js';
+import { WhatsAppPermanentError, WhatsAppSenderService, WhatsAppWindowClosedError } from '../whatsapp/whatsapp-sender.service.js';
 import { describeRequirement, firstName, sequenceMessage } from '../whatsapp/message-templates.js';
 import { teamAlert, visitMessage, visitTimeLabel } from '../automation/automation-messages.js';
+import { feedbackRequestMessage, langOf, orderRevisedMessage, orderStatusMessage, paymentReceivedMessage, quoteReminderMessage } from '../textile/textile-messages.js';
+import { CollectionsService, reminderText } from '../finance/collections.service.js';
 import { followUpQueue, queueRedis } from '../queues/queues.js';
 import { customerLockKey, withLock } from '../common/redis-lock.js';
 import { config } from '../common/config.js';
@@ -30,6 +32,7 @@ export class FollowUpProcessor {
     private readonly voice: VoiceService,
     private readonly whatsapp: WhatsAppSenderService,
     @Optional() private readonly followUps?: FollowUpsService,
+    @Optional() private readonly collections?: CollectionsService,
   ) {}
 
   private settingsFor(organizationId: string): Promise<TenantSettings> {
@@ -57,11 +60,18 @@ export class FollowUpProcessor {
     ]);
 
     const automation = followUp.source === 'visit' || followUp.source === 'alert';
+    // Textile customer messages (quotation reminder, order update, feedback request): only an opt-out or a missing
+    // customer stops them; a lead's sales status does not (an order update is owed whatever the funnel says).
+    const textileStep = ['quote', 'order', 'feedback', 'invoice', 'payment'].includes(followUp.source);
     const cancelReason = (() => {
       if (!customer || !lead) return 'customer_or_lead_missing';
       // Team alerts go to the business's own staff: a customer's opt-out does not silence them.
       if (followUp.source === 'alert') return null;
       if (customer.doNotContact) return 'do_not_contact';
+      // STOP stops EVERY business-initiated message and call: sequences, callbacks, visit reminders, AI calls,
+      // textile updates and payment reminders. Only the customer's own START lifts it.
+      if (customer.optedOutAt) return 'opted_out';
+      if (textileStep) return null;
       // Visit reminders keep running after the customer replies or a human takes over; they stop only when the
       // customer opts out or the lead is closed as lost / not interested (the visit itself is re-checked later).
       if (automation) return ['lost', 'not_interested'].includes(lead.status) ? `lead_${lead.status}` : null;
@@ -95,6 +105,7 @@ export class FollowUpProcessor {
 
     if (followUp.source === 'alert') return this.sendTeamAlert(followUp, customer!, lead!);
     if (followUp.source === 'visit') return this.runVisitStep(followUp, customer!);
+    if (textileStep) return this.runTextileStep(followUp, customer!);
     if (followUp.channel === 'whatsapp') {
       return this.sendWhatsApp(followUp, customer!, lead!);
     }
@@ -228,6 +239,107 @@ export class FollowUpProcessor {
   }
 
   /** Day-before confirmation, reminder with location, and the after-visit message. Re-checks the visit first. */
+  /**
+   * Textile messages, each re-checked against the database first:
+   *   quote:reminder:<quotationId>      only while the quotation is still "sent" (not accepted / rejected / expired)
+   *   order:status:<orderId>:<status>   the order's real status update (confirmed / dispatched / delivered)
+   *   feedback:request:<orderId>        once per order (Feedback.orderId is unique), only for a delivered order
+   * Outside WhatsApp's 24 h window without an approved template the step is skipped with the reason (visible on the
+   * follow-ups page), never reported as sent.
+   */
+  private async runTextileStep(
+    followUp: { id: string; organizationId: string; leadId: string; customerId: string; message: string | null },
+    customer: NonNullable<Awaited<ReturnType<PrismaService['customer']['findUnique']>>>,
+  ) {
+    const [kind, , id, status] = (followUp.message ?? '').split(':');
+    const lang = langOf(customer.language);
+    const skip = async (reason: string) => {
+      await this.prisma.followUp.update({ where: { id: followUp.id }, data: { status: 'skipped', lastError: reason, completedAt: new Date() } });
+      log.info('followup.textile_step_skipped', { followUpId: followUp.id, kind, reason });
+      return { skipped: reason };
+    };
+    if (!customer.phone) return skip('no_phone');
+    let text: string | undefined;
+    let feedbackOrder: { id: string } | undefined;
+    let reminderNote: string | undefined;
+    if (kind === 'invoice') {
+      // invoice:reminder:<invoiceId>:<collectionNoteId> - only after an approval; re-checked now (paid / disputed / promised -> skipped).
+      reminderNote = status;
+      const blocker = this.collections ? await this.collections.reminderBlocker(followUp.organizationId, id, { exceptNoteId: status }).catch((e) => errorMessage(e)) : 'collections not available';
+      if (blocker) {
+        if (this.collections && reminderNote) await this.collections.reminderResult(followUp.organizationId, reminderNote, { status: 'skipped', detail: blocker });
+        return skip(`reminder_${blocker.replace(/\s+/g, '_').slice(0, 60)}`);
+      }
+      const inv = await this.prisma.invoice.findFirst({ where: { id, organizationId: followUp.organizationId } });
+      const org = await this.prisma.organization.findUnique({ where: { id: followUp.organizationId }, select: { name: true } });
+      text = reminderText({ customerName: customer.name, invoiceNumber: inv!.number, outstanding: Math.round((Number(inv!.total) - Number(inv!.amountPaid)) * 100) / 100, dueDate: inv!.dueDate, orgName: org?.name ?? 'us' });
+    } else if (kind === 'payment') {
+      // payment:received:<paymentId> - only a VERIFIED payment.
+      const p = await this.prisma.payment.findFirst({ where: { id, organizationId: followUp.organizationId }, include: { invoice: true } });
+      if (!p?.invoice) return skip('payment_missing');
+      if (p.status !== 'verified') return skip(`payment_${p.status}`);
+      text = paymentReceivedMessage({ amount: Number(p.amount), invoiceNumber: p.invoice.number, balance: Math.round((Number(p.invoice.total) - Number(p.invoice.amountPaid)) * 100) / 100 }, customer.name, lang);
+    }
+    if (text) {
+      // set above (invoice reminder / payment receipt)
+    } else if (kind === 'quote') {
+      const q = await this.prisma.quotation.findFirst({ where: { id, organizationId: followUp.organizationId } });
+      if (!q) return skip('quotation_missing');
+      if (q.status !== 'sent') return skip(`quotation_${q.status}`);
+      text = quoteReminderMessage(q.number, customer.name, lang);
+    } else if (kind === 'order') {
+      const o = await this.prisma.salesOrder.findFirst({ where: { id, organizationId: followUp.organizationId } });
+      if (!o) return skip('order_missing');
+      // An approved shortage decision may itself be a cancellation: that message is still owed.
+      if (o.status === 'cancelled' && status !== 'revised') return skip('order_cancelled');
+      if (status === 'revised') {
+        // The owner's approved stock-shortage decision, sent as approved.
+        const d = await this.prisma.auditEvent.findFirst({ where: { organizationId: followUp.organizationId, entityType: 'order', entityId: o.id, action: 'shortage_decision' }, orderBy: { createdAt: 'desc' } });
+        const approved = (d?.data as { customerMessage?: string } | null)?.customerMessage;
+        if (!approved) return skip('no_approved_decision');
+        text = orderRevisedMessage(o.number, approved, customer.name, lang);
+      } else text = orderStatusMessage(o.number, status, customer.name, lang, { courier: o.courier, trackingRef: o.trackingRef });
+      if (!text) return skip(`no_message_for_${status}`);
+    } else if (kind === 'feedback') {
+      const o = await this.prisma.salesOrder.findFirst({ where: { id, organizationId: followUp.organizationId } });
+      if (!o) return skip('order_missing');
+      if (o.status !== 'delivered') return skip(`order_${o.status}`);
+      if (await this.prisma.feedback.count({ where: { orderId: o.id } })) return skip('already_requested');
+      text = feedbackRequestMessage(o.number, customer.name, lang);
+      feedbackOrder = o;
+    } else {
+      return skip('unknown_step');
+    }
+    const windowOpen = await this.conversations.isWhatsAppWindowOpen(followUp.organizationId, customer.id);
+    // Outside the 24 h window only a template approved FOR THIS STEP may be used (WHATSAPP_STEP_TEMPLATES
+    // textile_quote / textile_order / textile_feedback) - never the shared lead template, which says something else.
+    if (!windowOpen && !config.whatsapp.stepTemplates[`textile_${kind}`]) return skip('whatsapp_window_closed_no_template');
+    try {
+      const sent = await this.whatsapp.sendWithinPolicy({ to: customer.phone, windowOpen, text, templateParams: [firstName(customer.name) || 'there', text.slice(0, 900)], step: `textile_${kind}` });
+      if (feedbackOrder) {
+        try {
+          await this.prisma.feedback.create({ data: { organizationId: followUp.organizationId, customerId: customer.id, orderId: feedbackOrder.id, status: 'requested' } });
+        } catch (e) {
+          if ((e as { code?: string }).code !== 'P2002') throw e;
+        }
+      }
+      const conversation = await this.conversations.getOrCreateConversation({ organizationId: followUp.organizationId, channel: 'whatsapp', externalId: customer.phone, customerId: customer.id });
+      await this.conversations.addMessage({ organizationId: followUp.organizationId, conversationId: conversation.id, role: 'assistant', content: sent.content, externalId: sent.messageId, metadata: { followUpId: followUp.id, kind: sent.kind } });
+      await this.complete(followUp.id);
+      if (reminderNote && this.collections) await this.collections.reminderResult(followUp.organizationId, reminderNote, { status: 'sent', detail: sent.kind });
+      log.info('followup.textile_step_sent', { followUpId: followUp.id, kind, via: sent.kind });
+      return { sent: sent.kind, step: kind };
+    } catch (error) {
+      if (error instanceof WhatsAppWindowClosedError) {
+        if (reminderNote && this.collections) await this.collections.reminderResult(followUp.organizationId, reminderNote, { status: 'skipped', detail: 'WhatsApp window closed and no approved template' });
+        return skip('whatsapp_window_closed_no_template');
+      }
+      // DRY_RUN / not configured: never retried into a "sent"; the reminder shows the real reason.
+      if (reminderNote && this.collections && error instanceof WhatsAppPermanentError) await this.collections.reminderResult(followUp.organizationId, reminderNote, { status: 'failed', detail: errorMessage(error).slice(0, 200) });
+      throw error; // retried by the queue; dead-lettered (and visible) after the last attempt
+    }
+  }
+
   private async runVisitStep(
     followUp: { id: string; organizationId: string; leadId: string; customerId: string; message: string | null; attempts: number },
     customer: NonNullable<Awaited<ReturnType<PrismaService['customer']['findUnique']>>>,

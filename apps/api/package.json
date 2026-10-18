@@ -27,6 +27,7 @@
     "seed:gr-chicken": "tsx scripts/seed-gr-chicken.ts",
     "seed:gr-chicken-demo": "tsx scripts/seed-gr-chicken-demo.ts",
     "seed:demo-inventory": "tsx scripts/seed-demo-inventory.ts",
+    "seed:industry-demos": "tsx scripts/seed-industry-demos.ts",
     "check:config": "tsx scripts/check-config.ts",
     "verify:restaurant": "tsx scripts/verify-restaurant.ts",
     "test:restaurant": "vitest run src/restaurant src/voice src/whatsapp src/common test/restaurant.integration.spec.ts test/restaurant-followups.integration.spec.ts test/restaurant-voice.integration.spec.ts test/restaurant-inventory.integration.spec.ts test/mvp-inventory-conversation.integration.spec.ts test/whatsapp-inbound.integration.spec.ts src/workers"

@@ -154,6 +154,19 @@ export class WhatsAppSenderService {
   }
 
   /**
+   * A marketing campaign message: an APPROVED template chosen by the business (its own name and language), the body
+   * variables filled for this customer and, when the template has an image header, the public https image link.
+   */
+  async sendCampaignTemplate(to: string, t: { name: string; language: string; bodyParams: string[]; headerImageUrl?: string }) {
+    const components: Array<Record<string, unknown>> = [];
+    if (t.headerImageUrl) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: t.headerImageUrl } }] });
+    if (t.bodyParams.length) components.push({ type: 'body', parameters: t.bodyParams.map((text) => ({ type: 'text', text: text.slice(0, 1000) })) });
+    const id = await this.post({ to, type: 'template', template: { name: t.name, language: { code: t.language }, ...(components.length ? { components } : {}) } });
+    log.info('whatsapp.sent_campaign_template', { to: mask(to), messageId: id, template: t.name });
+    return id;
+  }
+
+  /**
    * Send `text` if the 24h window is open, otherwise the approved template.
    * Returns what was actually sent so it can be stored in the conversation.
    */

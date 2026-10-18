@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { SettingsService } from '../settings/settings.service.js';
+import { TextileService } from '../textile/textile.service.js';
+import { confirmsOrder, extractTextileFacts, needsSalesperson, wantsCatalogue, wantsQuotation } from '../textile/textile-intent.js';
+import * as tx from '../textile/textile-replies.js';
+import { formatInr, parseRating } from '../textile/textile-rules.js';
 import { retryTransient } from '../common/retry.js';
 import { isHotLead } from '../settings/tenant-settings.js';
 import { randomUUID } from 'node:crypto';
@@ -7,7 +12,7 @@ import { getRealEstateAgent } from 'ai/agents/real-estate-agent.js';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
-import { LeadsService } from '../leads/leads.service.js';
+import { LeadsService, type LeadStatus } from '../leads/leads.service.js';
 import { PropertiesService } from '../properties/properties.service.js';
 import { SiteVisitsService } from '../site-visits/site-visits.service.js';
 import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
@@ -160,7 +165,37 @@ export class ConversationEngine {
     private readonly followUps: FollowUpsService,
     private readonly store: SessionStore,
     private readonly llm: LlmRunner,
-  ) {}
+    @Optional() textile?: TextileService,
+    @Optional() private readonly settings?: SettingsService,
+  ) {
+    this.textile = textile ?? new TextileService(prisma, followUps, leads, conversations);
+  }
+
+  private readonly textile: TextileService;
+  private readonly industryCache = new Map<string, { at: number; industry: string }>();
+
+  /**
+   * Which assistant answers: real_estate (default), textile, or generic (retail / manufacturing / agency: no dedicated
+   * conversation engine yet, so the customer is acknowledged and handed to the team - never the property assistant).
+   * From the business's Settings (without SettingsService: read and cached 60 s).
+   */
+  private async industryOf(organizationId: string): Promise<string> {
+    const mode = (i: unknown) => (i === 'textile' ? 'textile' : i === 'retail' || i === 'manufacturing' || i === 'agency' ? 'generic' : 'real_estate');
+    // SettingsService's cache is updated the moment an admin saves Settings, so a switch applies to the next message.
+    if (this.settings) return mode((await this.settings.get(organizationId)).industry);
+    const hit = this.industryCache.get(organizationId);
+    if (hit && Date.now() - hit.at < 60_000) return hit.industry;
+    const row = await this.prisma.organizationSettings.findUnique({ where: { organizationId }, select: { data: true } }).catch(() => null);
+    const industry = mode((row?.data as { industry?: string } | null)?.industry);
+    this.industryCache.set(organizationId, { at: Date.now(), industry });
+    return industry;
+  }
+
+  /** Forget the cached industry (Settings changed; tests). */
+  clearIndustryCache(organizationId?: string) {
+    if (organizationId) this.industryCache.delete(organizationId);
+    else this.industryCache.clear();
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Public API
@@ -317,15 +352,20 @@ export class ConversationEngine {
     // Irreversible intents need a clean transcript; a garbled one is asked again instead.
     if (quality === 'weak' && (intent === 'NOT_INTERESTED' || intent === 'WRONG_NUMBER')) intent = 'UNKNOWN';
 
-    // 3. Rules-first slot filling.
+    // 3. Rules-first slot filling. A textile business has its own facts (fabric, quantity ...): none of the real-estate
+    // extraction (area, budget, BHK, visit day / time, property names) runs for it.
     const controlIntent = intent === 'NOT_INTERESTED' || intent === 'WRONG_NUMBER' || intent === 'HUMAN_REQUEST' || intent === 'CALLBACK_REQUEST' || intent === 'GOODBYE';
-    const known = await this.knownLocations(organizationId);
-    const extraction: ReturnType<typeof extractSlots> = controlIntent ? { slots: {} as Slots } : extractSlots(text, { knownLocations: known, expecting: session.askedSlot });
+    const assistant = await this.industryOf(organizationId);
+    const genericMode = assistant === 'generic';
+    // Generic businesses share the textile path's "no real-estate extraction" behaviour below.
+    const textileMode = assistant === 'textile' || genericMode;
+    const known = textileMode ? [] : await this.knownLocations(organizationId);
+    const extraction: ReturnType<typeof extractSlots> = controlIntent || textileMode ? { slots: {} as Slots } : extractSlots(text, { knownLocations: known, expecting: session.askedSlot });
     const before = { ...session.slots };
     // A property named from the whole inventory ("Anna Nagar Residency") is a request for THAT property, not an area
     // filter: its area becomes the location (no "X வேண்டாம்", nothing recorded as turned down).
     const namedProperty =
-      quality === 'ok' && !controlIntent
+      quality === 'ok' && !controlIntent && !textileMode
         ? await this.namedInventoryProperty(organizationId, text, session, known).catch(() => undefined)
         : undefined;
     if (namedProperty) {
@@ -343,7 +383,7 @@ export class ConversationEngine {
     // A visit day/time is kept from ANY utterance, whatever step the call is in ("Tomorrow." while we asked which
     // property). The visit flow then asks only for what is still missing. The confirmation step reads its own.
     let visitHeard: ReturnType<typeof parseWhen> | undefined;
-    if (quality === 'ok' && !controlIntent) {
+    if (quality === 'ok' && !controlIntent && !textileMode) {
       const heard = parseWhen(text, now);
       if (heard.date || heard.hour !== undefined || heard.ambiguousHour !== undefined) {
         visitHeard = heard;
@@ -357,7 +397,7 @@ export class ConversationEngine {
     // 4. Decide: deterministic reply, or a (tool-limited) model call.
     let plan: Plan;
     try {
-      plan = await this.plan(turn, known);
+      plan = genericMode ? await this.genericPlan(turn) : textileMode ? await this.textilePlan(turn) : await this.plan(turn, known);
     } catch (error) {
       // Never turn an exception into a business action: say sorry and ask again.
       log.error('engine.plan_failed', { channel: session.channel, state: session.state, error: errorMessage(error) });
@@ -515,52 +555,9 @@ export class ConversationEngine {
     const { session, intent, text, quality } = turn;
     const style = this.style(session);
 
-    // A. Customer-driven endings. Executed by code, only on a clear utterance.
-    if (intent === 'NOT_INTERESTED' || intent === 'WRONG_NUMBER') {
-      const wrong = intent === 'WRONG_NUMBER';
-      await this.markNotInterested(session, wrong ? 'wrong number' : 'customer said not interested');
-      session.state = 'NOT_INTERESTED';
-      session.closing = true;
-      turn.actions.notInterested = true;
-      turn.actions.outcome = wrong ? 'wrong_number' : 'not_interested';
-      this.supersedePending(session, 'superseded');
-      return { kind: 'say', text: say.notInterested(style, wrong), end: true };
-    }
-    if (intent === 'CANCELLATION_REQUEST') {
-      await this.requestHandoff(session, 'Customer requested appointment cancellation; manual review required');
-      session.state = 'HANDOFF';
-      session.closing = true;
-      turn.actions.handoff = true;
-      turn.actions.outcome = 'human_requested';
-      this.supersedePending(session, 'superseded');
-      return { kind: 'say', text: say.cancellationRequested(style), end: true };
-    }
-    if (intent === 'HUMAN_REQUEST') {
-      await this.requestHandoff(session, 'Customer asked for a human');
-      session.state = 'HANDOFF';
-      session.closing = true;
-      turn.actions.handoff = true;
-      turn.actions.outcome = 'human_requested';
-      this.supersedePending(session, 'superseded');
-      return { kind: 'say', text: say.handoff(style), end: true };
-    }
-    if (intent === 'CALLBACK_REQUEST') {
-      const at = parseCallbackTime(text, turn.now);
-      await this.scheduleCallback(session, at, text);
-      session.state = 'CALLBACK';
-      session.closing = true;
-      turn.actions.outcome = 'callback_requested';
-      if (at) turn.actions.callbackAt = at.toISOString();
-      this.supersedePending(session, 'superseded');
-      return { kind: 'say', text: say.callback(style, at), end: true };
-    }
-    if (intent === 'GOODBYE') {
-      session.state = 'COMPLETED';
-      session.closing = true;
-      this.supersedePending(session, 'superseded');
-      if (!turn.actions.outcome) turn.actions.outcome = this.bestOutcome(session);
-      return { kind: 'say', text: say.goodbye(style), end: true };
-    }
+    // A. Customer-driven endings (shared with the textile assistant).
+    const ending = await this.endingPlan(turn);
+    if (ending) return ending;
 
     // A1. Everyday side questions ("நீங்க AI-ஆ?", "நீங்க போறீங்களா?"): answered by rules, then the question we were
     // waiting on is asked again. Before the confirmation step, so "ஆ சரி. நீங்க போறீங்களா?" is never read as a yes.
@@ -910,6 +907,241 @@ export class ConversationEngine {
     if (session.state === 'VISIT_CONFIRMATION') return { kind: 'llm', toolset: 'none', reask: true, reason: 'CONFIRMATION_SIDE_QUESTION' };
     const reason: LlmFallbackReason = session.presented.length && question ? 'FREE_FORM_PROPERTY_QUESTION' : question ? 'UNKNOWN_QUESTION' : 'AMBIGUOUS_INTENT';
     return { kind: 'llm', toolset: session.channel === 'voice' ? 'proposal' : 'discussion_memory', reason };
+  }
+
+
+  // ---------------------------------------------------------------------------------------------
+  // Textile assistant (industry = textile). Deterministic: facts from the customer's words, products / prices /
+  // stock only from the catalogue, quotation requests and escalations recorded for a salesperson before saying so.
+  // ---------------------------------------------------------------------------------------------
+
+  private async textilePlan(turn: Turn): Promise<Plan> {
+    const { session, text, quality } = turn;
+    const style = this.style(session);
+    const voice = session.channel === 'voice';
+    const org = session.organizationId;
+    const st = (session.textile ??= { facts: {} });
+
+    const ending = await this.endingPlan(turn);
+    if (ending) return ending;
+
+    const yes = quality === 'ok' && !turn.keptForTime && isExplicitAffirmation(text, turn.now).yes;
+    const recordTask = async (reason: string) => {
+      try {
+        await retryTransient(() => this.followUps.createHumanTask({ organizationId: org, leadId: session.leadId, customerId: session.customerId, reason }), 'textile.task');
+        return true;
+      } catch (error) {
+        log.error('engine.textile_task_failed', { leadId: session.leadId, error: errorMessage(error) });
+        return false;
+      }
+    };
+
+    // 1. A reply to our feedback request ("4", "5 stars", "bad quality").
+    if (quality === 'ok' && (parseRating(text) !== undefined || /(problem|issue|bad|poor|damage|defect|late|wrong|complain|மோசம்|சரியில்ல|பிரச்சனை)/iu.test(text))) {
+      const fb = await this.textile.captureFeedback(org, session.customerId, text).catch((e) => {
+        log.error('engine.feedback_capture_failed', { error: errorMessage(e) });
+        return undefined;
+      });
+      if (fb) return { kind: 'say', text: tx.feedbackThanks(style, fb.status === 'needs_action') };
+    }
+
+    // 2. Our "confirm quotation Q-…?" question: only an explicit yes in the very next turn accepts it.
+    if (st.pendingAccept) {
+      const pending = st.pendingAccept;
+      st.pendingAccept = undefined;
+      if (yes && pending.askedTurn === turn.turn - 1) {
+        try {
+          const q = await this.textile.setQuotationStatus(org, pending.quotationId, 'accepted', 'customer');
+          await recordTask(`Customer accepted quotation ${q.number} - create the order (Quotations page: Convert to order).`);
+          turn.actions.outcome = 'order_discussion';
+          return { kind: 'say', text: tx.quoteAccepted(style, q.number) };
+        } catch (error) {
+          log.error('engine.quote_accept_failed', { quotationId: pending.quotationId, error: errorMessage(error) });
+          return { kind: 'say', text: tx.salespersonWillHelp(style, await recordTask(`Customer wants to accept quotation ${pending.quotationId}; automatic acceptance failed.`)) };
+        }
+      }
+    }
+    // A quotation was sent and the customer says "confirm" / "go ahead": ask the system's own question first.
+    if (quality === 'ok' && confirmsOrder(text)) {
+      const sent = await this.prisma.quotation.findFirst({ where: { organizationId: org, customerId: session.customerId, status: 'sent' }, orderBy: { sentAt: 'desc' } });
+      if (sent) {
+        st.pendingAccept = { quotationId: sent.id, askedTurn: turn.turn };
+        return { kind: 'say', text: tx.confirmAcceptQuote(style, sent.number, formatInr(Number(sent.total), sent.currency)) };
+      }
+    }
+
+    // 3. Discounts, credit, custom production, returns: a salesperson decides. Recorded before we say so.
+    if (quality === 'ok' && needsSalesperson(text)) {
+      const ok = await recordTask(`Textile: customer asks about "${text.slice(0, 160)}" (discount / credit / custom / return - needs a salesperson).`);
+      if (ok) turn.actions.handoff = true;
+      return { kind: 'say', text: tx.salespersonWillHelp(style, ok) };
+    }
+
+    // 4. Facts from this message, merged into what we know; saved on the lead for the salesperson.
+    const heard = quality === 'ok' ? extractTextileFacts(text) : {};
+    const before = JSON.stringify(st.facts);
+    // A different fabric / product is a new item: its quantity, colour and price are not the previous item's
+    // (no "white silk saree, 500 metres" from "white cotton 500 m" + "silk saree price?"). Buyer type and destination stay.
+    const switched = Boolean((heard.fabric && st.facts.fabric && heard.fabric !== st.facts.fabric) || (heard.product && st.facts.product && heard.product !== st.facts.product));
+    const base = switched ? { fabric: st.facts.fabric, product: st.facts.product, destination: st.facts.destination, buyerType: st.facts.buyerType } : st.facts;
+    st.facts = { ...base, ...Object.fromEntries(Object.entries(heard).filter(([, v]) => v !== undefined)) };
+    if (switched && !heard.product && heard.fabric) delete st.facts.product; // "silk" after "cotton shirting": not silk shirting
+    if (switched && !heard.fabric && heard.product) delete st.facts.fabric;
+    const changed = JSON.stringify(st.facts) !== before;
+    if (changed) st.enquiry = text.slice(0, 200);
+    const f = st.facts;
+    if (changed) {
+      const v = <T,>(x: T | undefined) => (x === undefined ? (switched ? null : undefined) : x); // null clears the saved field
+      this.background(session.key, () =>
+        this.textile.saveRequirement(org, session.leadId, {
+          fabricCategory: v(f.fabric), productInterest: v(f.product), colour: v(f.colour), quantity: v(f.quantity), quantityUnit: v(f.unit),
+          targetPrice: v(f.targetPrice), destination: f.destination, buyerType: f.buyerType,
+        }),
+      );
+      if ((f.fabric || f.product) && f.quantity) this.advanceLead(session, 'qualified');
+    }
+    const what = [f.colour, f.fabric, f.product && f.product !== 'fabric' ? f.product : ''].filter(Boolean).join(' ') || f.product || '';
+
+    // 5. Yes to our "shall I ask our team for a quotation?", or an explicit quotation request with enough facts.
+    const offeredNow = st.offeredQuoteTurn !== undefined && st.offeredQuoteTurn === turn.turn - 1;
+    if ((offeredNow && yes) || (quality === 'ok' && wantsQuotation(text) && what && f.quantity)) {
+      st.offeredQuoteTurn = undefined;
+      if (!f.quantity) return { kind: 'say', text: tx.askQuantity(style, what || 'it') };
+      const product = st.productIds?.length ? await this.prisma.textileProduct.findFirst({ where: { id: st.productIds[0], organizationId: org } }) : null;
+      try {
+        const q = await this.textile.createQuotation(org, {
+          leadId: session.leadId,
+          origin: 'ai_request',
+          items: [{ productId: product?.id, description: product?.name ?? what, quantity: f.quantity, unit: f.unit ?? product?.priceUnit ?? 'metre' }],
+          notes: [f.colour && `Colour: ${f.colour}`, f.destination && `Deliver to: ${f.destination}`, f.targetPrice && `Customer target price: ${f.targetPrice}`, `Customer on ${session.channel}: "${(st.enquiry ?? text).slice(0, 160)}"`].filter(Boolean).join('\n'),
+        }, 'ai');
+        await recordTask(`Quotation request ${q.number} from the AI assistant: check stock and price, approve and send (Quotations page).`);
+        turn.actions.outcome = 'requested_quotation';
+        return { kind: 'say', text: tx.quoteRequested(style, q.number) };
+      } catch (error) {
+        log.error('engine.quote_request_failed', { leadId: session.leadId, error: errorMessage(error) });
+        return { kind: 'say', text: tx.salespersonWillHelp(style, await recordTask(`Customer asked for a quotation (${what}, ${f.quantity} ${f.unit ?? ''}); creating the request failed.`)) };
+      }
+    }
+
+    // 6. Catalogue / photos.
+    const matches = await this.catalogueMatches(org, f);
+    if (quality === 'ok' && wantsCatalogue(text)) {
+      const rows = matches.length ? matches : await this.prisma.textileProduct.findMany({ where: { organizationId: org, active: true }, orderBy: { updatedAt: 'desc' }, take: 3 });
+      const links = voice ? undefined : tx.catalogueLinks(style, rows as tx.CatalogueRow[]);
+      turn.actions.outcome = 'requested_catalogue';
+      if (links) {
+        st.productIds = rows.map((r) => r.id);
+        this.advanceLead(session, 'catalogue_shared');
+        return { kind: 'say', text: links };
+      }
+      const ok = await recordTask(`Send the catalogue / photos${what ? ` for ${what}` : ''} to the customer${voice ? ' on WhatsApp (asked on a call)' : ''}.`);
+      return { kind: 'say', text: ok ? tx.catalogueByTeam(style) : tx.salespersonWillHelp(style, false) };
+    }
+
+    // 7. A product / fabric we know about: real catalogue rows, or "not in the catalogue" (recorded as a lead for the team).
+    if (what && (changed || wantsCatalogue(text) || /price|rate|evlo|விலை/iu.test(text))) {
+      if (!matches.length) {
+        const ok = await recordTask(`Enquiry not in the catalogue: ${what}${f.quantity ? `, ${f.quantity} ${f.unit ?? ''}` : ''}. Check if we can supply.`);
+        return { kind: 'say', text: tx.notInCatalogue(style, what, ok) };
+      }
+      st.productIds = matches.map((m) => m.id);
+      if (f.quantity) st.offeredQuoteTurn = turn.turn;
+      turn.actions.outcome = turn.actions.outcome ?? 'interested';
+      return { kind: 'say', text: tx.presentMatches(style, matches as tx.CatalogueRow[], voice, Boolean(f.quantity)) };
+    }
+
+    // 8. Only what is still missing.
+    if (!what) return { kind: 'say', text: session.turn <= 1 ? tx.textileWelcome(style, session.customerName) : tx.askWhat(style) };
+    if (!f.quantity) return { kind: 'say', text: tx.askQuantity(style, what) };
+    if (st.productIds?.length) {
+      st.offeredQuoteTurn = turn.turn;
+      return { kind: 'say', text: tx.confirmQuoteRequest(style, `${f.quantity} ${f.unit ?? ''} ${what}`.replace(/\s+/g, ' ').trim()) };
+    }
+    return { kind: 'say', text: tx.askWhat(style) };
+  }
+
+  /** Active catalogue rows matching the fabric / product / colour asked for, in-stock first. */
+  private async catalogueMatches(organizationId: string, f: { fabric?: string; product?: string; colour?: string; quantity?: number }) {
+    const terms = [f.fabric, f.product && f.product !== 'fabric' ? f.product : undefined].filter((x): x is string => Boolean(x));
+    if (!terms.length) return [];
+    const rows = await this.prisma.textileProduct.findMany({
+      where: { organizationId, active: true, AND: terms.map((t) => ({ OR: [{ fabricCategory: { contains: t } }, { name: { contains: t } }, { composition: { contains: t } }, { design: { contains: t } }] })) },
+      take: 20,
+    });
+    // Counted stock (Operations) overrides the manual stock label: never "in stock" when the count says otherwise,
+    // and "limited" when the customer wants more than is available. Untracked products keep the seller's label.
+    const balances = rows.length ? await this.prisma.inventoryBalance.findMany({ where: { organizationId, productId: { in: rows.map((r) => r.id) } } }).catch(() => []) : [];
+    for (const r of rows) {
+      const b = balances.filter((x) => x.productId === r.id);
+      if (!b.length) continue;
+      const available = b.reduce((a, x) => a + Number(x.onHand) - Number(x.reserved), 0);
+      const low = b.find((x) => x.lowStockAt !== null)?.lowStockAt;
+      r.stockStatus = available <= 0 ? 'out_of_stock' : (f.quantity && available < f.quantity) || (low !== undefined && low !== null && available <= Number(low)) ? 'low' : 'in_stock';
+    }
+    const rank = (r: (typeof rows)[number]) => (r.stockStatus === 'in_stock' ? 0 : r.stockStatus === 'low' ? 1 : r.stockStatus === 'unknown' ? 2 : 3) - (f.colour && r.colour?.toLowerCase().includes(f.colour) ? 10 : 0);
+    return rows.sort((a, b) => rank(a) - rank(b)).slice(0, 3);
+  }
+
+  /** Endings any assistant must honour first: stop / wrong number, a person, a callback, goodbye. Executed by code. */
+  private async endingPlan(turn: Turn): Promise<Plan | undefined> {
+    const { session, intent, text } = turn;
+    const style = this.style(session);
+    // A. Customer-driven endings. Executed by code, only on a clear utterance.
+    if (intent === 'NOT_INTERESTED' || intent === 'WRONG_NUMBER') {
+      const wrong = intent === 'WRONG_NUMBER';
+      await this.markNotInterested(session, wrong ? 'wrong number' : 'customer said not interested');
+      session.state = 'NOT_INTERESTED';
+      session.closing = true;
+      turn.actions.notInterested = true;
+      turn.actions.outcome = wrong ? 'wrong_number' : 'not_interested';
+      this.supersedePending(session, 'superseded');
+      return { kind: 'say', text: say.notInterested(style, wrong), end: true };
+    }
+    // AWS: an appointment cancellation request goes to staff (manual review), never auto-cancelled here.
+    if (intent === 'CANCELLATION_REQUEST') {
+      await this.requestHandoff(session, 'Customer requested appointment cancellation; manual review required');
+      session.state = 'HANDOFF';
+      session.closing = true;
+      turn.actions.handoff = true;
+      turn.actions.outcome = 'human_requested';
+      this.supersedePending(session, 'superseded');
+      return { kind: 'say', text: say.cancellationRequested(style), end: true };
+    }
+    if (intent === 'HUMAN_REQUEST') {
+      try {
+        await this.requestHandoff(session, 'Customer asked for a human');
+      } catch (error) {
+        // Never promise a call we could not record.
+        log.error('engine.handoff_failed', { leadId: session.leadId, error: errorMessage(error) });
+        return { kind: 'say', text: say.handoffFailed(style) };
+      }
+      session.state = 'HANDOFF';
+      session.closing = true;
+      turn.actions.handoff = true;
+      turn.actions.outcome = 'human_requested';
+      this.supersedePending(session, 'superseded');
+      return { kind: 'say', text: say.handoff(style), end: true };
+    }
+    if (intent === 'CALLBACK_REQUEST') {
+      const at = parseCallbackTime(text, turn.now);
+      await this.scheduleCallback(session, at, text);
+      session.state = 'CALLBACK';
+      session.closing = true;
+      turn.actions.outcome = 'callback_requested';
+      if (at) turn.actions.callbackAt = at.toISOString();
+      this.supersedePending(session, 'superseded');
+      return { kind: 'say', text: say.callback(style, at), end: true };
+    }
+    if (intent === 'GOODBYE') {
+      session.state = 'COMPLETED';
+      session.closing = true;
+      this.supersedePending(session, 'superseded');
+      if (!turn.actions.outcome) turn.actions.outcome = this.bestOutcome(session);
+      return { kind: 'say', text: say.goodbye(style), end: true };
+    }
+
+    return undefined;
   }
 
   /** Customer answered the confirmation question (or did something else). Returns undefined to continue the cascade. */
@@ -1603,7 +1835,7 @@ export class ConversationEngine {
     return qualificationState(s.slots).complete ? 'qualified' : 'connected';
   }
 
-  private advanceLead(s: Session, status: 'qualified' | 'property_interested') {
+  private advanceLead(s: Session, status: LeadStatus) {
     this.background(s.key, () => this.leads.advanceLeadStatus({ organizationId: s.organizationId, leadId: s.leadId, status }));
   }
 
@@ -1682,6 +1914,37 @@ export class ConversationEngine {
       retryTransient(() => this.followUps.cancelPending({ organizationId: s.organizationId, customerId: s.customerId, reason: 'Customer not interested' }), 'followups.cancel'),
       this.leads.advanceLeadStatus({ organizationId: s.organizationId, leadId: s.leadId, status: 'not_interested' }),
     ]);
+  }
+
+  /**
+   * Retail / manufacturing / agency: there is no dedicated conversation engine for these industries yet. The customer is
+   * acknowledged truthfully and the enquiry goes to the team (one handoff task per conversation). Nothing is promised:
+   * no products, prices, stock, appointments or delivery.
+   */
+  private async genericPlan(turn: Turn): Promise<Plan> {
+    const { session, intent } = turn;
+    const st = this.style(session);
+    if (intent === 'GOODBYE') return { kind: 'say', text: st === 'en' ? 'Thank you! Have a good day.' : 'நன்றி! நல்ல நாளா இருக்கட்டும்.', end: true };
+    if (session.state !== 'HANDOFF') {
+      try {
+        await this.requestHandoff(session, `New enquiry (no AI assistant for this industry yet): "${turn.text.slice(0, 200)}"`);
+      } catch (error) {
+        log.error('engine.generic_handoff_failed', { leadId: session.leadId, error: errorMessage(error) });
+        return { kind: 'say', text: say.handoffFailed(st) };
+      }
+      session.state = 'HANDOFF';
+      turn.actions.handoff = true;
+      turn.actions.outcome = 'human_requested';
+      return {
+        kind: 'say',
+        text: st === 'en'
+          ? `Thank you for contacting ${session.organizationName ?? 'us'}. A member of our team will reply to you here shortly.`
+          : st === 'tl'
+            ? `${session.organizationName ?? 'Engal'} kitta message pannadhukku nandri. Engal team member seekiram inga reply pannuvaanga.`
+            : `${session.organizationName ?? 'எங்களை'} தொடர்பு கொண்டதற்கு நன்றி. எங்கள் team member விரைவில் இங்கே பதில் சொல்வார்.`,
+      };
+    }
+    return { kind: 'say', text: st === 'en' ? 'Noted. Our team has your message and will reply here.' : st === 'tl' ? 'Noted. Engal team ungal message-a paathu inga reply pannuvaanga.' : 'குறித்துக்கொண்டோம். எங்கள் team இங்கே பதில் சொல்வார்.' };
   }
 
   private async requestHandoff(s: Session, reason: string) {

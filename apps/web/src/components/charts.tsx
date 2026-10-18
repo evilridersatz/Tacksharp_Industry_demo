@@ -60,7 +60,7 @@ export function TrendChart({
         </g>
       ))}
       {labels.map((l, i) =>
-        i % every === 0 || i === labels.length - 1 ? (
+        (i % every === 0 && labels.length - 1 - i >= every / 2) || i === labels.length - 1 ? (
           <text key={l + i} x={x(i)} y={H - 6} textAnchor="middle" className="fill-faint text-[10px]">
             {l}
           </text>
@@ -115,5 +115,49 @@ export function Donut({ parts, total, label }: { parts: Array<{ value: number; c
         {label}
       </text>
     </svg>
+  );
+}
+
+/** Horizontal bar list: readable at any width (labels never rotate or overlap). */
+export function BarList({ labels, values, color, format = (v) => String(v) }: { labels: string[]; values: number[]; color: string; format?: (v: number) => string }) {
+  const max = Math.max(...values, 1);
+  return (
+    <ul className="flex flex-col gap-2.5" role="list">
+      {labels.map((l, i) => (
+        <li key={l + i} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 text-[12.5px]">
+          <span className="truncate text-body" title={l}>{l}</span>
+          <span className="font-semibold text-ink tabular">{format(values[i] ?? 0)}</span>
+          <span className="col-span-2 h-2 overflow-hidden rounded-full bg-slate-100">
+            <span className="block h-full rounded-full" style={{ width: `${Math.max(2, ((values[i] ?? 0) / max) * 100)}%`, background: color }} />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Funnel: each stage as a bar with its share of the first stage. */
+export function Funnel({ labels, values, color }: { labels: string[]; values: number[]; color: string }) {
+  const first = values[0] || 0;
+  return (
+    <ol className="flex flex-col gap-2">
+      {labels.map((l, i) => {
+        const v = values[i] ?? 0;
+        const share = first ? Math.round((v / first) * 100) : 0;
+        return (
+          <li key={l + i}>
+            <div className="mb-1 flex items-baseline justify-between gap-2 text-[12.5px]">
+              <span className="truncate text-body">{l}</span>
+              <span className="shrink-0 font-semibold text-ink tabular">
+                {v} {i > 0 && <span className="font-normal text-muted">· {share}%</span>}
+              </span>
+            </div>
+            <div className="h-6 overflow-hidden rounded-[8px] bg-slate-100">
+              <div className="h-full rounded-[8px]" style={{ width: `${first ? Math.max(3, (v / first) * 100) : 0}%`, background: color, opacity: 1 - i * (0.5 / Math.max(1, labels.length - 1)) }} />
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }

@@ -92,7 +92,106 @@ export const LEAD_STATUS: Record<string, { label: string; tone: Tone }> = {
   not_interested: { label: 'Not interested', tone: 'slate' },
   won: { label: 'Converted', tone: 'brand' },
   lost: { label: 'Not interested', tone: 'slate' },
+  // textile funnel
+  catalogue_shared: { label: 'Catalogue shared', tone: 'sky' },
+  quotation_requested: { label: 'Quote requested', tone: 'amber' },
+  quotation_sent: { label: 'Quote sent', tone: 'violet' },
+  negotiation: { label: 'Negotiation', tone: 'amber' },
+  order_confirmed: { label: 'Order confirmed', tone: 'brand' },
+  repeat_customer: { label: 'Repeat customer', tone: 'brand' },
 };
+
+const COMMON_STATUSES = ['new', 'contacted', 'qualified', 'callback', 'human_handoff', 'not_interested']; // 'lost' shares the label; kept only if current
+const REAL_ESTATE_STATUSES = ['property_interested', 'site_visit', 'won'];
+const TEXTILE_STATUSES = ['catalogue_shared', 'quotation_requested', 'quotation_sent', 'negotiation', 'order_confirmed', 'repeat_customer'];
+
+/** Lead statuses that make sense for the business's industry (the current status is always kept). */
+const RETAIL_STATUSES = ['catalogue_shared', 'order_confirmed', 'repeat_customer'];
+const GENERIC_STATUSES = ['won'];
+
+export function leadStatusesFor(industry: string | undefined, current?: string) {
+  const extra =
+    industry === 'textile' ? TEXTILE_STATUSES : industry === 'retail' ? RETAIL_STATUSES : industry === 'real_estate' || !industry ? REAL_ESTATE_STATUSES : GENERIC_STATUSES;
+  const keys = [...COMMON_STATUSES, ...extra];
+  if (current && !keys.includes(current)) keys.push(current);
+  return keys.map((k) => [k, LEAD_STATUS[k] ?? { label: k, tone: 'slate' as Tone }] as const);
+}
+
+export const QUOTE_STATUS: Record<string, { label: string; tone: Tone }> = {
+  draft: { label: 'Draft', tone: 'slate' },
+  pending_approval: { label: 'Needs pricing / approval', tone: 'amber' },
+  approved: { label: 'Approved', tone: 'sky' },
+  sent: { label: 'Sent', tone: 'violet' },
+  accepted: { label: 'Accepted', tone: 'brand' },
+  rejected: { label: 'Rejected', tone: 'rose' },
+  expired: { label: 'Expired', tone: 'slate' },
+};
+
+export const ORDER_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending_confirmation: { label: 'Pending confirmation', tone: 'amber' },
+  confirmed: { label: 'Confirmed', tone: 'sky' },
+  processing: { label: 'Processing', tone: 'violet' },
+  ready_to_dispatch: { label: 'Ready to dispatch', tone: 'violet' },
+  dispatched: { label: 'Dispatched', tone: 'sky' },
+  delivered: { label: 'Delivered', tone: 'brand' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+};
+
+/** Same tables as the API (textile-rules.ts) - the server re-checks every move. */
+export const QUOTE_NEXT: Record<string, string[]> = {
+  draft: ['pending_approval', 'approved', 'rejected'],
+  pending_approval: ['approved', 'draft', 'rejected'],
+  approved: ['draft'],
+  sent: ['accepted', 'rejected', 'expired'],
+  accepted: [],
+  rejected: [],
+  expired: ['draft'],
+};
+export const ORDER_NEXT: Record<string, string[]> = {
+  pending_confirmation: ['confirmed', 'cancelled'],
+  confirmed: ['processing', 'cancelled'],
+  processing: ['ready_to_dispatch', 'cancelled'],
+  ready_to_dispatch: ['dispatched', 'cancelled'],
+  dispatched: ['delivered'],
+  delivered: [],
+  cancelled: [],
+};
+
+export const PAYMENT_STATUS: Record<string, { label: string; tone: Tone }> = {
+  unpaid: { label: 'Unpaid', tone: 'rose' },
+  partial: { label: 'Part paid', tone: 'amber' },
+  paid: { label: 'Paid', tone: 'brand' },
+};
+
+export const STOCK_STATUS: Record<string, { label: string; tone: Tone }> = {
+  in_stock: { label: 'In stock', tone: 'brand' },
+  low: { label: 'Limited', tone: 'amber' },
+  out_of_stock: { label: 'Out of stock', tone: 'rose' },
+  unknown: { label: 'Not set', tone: 'slate' },
+};
+
+export const FEEDBACK_STATUS: Record<string, { label: string; tone: Tone }> = {
+  requested: { label: 'Asked', tone: 'slate' },
+  received: { label: 'Received', tone: 'sky' },
+  needs_action: { label: 'Needs action', tone: 'rose' },
+  resolved: { label: 'Resolved', tone: 'brand' },
+};
+
+/** Exact amount with Indian grouping: 125000.5 -> ₹1,25,000.50 (no rounding into lakhs - these are invoice values). */
+export function inr(value?: string | number | null) {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
+}
+
+export function auditActor(actor: string) {
+  if (actor.startsWith('user:')) return 'Team member';
+  if (actor === 'customer') return 'Customer (WhatsApp)';
+  if (actor === 'ai' || actor.startsWith('ai')) return 'AI assistant';
+  if (actor.startsWith('system') || actor.startsWith('worker')) return 'Automation';
+  return actor;
+}
 
 export const CALL_OUTCOME: Record<string, { label: string; tone: Tone }> = {
   connected: { label: 'Connected', tone: 'sky' },
@@ -107,6 +206,9 @@ export const CALL_OUTCOME: Record<string, { label: string; tone: Tone }> = {
   no_answer: { label: 'No answer', tone: 'rose' },
   busy: { label: 'Busy', tone: 'amber' },
   failed: { label: 'Failed', tone: 'rose' },
+  requested_catalogue: { label: 'Wants catalogue', tone: 'sky' },
+  requested_quotation: { label: 'Wants a quote', tone: 'amber' },
+  order_discussion: { label: 'Order discussion', tone: 'brand' },
   invalid_number: { label: 'Invalid number', tone: 'rose' },
   in_progress: { label: 'Live', tone: 'violet' },
   ringing: { label: 'Ringing', tone: 'violet' },
@@ -205,3 +307,77 @@ export const VISIT_STATUS: Record<string, { label: string; tone: Tone }> = {
   cancelled: { label: 'Cancelled', tone: 'slate' },
   no_show: { label: 'No-show', tone: 'rose' },
 };
+
+export const TASK_STATUS: Record<string, { label: string; tone: Tone }> = {
+  PENDING: { label: 'Pending', tone: 'slate' },
+  RUNNING: { label: 'Running', tone: 'violet' },
+  NEEDS_APPROVAL: { label: 'Needs approval', tone: 'amber' },
+  COMPLETED: { label: 'Completed', tone: 'brand' },
+  FAILED: { label: 'Failed', tone: 'rose' },
+  CANCELLED: { label: 'Cancelled', tone: 'slate' },
+};
+
+export const APPROVAL_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: 'Waiting', tone: 'amber' },
+  approved: { label: 'Approved', tone: 'sky' },
+  executed: { label: 'Approved · done', tone: 'brand' },
+  failed: { label: 'Approved · failed', tone: 'rose' },
+  rejected: { label: 'Rejected', tone: 'rose' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+  expired: { label: 'Expired', tone: 'slate' },
+};
+
+export const AGENT_LABEL: Record<string, string> = { marketing: 'Marketing', sales: 'Sales', finance: 'Finance', operations: 'Operations' };
+
+export const WORK_STATUS: Record<string, { label: string; tone: Tone }> = {
+  open: { label: 'Open', tone: 'amber' },
+  in_progress: { label: 'In progress', tone: 'sky' },
+  done: { label: 'Done', tone: 'brand' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+};
+
+export const APPROVAL_ACTION: Record<string, string> = {
+  'quotation.discount': 'Exceptional discount',
+  'inventory.adjust': 'Stock correction',
+  'agent.task': 'Agent action',
+  'payment.reverse': 'Payment reversal',
+};
+
+/** Where a record lives in the dashboard. */
+export function recordLink(type?: string | null, id?: string | null) {
+  if (!type || !id) return null;
+  if (type === 'order') return `/orders?id=${id}`;
+  if (type === 'quotation') return `/quotations?id=${id}`;
+  if (type === 'product') return `/operations?product=${id}`;
+  if (type === 'lead') return `/leads/${id}`;
+  if (type === 'invoice') return `/finance?invoice=${id}`;
+  if (type === 'payment') return `/finance?tab=verify`;
+  return null;
+}
+
+export function newClientKey() {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export const INVOICE_STATUS: Record<string, { label: string; tone: Tone }> = {
+  draft: { label: 'Draft', tone: 'slate' },
+  approved: { label: 'Approved', tone: 'sky' },
+  issued: { label: 'Issued', tone: 'violet' },
+  partially_paid: { label: 'Part paid', tone: 'amber' },
+  paid: { label: 'Paid', tone: 'brand' },
+  cancelled: { label: 'Cancelled', tone: 'slate' },
+};
+
+export const PAYMENT_RECORD_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending_verification: { label: 'Awaiting verification', tone: 'amber' },
+  verified: { label: 'Verified', tone: 'brand' },
+  rejected: { label: 'Rejected', tone: 'rose' },
+  reversed: { label: 'Reversed', tone: 'slate' },
+};
+
+export const PAYMENT_METHODS: Record<string, string> = { upi: 'UPI', bank_transfer: 'Bank transfer (NEFT/RTGS/IMPS)', cash: 'Cash', cheque: 'Cheque', card: 'Card', gateway: 'Payment gateway', other: 'Other' };
+
+export function dateOnly(iso?: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}

@@ -5,6 +5,8 @@ export type SessionClaims = {
   org: string; // organization id
   role: string;
   exp: number; // unix seconds
+  /** Set when the user switched into another workspace (membership): the guard re-checks the membership. */
+  ws?: boolean;
 };
 
 const b64 = (b: Buffer | string) => Buffer.from(b).toString('base64url');

@@ -155,12 +155,12 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(done.providerMessageId).toMatch(/^dryrun-wamid-/);
     expect(done.payload.request.type).toBe('text');
 
-    // Outside the 24h window: template with {{1}} name, {{2}} order number.
+    // Outside the 24h window: the approved feedback template (as deployed on AWS) takes {{1}} = order number only.
     process.env.FOLLOWUP_FEEDBACK_TEMPLATE = 'gr_feedback_v1';
     const order2 = await collectedOrder({ phone: '919999900012', windowOpen: false });
     const r2 = await fu.schedule({ organizationId: ORG, orderId: order2.id, kind: 'feedback_request', at: new Date(), dedupeKey: 'p2' });
     await fu.process(r2.row.id);
-    expect(fu.mockWhatsApp.sent[1]).toMatchObject({ type: 'template', template: { name: 'gr_feedback_v1', components: [{ type: 'body', parameters: [{ type: 'text', text: 'Test' }, { type: 'text', text: order2.orderNumber }] }] } });
+    expect(fu.mockWhatsApp.sent[1]).toMatchObject({ type: 'template', template: { name: 'gr_feedback_v1', components: [{ type: 'body', parameters: [{ type: 'text', text: order2.orderNumber }] }] } });
   });
 
   it('dry-run (the default) never calls the real WhatsApp sender or the Plivo dialer', async () => {

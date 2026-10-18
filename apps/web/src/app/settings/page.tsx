@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { CheckCircle2, Save } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Property, TenantSettings } from '@/lib/types';
 import { PageHeader } from '@/components/shell';
 import { Button, Card, CardHeader, ErrorBanner, Skeleton } from '@/components/ui';
+import { Dialog } from '@/components/textile';
+import { INDUSTRIES, industryDef, type IndustryId } from '@/lib/industries';
+import { forgetWorkspace, useWorkspace } from '@/lib/industry';
 
 type Draft = TenantSettings;
 
@@ -76,6 +79,10 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmIndustry, setConfirmIndustry] = useState(false);
+  const closeConfirm = useCallback(() => setConfirmIndustry(false), []);
+  const { workspace } = useWorkspace();
+  const canChange = workspace?.canChangeIndustry ?? false;
 
   useEffect(() => {
     if (data && !draft) {
@@ -85,15 +92,20 @@ export default function SettingsPage() {
     }
   }, [data, draft]);
 
-  const set = <K extends keyof Draft>(section: K, patch: Partial<Draft[K]>) => {
+  const set = <K extends Exclude<keyof Draft, 'industry' | 'agents'>>(section: K, patch: Partial<Draft[K]>) => {
     setSaved(false);
     setDraft((d) => (d ? { ...d, [section]: { ...d[section], ...patch } } : d));
   };
   const setSite = (propertyId: string, patch: { address?: string; mapUrl?: string }) =>
     set('visits', { sites: { ...(draft?.visits.sites ?? {}), [propertyId]: { ...(draft?.visits.sites[propertyId] ?? {}), ...patch } } });
 
-  async function save() {
+  async function save(confirmed = false) {
     if (!draft) return;
+    if (!confirmed && data && draft.industry !== data.settings.industry) {
+      setConfirmIndustry(true);
+      return;
+    }
+    setConfirmIndustry(false);
     setSaving(true);
     setErr(null);
     try {
@@ -107,6 +119,11 @@ export default function SettingsPage() {
       setPhones(result.settings.team.alertPhones.join(', '));
       setDays(result.settings.nurture.followUpDays.join(', '));
       setSaved(true);
+      // The menu and pipeline depend on the industry: reload so every page picks up the switch at once.
+      if (data && result.settings.industry !== data.settings.industry) {
+        forgetWorkspace();
+        window.location.reload();
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -115,12 +132,15 @@ export default function SettingsPage() {
   }
 
   const d = draft;
+  // Restaurant workspaces keep their own engine; everyone else previews sections for the selected industry.
+  const def = industryDef(workspace?.industry === 'restaurant' ? 'restaurant' : d?.industry);
+  const show = (section: (typeof def.settings)[number]) => def.settings.includes(section);
   return (
     <>
       <PageHeader
         title="Settings"
         actions={
-          <Button variant="primary" busy={saving} disabled={!d} onClick={save}>
+          <Button variant="primary" busy={saving} disabled={!d} onClick={() => save()}>
             {saved ? <CheckCircle2 className="size-4" /> : <Save className="size-4" />}
             {saved ? 'Saved' : 'Save changes'}
           </Button>
@@ -130,7 +150,65 @@ export default function SettingsPage() {
       {!d && <Skeleton className="h-96" />}
       {d && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <Card>
+          <Card className="xl:col-span-2">
+            <CardHeader title="Business type" subtitle="Decides which sales assistant, pipeline stages and pages you get" />
+            <div className="px-5 pb-3">
+              <Row label="Industry" hint={canChange ? def.tagline : 'This workspace runs the restaurant ordering assistant; its industry cannot be changed here.'}>
+                <select
+                  aria-label="Industry"
+                  value={workspace?.industry === 'restaurant' ? 'restaurant' : d.industry}
+                  disabled={!canChange}
+                  onChange={(e) => { setSaved(false); setDraft((x) => (x ? { ...x, industry: e.target.value as Draft['industry'] } : x)); }}
+                  className="h-9 rounded-[10px] border border-line bg-white px-2.5 text-[13px] font-semibold text-ink outline-none focus:border-brand disabled:bg-slate-50"
+                >
+                  {workspace?.industry === 'restaurant' && <option value="restaurant">{INDUSTRIES.restaurant.label}</option>}
+                  {(workspace?.settableIndustries ?? (['real_estate', 'textile', 'retail', 'manufacturing', 'agency'] as IndustryId[])).map((id) => (
+                    <option key={id} value={id}>{INDUSTRIES[id].label}</option>
+                  ))}
+                </select>
+              </Row>
+              {show('textile') && (
+                <>
+                  <Row label="Quotation reminder" hint="WhatsApp nudge if a sent quotation gets no answer; 0 = off">
+                    <Num label="Quote reminder days" value={d.textile.quoteReminderDays} onChange={(v) => set('textile', { quoteReminderDays: v })} suffix="days after sending" max={30} />
+                  </Row>
+                  <Row label="Ask for feedback" hint="After the order is marked delivered">
+                    <Num label="Feedback after hours" value={d.textile.feedbackAfterHours} onChange={(v) => set('textile', { feedbackAfterHours: v })} suffix="hours after delivery" max={720} />
+                  </Row>
+                  <Row label="Order updates on WhatsApp" hint="When an order is confirmed, dispatched and delivered">
+                    <Toggle label="Order status WhatsApp" checked={d.textile.notifyOrderStatus} onChange={(v) => set('textile', { notifyOrderStatus: v })} />
+                  </Row>
+                  <Row label="Discount limit" hint="A quotation discount above this needs an approver (sales.approve_discount)">
+                    <Num label="Max discount percent" value={d.textile.maxDiscountPct} onChange={(v) => set('textile', { maxDiscountPct: v })} suffix="% of subtotal" max={100} />
+                  </Row>
+                </>
+              )}
+              {show('finance') && (
+                <>
+                  <Row label="Invoice when an order is confirmed" hint="The Finance agent drafts it; a person approves and issues it">
+                    <Toggle label="Auto-draft invoice" checked={d.finance.autoDraftInvoice} onChange={(v) => set('finance', { autoDraftInvoice: v })} />
+                  </Row>
+                  <Row label="Payment terms" hint="Due date = invoice date + these days (changeable per invoice)">
+                    <Num label="Payment terms days" value={d.finance.paymentTermsDays} onChange={(v) => set('finance', { paymentTermsDays: v })} suffix="days" max={365} />
+                  </Row>
+                  <Row label="Before dispatch" hint="Checked on the server when an order moves to ready to dispatch / dispatched">
+                    <select
+                      aria-label="Dispatch payment rule"
+                      value={d.finance.dispatchPaymentRule}
+                      onChange={(e) => set('finance', { dispatchPaymentRule: e.target.value as Draft['finance']['dispatchPaymentRule'] })}
+                      className="h-9 rounded-[10px] border border-line bg-white px-2.5 text-[13px] font-semibold text-ink outline-none focus:border-brand"
+                    >
+                      <option value="none">No payment check</option>
+                      <option value="any_verified">At least one verified payment</option>
+                      <option value="full">Invoice fully paid (verified)</option>
+                    </select>
+                  </Row>
+                </>
+              )}
+            </div>
+          </Card>
+
+          {show('speed') && <Card>
             <CardHeader title="Speed to lead" subtitle="How fast the AI reaches a new Meta lead" />
             <div className="px-5 pb-3">
               <Row label="Call new leads instantly" hint="WhatsApp intro at once, then the AI calls (inside calling hours)">
@@ -158,9 +236,9 @@ export default function SettingsPage() {
                 <Text label="Nurture days" value={days} onChange={(v) => { setDays(v); setSaved(false); }} placeholder="3, 7" />
               </Row>
             </div>
-          </Card>
+          </Card>}
 
-          <Card>
+          {show('visits') && <Card>
             <CardHeader title="Site visit follow-through" subtitle="Get booked visits to actually happen" />
             <div className="px-5 pb-3">
               <Row label="Ask to confirm the day before" hint='WhatsApp; a "YES" reply marks the visit confirmed'>
@@ -176,9 +254,9 @@ export default function SettingsPage() {
                 <Toggle label="After-visit messages" checked={d.visits.afterVisit} onChange={(v) => set('visits', { afterVisit: v })} />
               </Row>
             </div>
-          </Card>
+          </Card>}
 
-          <Card>
+          {show('team') && <Card>
             <CardHeader title="Sales team alerts" subtitle="WhatsApp to your team the moment something needs them" />
             <div className="px-5 pb-3">
               <Row label="Team WhatsApp numbers" hint="With country code, comma separated">
@@ -195,9 +273,9 @@ export default function SettingsPage() {
                 <Text label="Alert template" value={d.team.alertTemplate} onChange={(v) => set('team', { alertTemplate: v })} placeholder="site_visit_alert" />
               </Row>
             </div>
-          </Card>
+          </Card>}
 
-          <Card>
+          {show('roi') && <Card>
             <CardHeader title="ROI inputs" subtitle="Used for cost per attended visit on Performance" />
             <div className="px-5 pb-3">
               <Row label="Ad cost per lead">
@@ -210,9 +288,9 @@ export default function SettingsPage() {
                 <Num label="WhatsApp cost per message" value={d.roi.whatsappCostPerMessageInr} onChange={(v) => set('roi', { whatsappCostPerMessageInr: v })} suffix="₹" step={0.1} />
               </Row>
             </div>
-          </Card>
+          </Card>}
 
-          <Card className="xl:col-span-2">
+          {show('visits') && <Card className="xl:col-span-2">
             <CardHeader title="Site address and map link per project" subtitle="Sent in the visit reminder" />
             <div className="px-5 pb-3">
               {!properties && <Skeleton className="h-20" />}
@@ -223,9 +301,27 @@ export default function SettingsPage() {
                 </Row>
               ))}
             </div>
-          </Card>
+          </Card>}
         </div>
       )}
+      <Dialog open={confirmIndustry} onClose={closeConfirm} title="Change industry?">
+        {d && data && (
+          <div className="space-y-3 text-[13px] text-body">
+            <p>
+              Switch this workspace from <b>{INDUSTRIES[data.settings.industry as IndustryId]?.label ?? data.settings.industry}</b> to <b>{INDUSTRIES[d.industry as IndustryId]?.label ?? d.industry}</b>?
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-muted">
+              <li>The menu, dashboard, pipeline stages and AI agents change to the new industry.</li>
+              <li>No records are deleted, moved or created; your data stays in this workspace.</li>
+              <li>The AI assistant for new WhatsApp conversations follows the new industry.</li>
+            </ul>
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
+              <Button onClick={closeConfirm}>Cancel</Button>
+              <Button variant="primary" busy={saving} onClick={() => save(true)}>Change industry</Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </>
   );
 }

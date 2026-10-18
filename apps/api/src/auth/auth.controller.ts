@@ -36,6 +36,20 @@ export class AuthController {
 
   @Get('me')
   me(@CurrentUser() user: SessionClaims) {
-    return this.auth.me(user.sub);
+    return this.auth.me(user.sub, user);
+  }
+
+  @Get('workspaces')
+  workspaces(@CurrentUser() user: SessionClaims) {
+    return this.auth.workspaces(user.sub).then((list) => list.map((w) => ({ ...w, current: w.organizationId === user.org })));
+  }
+
+  /** Open another workspace (industry) the user is a member of. The server checks the membership. */
+  @Post('workspace')
+  @HttpCode(200)
+  async switchWorkspace(@CurrentUser() user: SessionClaims, @Body() body: { organizationId?: string }, @Res({ passthrough: true }) res: Response) {
+    const r = await this.auth.switchWorkspace(user.sub, String(body?.organizationId ?? ''));
+    res.cookie(SESSION_COOKIE, r.token, { httpOnly: true, sameSite: 'lax', secure: config.isProduction, path: '/', maxAge: r.maxAgeSec * 1000 });
+    return { workspace: r.workspace, token: r.token };
   }
 }

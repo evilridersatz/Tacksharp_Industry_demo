@@ -11,6 +11,8 @@ model Organization {
   name         String
   /// real_estate | restaurant. Decides which conversation engine and dashboard the tenant gets.
   vertical     String         @default("real_estate")
+  /// A demonstration workspace with synthetic data only (seeded). Never a real business; real messages are never sent.
+  isDemo       Boolean        @default(false)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   calls        Call[]
@@ -34,6 +36,30 @@ model Organization {
   orderFollowUps OrderFollowUp[]
   inventoryMovements InventoryMovement[]
   inboundMessages InboundMessage[]
+
+  textileProducts     TextileProduct[]
+  textileRequirements TextileRequirement[]
+  quotations          Quotation[]
+  salesOrders         SalesOrder[]
+  feedback            Feedback[]
+  auditEvents         AuditEvent[]
+  agentTasks          AgentTask[]
+  agentTaskEvents     AgentTaskEvent[]
+  approvals           Approval[]
+  workTasks           WorkTask[]
+  inventoryBalances   InventoryBalance[]
+  stockMovements      StockMovement[]
+  invoices            Invoice[]
+  payments            Payment[]
+  marketingSegments   MarketingSegment[]
+  marketingCampaigns  MarketingCampaign[]
+  campaignRecipients  CampaignRecipient[]
+  contentItems        ContentItem[]
+  contentRevisions    ContentRevision[]
+  collectionNotes     CollectionNote[]
+  expenses            Expense[]
+  memberships         OrganizationMembership[]
+  qualityInspections  QualityInspection[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -110,6 +136,8 @@ model Customer {
   optedOutAt           DateTime?
   /// Synthetic record created by the demo seed (never a real person).
   isDemo               Boolean   @default(false)
+  /// Marketing labels / segments ("saree_buyer", "wedding", "festival"...): a JSON string array.
+  tags                 Json?
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls          Call[]
   Conversation   Conversation[]
@@ -120,9 +148,16 @@ model Customer {
   offerClaims    OfferClaim[]
   orderFollowUps OrderFollowUp[]
 
+  quotations     Quotation[]
+  salesOrders    SalesOrder[]
+  feedback       Feedback[]
+  campaignRecipients CampaignRecipient[]
+
   @@unique([organizationId, phone])
   @@index([organizationId])
   @@index([organizationId, email])
+  invoices       Invoice[]
+  payments       Payment[]
 }
 
 model Lead {
@@ -147,6 +182,9 @@ model Lead {
   customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   SiteVisit      SiteVisit[]
+  textileRequirement TextileRequirement?
+  quotations     Quotation[]
+  salesOrders    SalesOrder[]
 
   @@index([organizationId])
   @@index([organizationId, status])
@@ -307,6 +345,7 @@ model User {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships    OrganizationMembership[]
 
   @@index([organizationId])
 }
@@ -665,3 +704,754 @@ model InboundMessage {
   @@index([organizationId, status, receivedAt])
 }
 
+
+// =============================================================================================
+// Textile sales (industry = textile). New tables only; nothing above changes in the database.
+// Prices, stock and specifications are entered by the business: the AI never invents them.
+// =============================================================================================
+
+/// A catalogue item. `price` is shown to customers only when `priceApproved` is true; stock is manually maintained.
+model TextileProduct {
+  id             String       @id @default(cuid())
+  organizationId String
+  sku            String
+  name           String
+  fabricCategory String
+  composition    String?
+  gsm            Int?
+  width          String?
+  colour         String?
+  design         String?
+  sizes          String?
+  moq            Int?
+  /// metre | piece | kg | set
+  priceUnit      String       @default("metre")
+  currency       String       @default("INR")
+  price          Decimal?     @db.Decimal(12, 2)
+  priceApproved  Boolean      @default(false)
+  /// Purchase / production cost per price unit, entered by the business. Gross margin is shown only where this is set.
+  unitCost       Decimal?     @db.Decimal(12, 2)
+  /// in_stock | low | out_of_stock | unknown (manually maintained)
+  stockStatus    String       @default("unknown")
+  imageUrls      Json?
+  catalogueUrl   String?      @db.VarChar(500)
+  leadTimeDays   Int?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotationItems QuotationItem[]
+  orderItems     SalesOrderItem[]
+  inventory      InventoryBalance[]
+  stockMovements StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, active])
+  @@index([organizationId, fabricCategory])
+}
+
+/// What a textile buyer asked for (one per lead), filled by the AI from the conversation or by a salesperson.
+model TextileRequirement {
+  id               String       @id @default(cuid())
+  organizationId   String
+  leadId           String       @unique
+  /// wholesaler | retailer | garment_manufacturer | exporter | boutique | other
+  buyerType        String?
+  productInterest  String?
+  fabricCategory   String?
+  colour           String?
+  quantity         Decimal?     @db.Decimal(12, 2)
+  quantityUnit     String?
+  targetPrice      Decimal?     @db.Decimal(12, 2)
+  destination      String?
+  neededBy         String?
+  assignedTo       String?
+  notes            String?      @db.Text
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead             Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+/// draft -> pending_approval -> approved -> sent -> accepted | rejected | expired
+model Quotation {
+  id             String       @id @default(cuid())
+  organizationId String
+  customerId     String
+  leadId         String?
+  number         String
+  status         String       @default("draft")
+  currency       String       @default("INR")
+  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
+  discount       Decimal      @default(0) @db.Decimal(14, 2)
+  taxPercent     Decimal      @default(0) @db.Decimal(5, 2)
+  tax            Decimal      @default(0) @db.Decimal(14, 2)
+  shipping       Decimal      @default(0) @db.Decimal(14, 2)
+  total          Decimal      @default(0) @db.Decimal(14, 2)
+  validUntil     DateTime?
+  paymentTerms   String?
+  deliveryTerms  String?
+  salesperson    String?
+  /// ai_request | manual
+  origin         String       @default("manual")
+  notes          String?      @db.Text
+  sentAt         DateTime?
+  decidedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  items          QuotationItem[]
+  order          SalesOrder?
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+model QuotationItem {
+  id          String          @id @default(cuid())
+  quotationId String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal         @db.Decimal(12, 2)
+  unit        String          @default("metre")
+  unitPrice   Decimal         @db.Decimal(12, 2)
+  lineTotal   Decimal         @db.Decimal(14, 2)
+  quotation   Quotation       @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product     TextileProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([quotationId])
+}
+
+/// pending_confirmation -> confirmed -> processing -> ready_to_dispatch -> dispatched -> delivered; cancelled
+model SalesOrder {
+  id               String       @id @default(cuid())
+  organizationId   String
+  customerId       String
+  leadId           String?
+  /// One order per quotation: converting the same quotation twice returns the existing order.
+  quotationId      String?      @unique
+  number           String
+  status           String       @default("pending_confirmation")
+  /// unpaid | partial | paid (manually maintained)
+  paymentStatus    String       @default("unpaid")
+  currency         String       @default("INR")
+  total            Decimal      @default(0) @db.Decimal(14, 2)
+  expectedDelivery DateTime?
+  shippingAddress  String?      @db.Text
+  salesperson      String?
+  notes            String?      @db.Text
+  deliveredAt      DateTime?
+  /// Dispatch details recorded by Operations (courier / transporter and its tracking or LR number).
+  dispatchedAt     DateTime?
+  courier          String?
+  trackingRef      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead             Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  quotation        Quotation?   @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  items            SalesOrderItem[]
+  feedback         Feedback?
+
+  invoices         Invoice[]
+  payments         Payment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+model SalesOrderItem {
+  id          String          @id @default(cuid())
+  orderId     String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal         @db.Decimal(12, 2)
+  unit        String          @default("metre")
+  unitPrice   Decimal         @db.Decimal(12, 2)
+  lineTotal   Decimal         @db.Decimal(14, 2)
+  order       SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     TextileProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+/// requested -> received (rating 4-5) | needs_action (rating 1-3 or a complaint) -> resolved. One per order.
+model Feedback {
+  id             String       @id @default(cuid())
+  organizationId String
+  customerId     String
+  orderId        String?      @unique
+  channel        String       @default("whatsapp")
+  rating         Int?
+  comment        String?      @db.Text
+  status         String       @default("requested")
+  owner          String?
+  resolution     String?      @db.Text
+  requestedAt    DateTime     @default(now())
+  receivedAt     DateTime?
+  resolvedAt     DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order          SalesOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+/// Who changed what (prices, statuses, conversions). Append-only.
+model AuditEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  actor          String
+  entityType     String
+  entityId       String
+  action         String
+  data           Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+}
+
+// =============================================================================================
+// AI agents (Orchestrator + Marketing / Sales / Finance / Operations) and textile operations.
+// New tables only. Agents act through these records and the textile records above - never through chat memory.
+// =============================================================================================
+
+/// One unit of agent work: routed by the Orchestrator, run by one agent, idempotent per business.
+model AgentTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// marketing | sales | finance | operations
+  agent          String
+  kind           String
+  /// event | user | schedule | handoff
+  trigger        String
+  /// PENDING | RUNNING | NEEDS_APPROVAL | COMPLETED | FAILED | CANCELLED
+  status         String       @default("PENDING")
+  /// Same key = same task: a repeated event or double click never runs the work twice.
+  idempotencyKey String       @db.VarChar(191)
+  entityType     String?
+  entityId       String?
+  input          Json?
+  result         Json?
+  error          String?      @db.Text
+  attempts       Int          @default(0)
+  maxAttempts    Int          @default(3)
+  timeoutMs      Int          @default(30000)
+  parentTaskId   String?
+  /// Handoff depth from the first task; bounded so agents can never loop.
+  depth          Int          @default(0)
+  approvalId     String?
+  requestedBy    String
+  runAfter       DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent         AgentTask?   @relation("AgentTaskHandoff", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  children       AgentTask[]  @relation("AgentTaskHandoff")
+  events         AgentTaskEvent[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([organizationId, agent, createdAt])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// Execution history of a task: started, tool used, handoff, approval, retry, result, error.
+model AgentTaskEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  taskId         String
+  type           String
+  message        String       @db.VarChar(500)
+  data           Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  task           AgentTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+/// A restricted action waiting for a person with the required permission. Enforced on the server.
+model Approval {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// e.g. quotation.discount, inventory.adjust
+  action             String
+  entityType         String
+  entityId           String
+  /// user:<id> or agent:<name>
+  requestedBy        String
+  reason             String       @db.Text
+  /// The exact proposed change; executed as-is once approved.
+  payload            Json
+  payloadHash        String       @db.VarChar(64)
+  requiredPermission String
+  /// pending | approved | rejected | cancelled | expired | executed | failed
+  status             String       @default("pending")
+  /// Set only while pending: one open request per action + record + proposal.
+  openKey            String?      @unique @db.VarChar(191)
+  decidedBy          String?
+  decidedAt          DateTime?
+  decisionNote       String?      @db.Text
+  expiresAt          DateTime?
+  executedAt         DateTime?
+  executionResult    Json?
+  taskId             String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// A job for a person (operations exception, procurement, dispatch prep; later finance reconciliation).
+model WorkTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  agent          String
+  /// exception | procurement | production | dispatch | sample | reconciliation | review
+  kind           String
+  title          String       @db.VarChar(300)
+  detail         String?      @db.Text
+  /// open | in_progress | done | cancelled
+  status         String       @default("open")
+  priority       String       @default("normal")
+  assignee       String?
+  dueAt          DateTime?
+  entityType     String?
+  entityId       String?
+  dedupeKey      String?      @unique @db.VarChar(191)
+  resolution     String?      @db.Text
+  createdBy      String
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, agent, status])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// Counted stock for a catalogue item at a location. available = onHand - reserved.
+/// A product WITHOUT a row here is "not tracked": nothing about it is claimed from stock.
+model InventoryBalance {
+  id             String         @id @default(cuid())
+  organizationId String
+  productId      String
+  location       String         @default("main")
+  onHand         Decimal        @default(0) @db.Decimal(14, 2)
+  reserved       Decimal        @default(0) @db.Decimal(14, 2)
+  /// Low-stock alert when available falls to or below this.
+  lowStockAt     Decimal?       @db.Decimal(14, 2)
+  allowNegative  Boolean        @default(false)
+  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        TextileProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, location])
+  @@index([organizationId])
+}
+
+/// Every stock change, append-only: receive | adjust | reserve | release | dispatch.
+model StockMovement {
+  id             String         @id @default(cuid())
+  organizationId String
+  productId      String
+  location       String         @default("main")
+  type           String
+  quantity       Decimal        @db.Decimal(14, 2)
+  onHandAfter    Decimal        @db.Decimal(14, 2)
+  reservedAfter  Decimal        @db.Decimal(14, 2)
+  orderId        String?
+  lot            String?
+  reference      String?
+  reason         String?        @db.Text
+  actor          String
+  /// The same key never moves stock twice (retried task, double click, duplicate event).
+  idempotencyKey String         @db.VarChar(191)
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        TextileProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, productId, createdAt])
+  @@index([organizationId, orderId])
+}
+
+// =============================================================================================
+// Finance (textile): invoices from confirmed orders, payments that are VERIFIED only by an authorised person or a
+// trusted provider. New tables only. Order and quotation records are never changed by an invoice.
+// =============================================================================================
+
+/// An invoice for a confirmed order. Amounts are computed on the server from the order lines and the quotation's
+/// commercial terms. `activeKey` = one live (not cancelled) invoice per order.
+model Invoice {
+  id             String       @id @default(cuid())
+  organizationId String
+  number         String
+  orderId        String
+  customerId     String
+  /// draft | approved | issued | partially_paid | paid | cancelled   ("overdue" is derived from dueDate)
+  status         String       @default("draft")
+  activeKey      String?      @unique @db.VarChar(191)
+  currency       String       @default("INR")
+  invoiceDate    DateTime?
+  dueDate        DateTime?
+  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
+  discount       Decimal      @default(0) @db.Decimal(14, 2)
+  taxPercent     Decimal      @default(0) @db.Decimal(5, 2)
+  tax            Decimal      @default(0) @db.Decimal(14, 2)
+  shipping       Decimal      @default(0) @db.Decimal(14, 2)
+  total          Decimal      @default(0) @db.Decimal(14, 2)
+  /// Sum of VERIFIED payments (kept in step in the same transaction as each verification / reversal).
+  amountPaid     Decimal      @default(0) @db.Decimal(14, 2)
+  /// Where the tax % came from: quotation | entered
+  taxSource      String       @default("quotation")
+  notes          String?      @db.Text
+  createdBy      String
+  issuedAt       DateTime?
+  cancelledAt    DateTime?
+  cancelReason   String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order          SalesOrder   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items          InvoiceItem[]
+  payments       Payment[]
+  collectionNotes CollectionNote[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, orderId])
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal  @db.Decimal(12, 2)
+  unit        String
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+/// A payment against an invoice. Recorded as pending_verification; becomes verified ONLY by an authorised person
+/// with evidence (manual) or a trusted provider check. Customer screenshots / references alone never verify it.
+model Payment {
+  id             String       @id @default(cuid())
+  organizationId String
+  invoiceId      String?
+  orderId        String?
+  customerId     String
+  amount         Decimal      @db.Decimal(14, 2)
+  currency       String       @default("INR")
+  /// upi | bank_transfer | cash | cheque | card | gateway | other
+  method         String
+  /// UTR / cheque no. / receipt no. as given
+  reference      String?
+  /// Normalised reference used to detect the same transaction entered twice.
+  referenceKey   String?      @db.VarChar(191)
+  transactionId  String?
+  paidAt         DateTime
+  /// pending_verification | verified | rejected | reversed
+  status         String       @default("pending_verification")
+  /// customer_claim | staff_entry | provider
+  source         String
+  /// manual | provider:<name>  (set when verified)
+  verificationSource String?
+  /// What was checked (bank statement line, cash receipt book page...). Required for manual verification.
+  evidence       String?      @db.Text
+  enteredBy      String
+  verifiedBy     String?
+  verifiedAt     DateTime?
+  rejectedReason String?      @db.Text
+  reversedBy     String?
+  reversedAt     DateTime?
+  reversalReason String?      @db.Text
+  notes          String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  order          SalesOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, invoiceId])
+  @@index([organizationId, referenceKey])
+  @@index([organizationId, customerId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Marketing agent: customer segments, campaign briefs / drafts, approval-gated WhatsApp campaigns,
+// content calendar, delivery + reply tracking and attribution. Nothing is sent without an approval.
+// ---------------------------------------------------------------------------------------------
+
+/// A saved audience. Rules are always narrowed to customers who gave marketing consent and did not opt out.
+model MarketingSegment {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?      @db.VarChar(500)
+  /// { tags?: string[], language?: string, leadStatuses?: string[], leadSources?: string[], activeWithinDays?: number }
+  rules          Json
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns      MarketingCampaign[]
+
+  @@unique([organizationId, name])
+}
+
+/// A campaign brief + its message. draft -> pending_approval -> approved/queued -> sending -> completed
+/// (or rejected / paused / cancelled). Only an approved, unchanged draft is ever sent.
+model MarketingCampaign {
+  id               String       @id @default(cuid())
+  organizationId   String
+  name             String
+  objective        String?      @db.VarChar(500)
+  /// Occasion / theme: diwali | pongal | wedding | new_arrivals | clearance | other
+  occasion         String?
+  channel          String       @default("whatsapp")
+  segmentId        String?
+  /// The brief: offer, product ids, tone, language, notes.
+  brief            Json?
+  /// An APPROVED WhatsApp template (Meta) with its body variables and optional image header.
+  templateName     String?
+  templateLanguage String?
+  templateParams   Json?
+  headerImageUrl   String?      @db.VarChar(1000)
+  /// What the owner reads in the preview (the template body with variables filled for a sample customer).
+  previewText      String?      @db.Text
+  /// draft | pending_approval | approved | scheduled | sending | paused | completed | cancelled | rejected
+  status           String       @default("draft")
+  scheduledAt      DateTime?
+  /// Hash of everything that is sent (template, variables, image, audience rules) at approval time.
+  approvedHash     String?      @db.VarChar(64)
+  approvalId       String?
+  taskId           String?
+  estimatedRecipients Int?
+  /// ₹, from Settings → ROI "WhatsApp cost per message" (null when that rate is 0 / not set).
+  estimatedCost    Decimal?     @db.Decimal(10, 2)
+  /// true = DRY_RUN was on: results are simulated and labelled as such, nothing was sent.
+  simulated        Boolean      @default(false)
+  createdBy        String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  segment          MarketingSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  recipients       CampaignRecipient[]
+  contentItems     ContentItem[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+}
+
+/// One customer in one campaign.
+model CampaignRecipient {
+  id                String            @id @default(cuid())
+  organizationId    String
+  campaignId        String
+  customerId        String
+  /// queued | sent | delivered | read | replied | failed | skipped | cancelled | simulated
+  status            String            @default("queued")
+  reason            String?           @db.VarChar(500)
+  providerMessageId String?
+  /// The lead this campaign is credited with (set when the customer replies).
+  leadId            String?
+  attempts          Int               @default(0)
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  repliedAt         DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign          MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, customerId])
+  @@index([organizationId, providerMessageId])
+  @@index([organizationId, customerId, sentAt])
+}
+
+/// Content calendar: posts / statuses / broadcast ideas planned per day. No social network is connected, so
+/// "published" is recorded by a person after they post it (never claimed automatically).
+model ContentItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  title          String
+  /// whatsapp_status | instagram | facebook | whatsapp_broadcast
+  channel        String
+  /// post | story | reel_idea | broadcast
+  format         String       @default("post")
+  body           String       @db.Text
+  mediaUrl       String?      @db.VarChar(1000)
+  productIds     Json?
+  plannedFor     DateTime
+  /// idea | draft | pending_approval | approved | published | cancelled
+  status         String       @default("draft")
+  campaignId     String?
+  approvalId     String?
+  publishedAt    DateTime?
+  publishedBy    String?
+  publishedNote  String?      @db.VarChar(500)
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  revisions      ContentRevision[]
+
+  @@index([organizationId, plannedFor])
+  @@index([organizationId, status])
+}
+
+/// Every version of a content item's text: AI drafts (with the model and token usage), template drafts and manual edits.
+model ContentRevision {
+  id             String       @id @default(cuid())
+  organizationId String
+  contentItemId  String
+  title          String
+  body           String       @db.Text
+  /// ai | template | manual
+  source         String
+  model          String?
+  language       String?
+  inputTokens    Int?
+  outputTokens   Int?
+  /// Sentences the grounding check removed (unverified prices, offers, stock claims).
+  removed        Json?
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contentItem    ContentItem  @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, contentItemId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+/// Collections on an invoice: contact notes, payment promises, disputes, outcomes and approval-gated reminders.
+model CollectionNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  customerId     String
+  /// contact | promise | dispute | outcome | reminder
+  type           String
+  note           String?      @db.Text
+  promisedAmount Decimal?     @db.Decimal(14, 2)
+  promisedDate   DateTime?
+  /// promise: open | kept | broken; dispute: open | resolved; reminder: pending_approval | queued | sent | skipped | cancelled | rejected
+  status         String       @default("open")
+  approvalId     String?
+  followUpId     String?
+  createdBy      String
+  resolvedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, invoiceId, createdAt])
+  @@index([organizationId, type, status])
+}
+
+/// Business expenses recorded by Finance (not an accounting ledger). Voided, never deleted.
+model Expense {
+  id             String       @id @default(cuid())
+  organizationId String
+  spentOn        DateTime
+  /// purchase | freight | salaries | rent | utilities | marketing | other
+  category       String
+  amount         Decimal      @db.Decimal(14, 2)
+  currency       String       @default("INR")
+  vendor         String?
+  reference      String?
+  referenceKey   String?      @db.VarChar(191)
+  notes          String?      @db.Text
+  /// recorded | void
+  status         String       @default("recorded")
+  voidReason     String?      @db.Text
+  recordedBy     String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, spentOn])
+  @@index([organizationId, referenceKey])
+}
+
+/// Extra workspaces a user may switch into (their own organization is User.organizationId). The session is re-issued
+/// for the chosen organization; every API call stays scoped to the organization in the session.
+model OrganizationMembership {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String       @default("admin")
+  createdAt      DateTime     @default(now())
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+/// Manufacturing & quality control: one inspection of a batch / lot, entered by a person (no camera or CV model is
+/// connected). Defects per category; corrective actions are tracked as work tasks.
+model QualityInspection {
+  id             String       @id @default(cuid())
+  organizationId String
+  batchCode      String
+  productName    String
+  line           String?
+  inspector      String?
+  inspectedAt    DateTime
+  inspectedQty   Int
+  rejectedQty    Int          @default(0)
+  /// [{ category: string, count: number }]
+  defects        Json?
+  /// open | resolved
+  status         String       @default("open")
+  severity       String       @default("minor")
+  notes          String?      @db.Text
+  resolution     String?      @db.Text
+  resolvedAt     DateTime?
+  isDemo         Boolean      @default(false)
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, batchCode])
+  @@index([organizationId, inspectedAt])
+  @@index([organizationId, status])
+}

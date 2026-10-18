@@ -19,8 +19,11 @@ import {
 } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Call, FollowUp, LeadDetail, Message } from '@/lib/types';
+import { useIndustry } from '@/lib/industry';
+import { TextileLeadPanel } from '@/components/textile-lead';
 import {
   LEAD_STATUS,
+  leadStatusesFor,
   callBadge,
   dateTime,
   dayLabel,
@@ -49,6 +52,7 @@ export default function LeadPage() {
   const [tab, setTab] = useState<Tab>('journey');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [calling, setCalling] = useState(false);
+  const { industry } = useIndustry();
 
   if (error && !data) {
     return (
@@ -144,7 +148,7 @@ export default function LeadPage() {
               onChange={(e) => act(() => api.patch(`/leads/${lead.id}/status`, { status: e.target.value }), 'Status updated')}
               className="bg-transparent font-semibold text-ink outline-none"
             >
-              {Object.entries(LEAD_STATUS).map(([k, v]) => (
+              {leadStatusesFor(industry, lead.status).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v.label}
                 </option>
@@ -168,7 +172,18 @@ export default function LeadPage() {
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
         <div className="flex flex-col gap-4">
-          <Card>
+          {industry === 'textile' ? <TextileLeadPanel leadId={lead.id} /> : industry && industry !== 'real_estate' ? (
+            <Card>
+              <CardHeader title="What they want" />
+              <div className="px-5 pb-4">
+                <p className="mb-2 text-[13px] text-body">{lead.notes || 'Not recorded yet.'}</p>
+                {lead.campaign && <Field label="Campaign">{lead.campaign}</Field>}
+                <Field label="Language">{languageLabel(c.language)}</Field>
+                <Field label="Call back at">{c.callbackAt ? dateTime(c.callbackAt) : '—'}</Field>
+                <Field label="Last replied">{c.lastInboundAt ? dateTime(c.lastInboundAt) : 'Not yet'}</Field>
+              </div>
+            </Card>
+          ) : <Card>
             <CardHeader title="What they want" />
             <div className="px-5 pb-4">
               <div className="mb-2 flex flex-wrap gap-1.5">
@@ -191,7 +206,7 @@ export default function LeadPage() {
                 </div>
               )}
             </div>
-          </Card>
+          </Card>}
 
           {tasks.length > 0 && (
             <Card className="border-rose-soft">

@@ -18,6 +18,11 @@ import { DashboardModule } from './dashboard/dashboard.module.js';
 import { RestaurantModule } from './restaurant/restaurant.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { HealthModule } from './health/health.module.js';
+import { TextileModule } from './textile/textile.module.js';
+import { GovernanceModule } from './governance/governance.module.js';
+import { AgentsModule } from './agents/agents.module.js';
+import { MarketingModule } from './marketing/marketing.module.js';
+import { IndustryModule } from './industry/industry.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { PrivacyController } from './privacy.controller.js';
@@ -27,6 +32,7 @@ import { PrivacyController } from './privacy.controller.js';
     PrismaModule,
     TenancyModule,
     SettingsModule,
+    GovernanceModule,
     AuthModule,
     HealthModule,
     SarvamModule,
@@ -43,6 +49,10 @@ import { PrivacyController } from './privacy.controller.js';
     WorkersModule,
     DashboardModule,
     RestaurantModule,
+    TextileModule,
+    AgentsModule,
+    MarketingModule,
+    IndustryModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

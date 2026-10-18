@@ -9,6 +9,30 @@ import { nextAllowedCallTime } from '../common/time.js';
  * only make it narrower, never wider.
  */
 export type TenantSettings = {
+  /** Which sales assistant this business uses. real_estate (default) is unchanged; textile switches the AI agent,
+   *  dashboard pages and follow-ups to the textile catalogue / quotation / order flow. */
+  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency';
+  textile: {
+    /** Days after a quotation is sent before the customer gets one reminder (0 = no reminder). */
+    quoteReminderDays: number;
+    /** Hours after an order is marked delivered before the feedback request goes out (0 = no request). */
+    feedbackAfterHours: number;
+    /** Tell the customer on WhatsApp when a salesperson moves their order to dispatched / delivered. */
+    notifyOrderStatus: boolean;
+    /** A quotation discount above this % of the subtotal needs an approver with sales.approve_discount. */
+    maxDiscountPct: number;
+  };
+  /** Finance (textile). Tax is never assumed: an invoice takes the tax % agreed on the quotation, or one entered. */
+  finance: {
+    /** Due date = invoice date + this many days (shown on the invoice; editable per invoice). */
+    paymentTermsDays: number;
+    /** Before an order may be marked ready to dispatch: none | any_verified (some verified payment) | full (invoice paid). */
+    dispatchPaymentRule: 'none' | 'any_verified' | 'full';
+    /** Finance agent drafts an invoice when an order is confirmed (a person still approves and issues it). */
+    autoDraftInvoice: boolean;
+  };
+  /** AI agents: a paused agent takes no new work (its tasks wait as PENDING until resumed). */
+  agents: { paused: Array<'marketing' | 'sales' | 'finance' | 'operations'> };
   speedToLead: {
     /** Call a new Meta lead almost immediately (inside calling hours) instead of after the WhatsApp steps. */
     instantCall: boolean;
@@ -71,6 +95,10 @@ export type TenantSettings = {
 };
 
 export const DEFAULT_SETTINGS: TenantSettings = {
+  industry: 'real_estate',
+  textile: { quoteReminderDays: 2, feedbackAfterHours: 24, notifyOrderStatus: true, maxDiscountPct: 10 },
+  agents: { paused: [] },
+  finance: { paymentTermsDays: 15, dispatchPaymentRule: 'none', autoDraftInvoice: true },
   speedToLead: { instantCall: true, callDelayMinutes: 1 },
   calling: { windowStartHour: 9, windowEndHour: 20, maxAttempts: 3, retryAfterMinutes: 30, nextDayRetryHour: 11 },
   nurture: { missedCallWhatsApp: true, followUpDays: [3, 7] },
@@ -107,6 +135,7 @@ function safeUrl(v: unknown): string | undefined {
  */
 export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_SETTINGS): TenantSettings {
   const i = obj(input);
+  const tx = obj(i.textile);
   const s = obj(i.speedToLead), c = obj(i.calling), n = obj(i.nurture), v = obj(i.visits), t = obj(i.team), h = obj(i.hotLead), r = obj(i.roi);
 
   // Stored inside the deployment's legal window, so what the Settings page shows is what really applies.
@@ -137,6 +166,25 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
     : base.team.alertPhones;
 
   return {
+    industry: (['real_estate', 'textile', 'retail', 'manufacturing', 'agency'] as const).includes(i.industry as never) ? (i.industry as TenantSettings['industry']) : base.industry,
+    textile: {
+      quoteReminderDays: num(tx.quoteReminderDays, base.textile.quoteReminderDays, 0, 30),
+      feedbackAfterHours: num(tx.feedbackAfterHours, base.textile.feedbackAfterHours, 0, 24 * 14),
+      notifyOrderStatus: bool(tx.notifyOrderStatus, base.textile.notifyOrderStatus),
+      maxDiscountPct: num(tx.maxDiscountPct, base.textile.maxDiscountPct ?? 10, 0, 100),
+    },
+    finance: {
+      paymentTermsDays: num(obj(i.finance).paymentTermsDays, base.finance?.paymentTermsDays ?? 15, 0, 365),
+      dispatchPaymentRule: ['none', 'any_verified', 'full'].includes(obj(i.finance).dispatchPaymentRule as string)
+        ? (obj(i.finance).dispatchPaymentRule as TenantSettings['finance']['dispatchPaymentRule'])
+        : (base.finance?.dispatchPaymentRule ?? 'none'),
+      autoDraftInvoice: bool(obj(i.finance).autoDraftInvoice, base.finance?.autoDraftInvoice ?? true),
+    },
+    agents: {
+      paused: Array.isArray(obj(i.agents).paused)
+        ? ([...new Set((obj(i.agents).paused as unknown[]).filter((a) => typeof a === 'string' && ['marketing', 'sales', 'finance', 'operations'].includes(a)))] as TenantSettings['agents']['paused'])
+        : (base.agents?.paused ?? []),
+    },
     speedToLead: {
       instantCall: bool(s.instantCall, base.speedToLead.instantCall),
       callDelayMinutes: num(s.callDelayMinutes, base.speedToLead.callDelayMinutes, 0, 120),

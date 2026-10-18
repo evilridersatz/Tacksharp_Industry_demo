@@ -40,7 +40,12 @@ export type CallOutcome =
   | 'wrong_number'
   | 'connected'
   /** Restaurant: the customer confirmed an order on the call (created by the order service, not the model). */
-  | 'order_placed';
+  | 'order_placed'
+
+  // textile
+  | 'requested_catalogue'
+  | 'requested_quotation'
+  | 'order_discussion';
 
 export type CustomerMemoryUpdate = {
   name?: string;

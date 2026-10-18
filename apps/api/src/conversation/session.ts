@@ -100,6 +100,21 @@ export type Session = {
   requirementChecked?: boolean;
   /** We said nothing matches and asked to change area / budget: the next "yes" gets real options, not the read-back. */
   awaitingAdjust?: boolean;
+  /** We asked "cancel this / these visit(s)?": only an explicit yes in the very next turn cancels exactly these ids. */
+  pendingCancel?: { ids: string[]; askedTurn: number };
+  /** Several visits booked and the customer did not say which one to cancel: the ids we offered. */
+  cancelChoice?: string[];
+  /** Textile assistant state (industry = textile): what the buyer asked for and the question we are waiting on. */
+  textile?: {
+    /** The customer's own words that last told us what they want (quoted on the quotation request). */
+    enquiry?: string;
+    facts: { fabric?: string; product?: string; colour?: string; quantity?: number; unit?: string; targetPrice?: number; destination?: string; buyerType?: string };
+    productIds?: string[];
+    /** We asked "shall I ask our team for a quotation?" on this turn. */
+    offeredQuoteTurn?: number;
+    /** We asked "confirm quotation Q-…?" on this turn. */
+    pendingAccept?: { quotationId: string; askedTurn: number };
+  };
   /** We asked "when can we call?" after a "no" to "can we talk now?". */
   /** Properties the customer turned down in this conversation ("அது வேண்டாம்"): never offered again. */
   rejectedPropertyIds?: string[];

@@ -322,11 +322,12 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const customer = await this.prisma.customer.findFirst({ where: { id: params.customerId, organizationId } });
     if (!customer?.phone) return { started: false, reason: 'customer_has_no_phone' };
     if (customer.doNotContact) return { started: false, reason: 'do_not_contact' };
+    // STOP (any business type): never call a customer who opted out.
+    if (customer.optedOutAt) return { started: false, reason: 'opted_out' };
     const vertical = await this.tenancy.vertical(organizationId);
     if (vertical === 'restaurant') {
       // Restaurant customers: the same consent and dry-run rules as order follow-ups. A dashboard or script
       // "call now" never rings a number that is not explicitly approved for live testing.
-      if (customer.optedOutAt) return { started: false, reason: 'opted_out' };
       if (!customer.callingConsent) return { started: false, reason: 'no_calling_consent' };
       const gate = liveGate(followUpConfig(), customer);
       if (!gate.live) {

@@ -14,7 +14,9 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { useApi } from '@/lib/api';
-import { useMe } from '@/lib/restaurant';
+import { useWorkspace } from '@/lib/industry';
+import { industryDef } from '@/lib/industries';
+import { IndustryDashboard } from '@/components/industry-dashboard';
 import { RestaurantOverview } from '@/components/restaurant/overview';
 import type { ActivityEvent, FollowUp, Summary } from '@/lib/types';
 import {
@@ -41,10 +43,16 @@ const OUTCOME_COLORS: Record<string, string> = {
   slate: '#94a3b8',
 };
 
+/**
+ * Overview by industry: the GR Chicken restaurant overview and the real-estate dashboard stay exactly as they were;
+ * textile, retail, manufacturing and agency use the industry dashboard (GET /industry/dashboard).
+ */
 export default function DashboardPage() {
-  const me = useMe();
-  if (!me) return <Skeleton className="h-[480px] rounded-[18px]" />;
-  return me.vertical === 'restaurant' ? <RestaurantOverview /> : <RealEstateDashboard />;
+  const { workspace } = useWorkspace();
+  if (!workspace) return <Skeleton className="h-[480px] rounded-[18px]" />;
+  if (workspace.industry === 'restaurant') return <RestaurantOverview />;
+  if (workspace.industry === 'real_estate') return <RealEstateDashboard />;
+  return <IndustryDashboard title={`${industryDef(workspace.industry).short} overview`} />;
 }
 
 function RealEstateDashboard() {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { queueRedis, whatsappQueue } from '../queues/queues.js';
 import { customerLockKey, withLock } from '../common/redis-lock.js';
@@ -9,6 +9,8 @@ import { log } from '../common/logger.js';
 import { OrderFollowUpService } from '../restaurant/order-followup.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
+import { MarketingService } from '../marketing/marketing.service.js';
+import { applyOptKeyword, optKeyword } from '../consent/opt-out.js';
 
 type IncomingQueue = { add(name: string, data: unknown, opts: { jobId: string }): Promise<unknown> };
 
@@ -47,6 +49,7 @@ export class WhatsAppService {
     private readonly orderFollowUps: OrderFollowUpService,
     private readonly conversations: ConversationsService,
     private readonly inbound: InboundMessageService,
+    @Optional() private readonly marketing?: MarketingService,
   ) {}
 
   /** The BullMQ queue in production; tests swap in a fake. */
@@ -82,6 +85,7 @@ export class WhatsAppService {
           const error = st.errors?.map((e) => `${e.code ?? ''} ${e.title ?? e.message ?? ''}`.trim()).join('; ');
           await this.orderFollowUps.applyDeliveryStatus(organizationId, st.id, st.status, error);
           await this.conversations.applyDeliveryStatus(organizationId, st.id, st.status, error);
+          await this.marketing?.applyDeliveryStatus(organizationId, st.id, st.status, error).catch((e) => log.warn('marketing.receipt_failed', { messageId: st.id, error: e instanceof Error ? e.message : String(e) }));
           if (st.status === 'failed') log.warn('whatsapp.delivery_failed', { messageId: st.id, error });
         }
 
@@ -112,6 +116,12 @@ export class WhatsAppService {
           }
           try {
             await this.markInbound(organizationId, from, contactName);
+            // STOP / START (textile and real estate) and campaign reply attribution; never block the reply.
+            // Applied here, in the fast path, so the opt-out holds even if the AI queue is slow or down.
+            // STOP only: START is handled by the worker (it must still see the customer as opted out to confirm it).
+            await applyOptKeyword(this.prisma, organizationId, from, text, { only: 'stop' }).catch((e) => log.error('consent.opt_keyword_failed', { error: e instanceof Error ? e.message : String(e) }));
+            // A STOP / START is not engagement: it is never credited to a campaign.
+            if (!optKeyword(text)) await this.marketing?.recordReply(organizationId, from).catch((e) => log.warn('marketing.reply_attribution_failed', { error: e instanceof Error ? e.message : String(e) }));
             await this.queue.add(
               'incoming-message',
               {

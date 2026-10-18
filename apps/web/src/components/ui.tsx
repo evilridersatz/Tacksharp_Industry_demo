@@ -114,7 +114,7 @@ export function Button({ variant = 'secondary', busy, className, children, href,
 /** Pill-style switch used for Week / Month / Year and Board / List in the design. */
 export function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: Array<{ value: T; label: ReactNode }>; onChange: (v: T) => void; label: string }) {
   return (
-    <div role="tablist" aria-label={label} className="inline-flex rounded-[10px] bg-slate-100 p-0.5">
+    <div role="tablist" aria-label={label} className="inline-flex max-w-full overflow-x-auto rounded-[10px] bg-slate-100 p-0.5">
       {options.map((o) => (
         <button
           key={o.value}
@@ -122,7 +122,7 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
           aria-selected={value === o.value}
           onClick={() => onChange(o.value)}
           className={cx(
-            'inline-flex h-7 items-center gap-1.5 rounded-[8px] px-3 text-[12.5px] font-semibold',
+            'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] px-3 text-[12.5px] font-semibold whitespace-nowrap sm:h-7',
             value === o.value ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink',
           )}
         >

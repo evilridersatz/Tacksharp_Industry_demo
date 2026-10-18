@@ -17,7 +17,7 @@ export interface CreateFollowUpInput {
   action?: 'message' | 'call' | 'handoff' | 'callback';
   message?: string;
   scheduledAt: Date | string;
-  source?: 'sequence' | 'callback' | 'retry' | 'task' | 'manual' | 'visit' | 'alert';
+  source?: 'sequence' | 'callback' | 'retry' | 'task' | 'manual' | 'visit' | 'alert' | 'quote' | 'order' | 'feedback' | 'invoice' | 'payment';
 }
 
 /**

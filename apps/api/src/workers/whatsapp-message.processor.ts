@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { applyOptKeyword, optReply } from '../consent/opt-out.js';
 import type { Job } from 'bullmq';
 import { AiService } from '../ai/ai.service.js';
 import { SarvamService } from '../sarvam/sarvam.service.js';
@@ -25,6 +27,7 @@ export class WhatsAppMessageProcessor {
     private readonly leads: LeadsService,
     private readonly conversations: ConversationsService,
     private readonly inbound: InboundMessageService,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
   process(job: Job<WhatsAppMessageJobData>) {
@@ -84,6 +87,15 @@ export class WhatsAppMessageProcessor {
           await this.inbound.markSkipped(row.id, `unsupported message type: ${data.messageType}`);
           return { skipped: data.messageType };
         }
+        // STOP / START (real estate and textile): record it and confirm. The sales assistant never answers a STOP.
+        // GR Chicken returns null here and keeps its own STOP flow inside the ordering engine.
+        if (!reply && text && this.prisma) {
+          const kind = await applyOptKeyword(this.prisma, data.organizationId, data.from, text);
+          if (kind) {
+            reply = await this.optReplyFor(data, kind);
+            conversationId = await this.recordOptExchange(data, text, reply);
+          }
+        }
         if (!reply) {
           result = await this.ai.generateResponse({
             organizationId: data.organizationId,
@@ -127,6 +139,28 @@ export class WhatsAppMessageProcessor {
    * in flight; the outcome is written straight after. "accepted" means Meta took it — delivered / read only come
    * from Meta's receipts.
    */
+  private async optReplyFor(data: WhatsAppMessageJobData, kind: 'stop' | 'start') {
+    const [org, cu] = await Promise.all([
+      this.prisma!.organization.findUnique({ where: { id: data.organizationId }, select: { name: true } }),
+      this.prisma!.customer.findFirst({ where: { organizationId: data.organizationId, phone: data.from }, select: { language: true } }),
+    ]);
+    return optReply(kind, org?.name ?? 'us', cu?.language);
+  }
+
+  /** The STOP / START message and our confirmation appear in the conversation like any other exchange. */
+  private async recordOptExchange(data: WhatsAppMessageJobData, text: string, reply: string) {
+    try {
+      const cu = await this.prisma!.customer.findFirst({ where: { organizationId: data.organizationId, phone: data.from }, select: { id: true } });
+      const conv = await this.conversations.getOrCreateConversation({ organizationId: data.organizationId, channel: 'whatsapp', externalId: data.from, customerId: cu?.id });
+      await this.conversations.addMessage({ organizationId: data.organizationId, conversationId: conv.id, role: 'user', content: text, externalId: data.messageId });
+      await this.conversations.addMessage({ organizationId: data.organizationId, conversationId: conv.id, role: 'assistant', content: reply, metadata: { optOut: true } as never });
+      return conv.id;
+    } catch (error) {
+      log.warn('whatsapp.opt_exchange_record_failed', { messageId: data.messageId, error: describeError(error) });
+      return undefined;
+    }
+  }
+
   private async sendReply(inboundId: string, data: WhatsAppMessageJobData, text: string, conversationId: string | undefined, finalAttempt: boolean) {
     if (!(await this.inbound.markSending(inboundId))) {
       log.warn('whatsapp.send_already_claimed', { messageId: data.messageId, inboundId });

@@ -20,6 +20,13 @@ export const LEAD_STATUSES = {
   NOT_INTERESTED: 'not_interested',
   WON: 'won',
   LOST: 'lost',
+  // Textile pipeline (industry = textile)
+  CATALOGUE_SHARED: 'catalogue_shared',
+  QUOTATION_REQUESTED: 'quotation_requested',
+  QUOTATION_SENT: 'quotation_sent',
+  NEGOTIATION: 'negotiation',
+  ORDER_CONFIRMED: 'order_confirmed',
+  REPEAT_CUSTOMER: 'repeat_customer',
 } as const;
 
 export type LeadStatus = (typeof LEAD_STATUSES)[keyof typeof LEAD_STATUSES];
@@ -28,12 +35,20 @@ export type LeadStatus = (typeof LEAD_STATUSES)[keyof typeof LEAD_STATUSES];
 const FUNNEL: LeadStatus[] = ['new', 'contacted', 'qualified', 'property_interested', 'site_visit', 'won'];
 const CLOSED: LeadStatus[] = ['won', 'lost', 'not_interested'];
 
+/** Textile: New -> Contacted -> Qualified -> Catalogue shared -> Quotation requested -> Quotation sent -> Negotiation ->
+ *  Order confirmed -> Repeat customer. Forward-only too; real-estate leads never use these stages. */
+const TEXTILE_FUNNEL: LeadStatus[] = ['new', 'contacted', 'qualified', 'catalogue_shared', 'quotation_requested', 'quotation_sent', 'negotiation', 'order_confirmed', 'repeat_customer'];
+
 function rank(status: string) {
-  return FUNNEL.indexOf(status as LeadStatus);
+  const r = FUNNEL.indexOf(status as LeadStatus);
+  return r >= 0 ? r : TEXTILE_FUNNEL.indexOf(status as LeadStatus);
 }
 
 export function nextLeadStatus(current: string, next: LeadStatus): string {
   if (current === 'won' || current === 'lost') return current;
+  // Both on the textile funnel: forward only, by textile order.
+  const tc = TEXTILE_FUNNEL.indexOf(current as LeadStatus), tn = TEXTILE_FUNNEL.indexOf(next);
+  if (tc >= 0 && tn >= 0 && !(FUNNEL.includes(current as LeadStatus) && FUNNEL.includes(next))) return tn > tc ? next : current;
   const nextIsFunnel = rank(next) >= 0;
   const currentIsFunnel = rank(current) >= 0;
 

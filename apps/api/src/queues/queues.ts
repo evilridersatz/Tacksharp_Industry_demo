@@ -61,9 +61,13 @@ export type WhatsAppMessageJobData = {
 };
 
 export type OrderFollowUpJobData = { followUpId: string };
+export type AgentTaskJobData = { organizationId: string; taskId: string };
+export type CampaignJobData = { campaignId: string; recipientId: string };
 
 export const FOLLOW_UP_QUEUE = 'follow-up';
 export const ORDER_FOLLOW_UP_QUEUE = 'restaurant-follow-up';
+export const AGENT_QUEUE = 'agent-task';
+export const MARKETING_QUEUE = 'marketing-campaign';
 export const WHATSAPP_QUEUE = 'whatsapp-message';
 
 export const followUpQueue = new Queue<FollowUpJobData>(FOLLOW_UP_QUEUE, {
@@ -99,6 +103,26 @@ export const orderFollowUpQueue = new Queue<OrderFollowUpJobData>(ORDER_FOLLOW_U
     attempts: 5,
     backoff: { type: 'exponential', delay: 20_000, jitter: 0.3 },
     removeOnComplete: { age: 7 * 24 * 3600, count: 5000 },
+    removeOnFail: { age: 14 * 24 * 3600 },
+  },
+});
+
+/** AI agent tasks. The task row is the source of truth (status, attempts); a job only says "run this task now". */
+export const agentQueue = new Queue<AgentTaskJobData>(AGENT_QUEUE, {
+  connection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: 1000, removeOnFail: { age: 14 * 24 * 3600 } },
+});
+
+/**
+ * Marketing campaign messages: one job per approved recipient (jobId = campaign + recipient, so a re-add never sends
+ * twice). The recipient row is the source of truth; the worker re-checks consent and the campaign state before sending.
+ */
+export const marketingQueue = new Queue<CampaignJobData>(MARKETING_QUEUE, {
+  connection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 30_000, jitter: 0.3 },
+    removeOnComplete: { age: 7 * 24 * 3600, count: 20000 },
     removeOnFail: { age: 14 * 24 * 3600 },
   },
 });
