@@ -1,0 +1,9 @@
+{
+  "name": "@tacksharp/monitoring-agent",
+  "version": "0.9.0",
+  "private": true,
+  "type": "module",
+  "description": "Tacksharp VisionOps reference local monitoring agent (no dependencies). Checks only configured devices, queues offline, syncs on reconnect.",
+  "bin": { "visionops-agent": "agent.mjs" },
+  "scripts": { "start": "node agent.mjs --config ./agent.config.json", "once": "node agent.mjs --config ./agent.config.json --once" }
+}

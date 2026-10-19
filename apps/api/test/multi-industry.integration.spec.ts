@@ -191,6 +191,13 @@ describe.skipIf(!enabled)('Multi-industry platform (integration)', () => {
     expect(first.actions?.handoff).toBe(true);
     const second = await send('Is the blue kurta available in size M?');
     expect(second.response).not.toMatch(/available|in stock|price|₹/i);
+    // Later messages in the thread are noted for the team: never a second greeting, and never a real-estate question
+    // (the repeat guard once swapped a repeated line for "Which locality would you prefer?").
+    for (const m of ['I want to talk to someone', 'Budget around 50,000, Chennai', 'ok']) {
+      const r = await send(m);
+      expect(r.response).not.toMatch(/locality|area|budget|BHK|visit|Thank you for contacting/i);
+      expect(r.response).toMatch(/team/i);
+    }
     const tasks = await prisma.followUp.findMany({ where: { organizationId: RETAIL, customerId: customer.id, channel: 'human' } });
     expect(tasks).toHaveLength(1);
     const after = await prisma.lead.findUnique({ where: { id: lead.id } });

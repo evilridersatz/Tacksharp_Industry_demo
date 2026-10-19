@@ -24,6 +24,8 @@ export function createRateLimiter(now: () => number = Date.now) {
       return { name: 'webhook', limit: config.rateLimit.webhookPerMinute, windowMs: 60_000 };
     }
     // Website → offer API (key-protected, still limited per IP).
+    // VisionOps site agents: token-authenticated heartbeats / event batches (an offline queue may flush in bursts).
+    if (path.startsWith('/monitoring/agent/')) return { name: 'monitoring_agent', limit: 120, windowMs: 60_000 };
     if (path.startsWith('/public/')) return { name: 'public_api', limit: config.rateLimit.publicApiPerMinute, windowMs: 60_000 };
     if (path === '/health') return { name: 'health', limit: 120, windowMs: 60_000 };
     return { name: 'api', limit: config.rateLimit.apiPerMinute, windowMs: 60_000 };

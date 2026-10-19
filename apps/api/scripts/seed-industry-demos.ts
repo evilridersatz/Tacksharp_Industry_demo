@@ -54,6 +54,7 @@ export const DEMO_ORGS = {
   food: { id: 'org_demo_food', name: 'Demo · Spice Route Kitchen', vertical: 'real_estate', industry: 'food', ws: 7 },
   hotel: { id: 'org_demo_hotel', name: 'Demo · Marina Bay Residency', vertical: 'real_estate', industry: 'hotel', ws: 8 },
   hospital: { id: 'org_demo_hospital', name: 'Demo · Sunrise Multispeciality Hospital', vertical: 'real_estate', industry: 'hospital', ws: 9 },
+  cctv: { id: 'org_demo_cctv', name: 'Demo · SecureEye CCTV Services', vertical: 'real_estate', industry: 'cctv', ws: 0 },
 } as const;
 type Key = keyof typeof DEMO_ORGS;
 
@@ -108,7 +109,7 @@ async function reset(orgId: string) {
   if (!exists) return;
   if (!exists.isDemo) throw new Error(`${orgId} is not a demo workspace`);
   const where = { organizationId: orgId };
-  for (const model of ['agentSession', 'reservation', 'roomRate', 'room', 'roomType', 'insuranceCase', 'appointment', 'doctor', 'department', 'payment', 'invoice', 'feedback', 'salesOrder', 'quotation', 'orderFollowUp', 'orderEvent', 'offerClaim', 'order', 'siteVisit', 'call', 'inventoryMovement', 'stockMovement', 'inventoryBalance', 'menuItem', 'menuCategory', 'outlet', 'campaignRecipient', 'marketingCampaign', 'workTask', 'auditEvent', 'followUp', 'message', 'conversation', 'lead', 'qualityInspection', 'textileProduct', 'property']) {
+  for (const model of ['incidentTimelineEvent', 'notificationAttempt', 'downtimeIncident', 'healthEvent', 'agentHeartbeat', 'monitoringAgent', 'cameraDevice', 'recorderDevice', 'siteTechnician', 'serviceContract', 'siteUptimeSnapshot', 'monitoringSite', 'monitoringCustomer', 'agentSession', 'reservation', 'roomRate', 'room', 'roomType', 'insuranceCase', 'appointment', 'doctor', 'department', 'payment', 'invoice', 'feedback', 'salesOrder', 'quotation', 'orderFollowUp', 'orderEvent', 'offerClaim', 'order', 'siteVisit', 'call', 'inventoryMovement', 'stockMovement', 'inventoryBalance', 'menuItem', 'menuCategory', 'outlet', 'campaignRecipient', 'marketingCampaign', 'workTask', 'auditEvent', 'followUp', 'message', 'conversation', 'lead', 'qualityInspection', 'textileProduct', 'property']) {
     await (prisma as unknown as Record<string, { deleteMany: (a: unknown) => Promise<unknown> }>)[model].deleteMany({ where });
   }
   await prisma.customer.deleteMany({ where });
@@ -693,6 +694,264 @@ async function agencyWorkspace() {
   return orgId;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// CCTV monitoring (Tacksharp VisionOps): a CCTV installer / AMC provider with 3 customers, 5 sites, 50 cameras,
+// 5 NVR / DVR. Every record is synthetic; WhatsApp previews are SIMULATED; agents are a static snapshot (the sweep
+// never ages seeded demo agents). No camera credentials or RTSP URLs exist anywhere.
+// ---------------------------------------------------------------------------------------------
+async function cctvWorkspace() {
+  const r = rng(1010);
+  const o = await org('cctv', {
+    monitoring: {
+      failureThreshold: 3, debounceSeconds: 180, restoreSuccesses: 3, staleAfterMinutes: 10, correlationWindowMinutes: 30, ackDeadlineMinutes: 15, escalationStepMinutes: 30,
+      quietHours: { enabled: true, start: '22:00', end: '07:00' }, notifyCustomerOnResolution: true, voiceEscalation: false, alertTemplate: '', whatsappCostInr: 0.12,
+    },
+  });
+  const ago = (min: number) => new Date(NOW - min * 60_000);
+  const custs = [
+    { key: 'wh', name: 'Chennai Warehousing Pvt Ltd', industry: 'warehouse', region: 'Chennai West', contactName: 'Mr. Venkatesh', notify: true },
+    { key: 'fm', name: 'FreshMart Supermarkets', industry: 'retail', region: 'Chennai Central', contactName: 'Ms. Anitha', notify: true },
+    { key: 'lt', name: 'Lotus Multispeciality Clinic', industry: 'hospital', region: 'Chennai South', contactName: 'Dr. Ramesh', notify: false },
+  ];
+  const C: Record<string, string> = {};
+  for (const [i, c] of custs.entries()) C[c.key] = (await put('monitoringCustomer', o, sid(o, 'cust', c.key), { organizationId: o, name: c.name, industry: c.industry, region: c.region, contactName: c.contactName, contactPhone: phoneFor(0, 900 + i), notifyOnResolution: c.notify, isDemo: true })).id;
+
+  // site, customer, cameras, recorder vendor / method / capabilities, mode
+  const SITES = [
+    { k: 1, code: 'CHN-WH-01', name: 'Chennai Warehouse (Ambattur)', cust: 'wh', city: 'Chennai', region: 'Chennai West', lat: 13.1143, lng: 80.1548, cams: [9, 20], vendor: 'Hikvision', model: 'DS-7616NI-K2', kind: 'nvr', method: 'vendor_api', caps: { reachability: true, recording: true, storage: true, stream: true }, mode: 'local_agent' },
+    { k: 2, code: 'CHN-WH-02', name: 'Sriperumbudur Godown', cust: 'wh', city: 'Sriperumbudur', region: 'Chennai West', lat: 12.9675, lng: 79.9419, cams: [1, 8], vendor: 'CP Plus', model: 'CP-UVR-0801E1', kind: 'dvr', method: 'agent_tcp', caps: { reachability: true, recording: false, storage: false, stream: false }, mode: 'local_agent' },
+    { k: 3, code: 'FM-ANN-01', name: 'FreshMart Anna Nagar', cust: 'fm', city: 'Chennai', region: 'Chennai Central', lat: 13.085, lng: 80.2101, cams: [21, 30], vendor: 'Dahua', model: 'DHI-NVR4210', kind: 'nvr', method: 'agent_onvif', caps: { reachability: true, recording: false, storage: true, stream: true }, mode: 'local_agent' },
+    { k: 4, code: 'FM-VEL-02', name: 'FreshMart Velachery', cust: 'fm', city: 'Chennai', region: 'Chennai South', lat: 12.9815, lng: 80.218, cams: [31, 40], vendor: 'Hikvision', model: 'DS-7608NI-K1', kind: 'nvr', method: 'vendor_api', caps: { reachability: true, recording: true, storage: true, stream: true }, mode: 'local_agent' },
+    { k: 5, code: 'LOT-OMR-01', name: 'Lotus Clinic OMR', cust: 'lt', city: 'Chennai', region: 'Chennai South', lat: 12.9121, lng: 80.2279, cams: [41, 50], vendor: 'Uniview', model: 'NVR301-08S3', kind: 'nvr', method: 'cloud_tcp', caps: { reachability: true, recording: false, storage: false, stream: false }, mode: 'cloud' },
+  ] as const;
+  const LOC = ['Main gate', 'Loading bay', 'Dock door', 'Billing counter', 'Cash room', 'Aisle', 'Storeroom', 'Parking', 'Reception', 'Lift lobby', 'Rear exit', 'Corridor'];
+  const site: Record<number, { id: string; name: string; code: string; nvr: string; nvrCode: string; cams: Array<{ id: string; code: string; critical: boolean }>; customerId: string }> = {};
+  for (const s0 of SITES) {
+    const st = await put('monitoringSite', o, sid(o, 'site', s0.k), { organizationId: o, customerId: C[s0.cust], code: s0.code, name: s0.name, address: `DEMO address, ${s0.city}`, city: s0.city, region: s0.region, latitude: new Prisma.Decimal(s0.lat), longitude: new Prisma.Decimal(s0.lng), monitoringMode: s0.mode, internetStatus: s0.k === 2 ? 'suspected_outage' : s0.k === 4 ? 'backup_link' : 'online', lastHealthyCheckAt: s0.k === 2 ? ago(47) : ago(1), isDemo: true });
+    const nvrStatus = s0.k === 3 ? 'offline' : s0.k === 2 ? 'unknown' : 'online';
+    const nvr = await put('recorderDevice', o, sid(o, 'nvr', s0.k), {
+      organizationId: o, siteId: st.id, code: `NVR-0${s0.k}`, name: `${s0.vendor} ${s0.kind.toUpperCase()}`, kind: s0.kind, manufacturer: s0.vendor, model: s0.model, channels: 16, networkAddress: s0.mode === 'cloud' ? `203.0.113.${40 + s0.k}:8000` : `192.168.${s0.k}.10`, monitoringMethod: s0.method,
+      capabilities: { reachability: true, storage: s0.caps.storage, recording: s0.caps.recording }, status: nvrStatus, storageStatus: s0.k === 4 ? 'warning' : s0.caps.storage ? 'ok' : 'unsupported', storageDetail: s0.k === 4 ? 'DEMO: HDD 2 reports 3 reallocated sectors; 92% used' : null,
+      recordingStatus: s0.caps.recording ? 'verified' : 'unsupported', consecutiveFailures: s0.k === 3 ? 9 : 0, consecutiveSuccesses: s0.k === 3 || s0.k === 2 ? 0 : 40, failingSince: s0.k === 3 ? ago(52) : null, lastSeenAt: s0.k === 3 ? ago(52) : s0.k === 2 ? ago(47) : ago(1), lastCheckAt: s0.k === 2 ? ago(47) : ago(1), isDemo: true,
+    });
+    const cams = [];
+    for (let n = s0.cams[0]; n <= s0.cams[1]; n++) {
+      const code = `CAM-${String(n).padStart(3, '0')}`;
+      const i = n - s0.cams[0];
+      const critical = i === 0 || LOC[i % LOC.length] === 'Cash room' || LOC[i % LOC.length] === 'Billing counter';
+      // Current state per scenario
+      let status = 'online', streamStatus = s0.caps.stream ? 'ok' : 'unsupported', recordingStatus = s0.caps.recording ? 'verified' : 'unsupported', failingSince: Date | null = null, lastSeenAt = ago(1), fails = 0, okRun = 30;
+      if (s0.k === 3) { status = 'offline'; failingSince = ago(52); lastSeenAt = ago(52); fails = 9; okRun = 0; streamStatus = 'unavailable'; }
+      if (s0.k === 2) { status = 'unknown'; lastSeenAt = ago(47); okRun = 0; }
+      if (code === 'CAM-014') { status = 'offline'; failingSince = ago(38); lastSeenAt = ago(38); fails = 12; okRun = 0; streamStatus = 'unavailable'; }
+      if (code === 'CAM-017') { status = 'online'; okRun = 2; }
+      if (code === 'CAM-034') { status = 'degraded'; fails = 1; okRun = 0; }
+      if (code === 'CAM-036') { recordingStatus = 'failing'; }
+      const cam = await put('cameraDevice', o, sid(o, 'cam', n), {
+        organizationId: o, siteId: st.id, recorderId: nvr.id, code, name: `${LOC[i % LOC.length]} ${Math.floor(i / LOC.length) + 1}`, location: LOC[i % LOC.length], manufacturer: s0.vendor, model: s0.vendor === 'Hikvision' ? 'DS-2CD1043G2' : s0.vendor === 'CP Plus' ? 'CP-USC-TA24L2' : s0.vendor === 'Dahua' ? 'IPC-HFW1230S' : 'IPC2124LB',
+        channelNo: i + 1, networkAddress: s0.mode === 'cloud' ? `203.0.113.${100 + n}:554` : `192.168.${s0.k}.${20 + i}`, monitoringMethod: s0.method, capabilities: s0.caps, critical,
+        status, streamStatus, recordingStatus, consecutiveFailures: fails, consecutiveSuccesses: okRun, failingSince, lastSeenAt, lastCheckAt: s0.k === 2 ? ago(47) : ago(1), lastRecordingVerifiedAt: s0.caps.recording ? (code === 'CAM-036' ? ago(95) : ago(4)) : null, isDemo: true,
+      });
+      cams.push({ id: cam.id, code, critical });
+    }
+    site[s0.k] = { id: st.id, name: s0.name, code: s0.code, nvr: nvr.id, nvrCode: `NVR-0${s0.k}`, cams, customerId: C[s0.cust] };
+  }
+
+  // Technicians (synthetic numbers), supervisor and manager for escalations.
+  const TECH = [
+    { key: 'ravi', name: 'Ravi (technician)', site: 1, role: 'technician', onCall: false },
+    { key: 'mani', name: 'Mani (technician)', site: 2, role: 'technician', onCall: false },
+    { key: 'arun', name: 'Arun (technician)', site: 3, role: 'technician', onCall: true },
+    { key: 'bala', name: 'Bala (technician)', site: 4, role: 'technician', onCall: false },
+    { key: 'senthil', name: 'Senthil (technician)', site: 5, role: 'technician', onCall: false },
+    { key: 'dinesh', name: 'Dinesh (on-call technician)', site: 0, role: 'technician', onCall: true },
+    { key: 'priya', name: 'Priya (supervisor)', site: 0, role: 'supervisor', onCall: true },
+    { key: 'kumar', name: 'Kumar (service manager)', site: 0, role: 'manager', onCall: true },
+  ];
+  const T: Record<string, { id: string; name: string; phone: string }> = {};
+  for (const [i, t] of TECH.entries()) {
+    const row = await put('siteTechnician', o, sid(o, 'tech', t.key), { organizationId: o, siteId: t.site ? site[t.site].id : null, name: t.name, phone: phoneFor(0, 800 + i), role: t.role, onCall: t.onCall, shift: { days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '19:00' }, whatsappConsent: true, active: true, isDemo: true });
+    T[t.key] = { id: row.id, name: t.name, phone: phoneFor(0, 800 + i) };
+  }
+
+  // Service / AMC contracts (one expiring soon).
+  const today = TODAY;
+  await put('serviceContract', o, sid(o, 'amc', 'wh'), { organizationId: o, customerId: C.wh, reference: 'DEMO-AMC-2026-011', kind: 'amc', planCode: 'pro', startDate: dayOnly(addDays(today, -200)), endDate: dayOnly(addDays(today, 165)), slaHours: 8, responseMinutes: 60, cameraLimit: 25, monthlyFee: dec(20 * 45), notes: 'DEMO contract: quarterly preventive maintenance.', isDemo: true });
+  await put('serviceContract', o, sid(o, 'amc', 'fm'), { organizationId: o, customerId: C.fm, reference: 'DEMO-AMC-2026-014', kind: 'amc', planCode: 'sla', startDate: dayOnly(addDays(today, -340)), endDate: dayOnly(addDays(today, 20)), slaHours: 4, responseMinutes: 30, cameraLimit: 20, monthlyFee: dec(20 * 60), notes: 'DEMO contract: renewal due this month.', isDemo: true });
+  await put('serviceContract', o, sid(o, 'amc', 'lt'), { organizationId: o, customerId: C.lt, reference: 'DEMO-MON-2026-003', kind: 'monitoring_only', planCode: 'basic', startDate: dayOnly(addDays(today, -60)), endDate: dayOnly(addDays(today, 305)), slaHours: 24, responseMinutes: 120, cameraLimit: 10, monthlyFee: dec(10 * 30), isDemo: true });
+  await put('serviceContract', o, sid(o, 'amc', 'fm-vel'), { organizationId: o, customerId: C.fm, siteId: site[4].id, reference: 'DEMO-WAR-2026-007', kind: 'warranty', planCode: 'sla', startDate: dayOnly(addDays(today, -90)), endDate: dayOnly(addDays(today, 275)), slaHours: 4, responseMinutes: 30, notes: 'DEMO: installer warranty for the Velachery NVR upgrade.', isDemo: true });
+
+  // Local agents (static snapshot) + heartbeats.
+  const AG = [
+    { k: 1, backup: false, last: 1, link: 'primary', status: 'online' },
+    { k: 2, backup: false, last: 47, link: 'primary', status: 'offline' },
+    { k: 3, backup: true, last: 1, link: 'primary', status: 'online' },
+    { k: 4, backup: true, last: 1, link: 'backup_4g', status: 'online' },
+  ];
+  const agent: Record<number, string> = {};
+  for (const a of AG) {
+    const row = await put('monitoringAgent', o, sid(o, 'agent', a.k), { organizationId: o, siteId: site[a.k].id, code: `AGT-0${a.k}`, name: `${site[a.k].name} agent (demo)`, tokenHash: 'demo-no-token', tokenPrefix: `vo_demo0${a.k}cctv`, status: a.status, version: '0.9.0-demo', hostLabel: a.k === 4 ? 'NUC + 4G dongle (demo)' : 'Site PC (demo)', hasBackupLink: a.backup, lastHeartbeatAt: ago(a.last), lastEventAt: ago(a.last), lastSyncAt: ago(a.last), queuedEvents: 0, isDemo: true });
+    agent[a.k] = row.id;
+    for (let h = 0; h < 12; h++) await put('agentHeartbeat', o, sid(o, `hb${a.k}`, h), { organizationId: o, agentId: row.id, sentAt: ago(a.last + h * 5), receivedAt: ago(a.last + h * 5), queueDepth: 0, version: '0.9.0-demo', uptimeSec: 86_400 * 9 - h * 300, link: a.link, isDemo: true });
+  }
+
+  // Health events: recent checks for every camera (+ the failure runs behind current incidents).
+  let ev = 0;
+  const event = (siteK: number, deviceType: string, deviceId: string | null, check: string, ok: boolean, at: Date, extra: Record<string, unknown> = {}) =>
+    put('healthEvent', o, sid(o, 'ev', ++ev), { organizationId: o, siteId: site[siteK].id, agentId: agent[siteK] ?? null, deviceType, deviceId, check, ok, observedAt: at, receivedAt: (extra.receivedAt as Date) ?? at, latencyMs: ok ? r.int(3, 40) : null, detail: (extra.detail as string) ?? (ok ? null : 'DEMO: no response (timeout)'), source: siteK === 5 ? 'cloud' : 'demo', externalId: `demo:${ev}`, replayed: Boolean(extra.replayed), isDemo: true });
+  for (const k of [1, 3, 4, 5]) for (const c of site[k].cams) for (const m of [1, 6, 11]) {
+    const down = k === 3 || c.code === 'CAM-014';
+    if (!down) await event(k, 'camera', c.id, 'reachability', !(c.code === 'CAM-034' && m === 1), ago(m));
+  }
+  for (const m of [38, 37, 36, 30, 20, 10, 1]) await event(1, 'camera', site[1].cams.find((c) => c.code === 'CAM-014')!.id, 'reachability', false, ago(m));
+  for (const m of [52, 51, 50, 40, 20, 1]) await event(3, 'recorder', site[3].nvr, 'reachability', false, ago(m));
+  for (const m of [92, 91, 90, 60, 30]) await event(4, 'camera', site[4].cams.find((c) => c.code === 'CAM-036')!.id, 'recording', false, ago(m), { detail: 'DEMO: recorder reports no recording on channel 6 (schedule disabled?)' });
+  for (const m of [26, 25, 24]) await event(4, 'site', site[4].id, 'internet', false, ago(m), { detail: 'DEMO: primary broadband down; reporting over 4G backup' });
+  for (const m of [120, 60, 1]) await event(4, 'recorder', site[4].nvr, 'storage', false, ago(m), { detail: 'DEMO: HDD 2 reallocated sectors; 92% used' });
+  // Sriperumbudur: last events before the agent went silent (47 min ago), some replayed earlier in the week after an outage.
+  for (const c of site[2].cams) await event(2, 'camera', c.id, 'reachability', true, ago(48));
+  for (const m of [3 * 1440 + 60, 3 * 1440 + 50, 3 * 1440 + 40]) await event(2, 'camera', site[2].cams[0].id, 'reachability', true, ago(m), { replayed: true, receivedAt: ago(3 * 1440 + 5) });
+
+  // Incidents: 30 days of resolved history + the current ones, numbered in detection order.
+  type Inc = { siteK: number; type: string; deviceId: string | null; deviceCode: string | null; category: string; severity: string; status: string; start: number; ackAfter?: number; resolveAfter?: number; affected?: string[]; tech?: string; rootCause?: string; reopen?: number; mergedInto?: number; evidence?: number; escLevel?: number; title?: string };
+  const CAT: Record<string, string> = { camera_unreachable: 'Camera unreachable', recorder_unreachable: 'DVR/NVR unreachable', recording_not_confirmed: 'Recording not confirmed', stream_unavailable: 'Video stream unavailable', network_lost: 'Site network connectivity lost', internet_outage: 'Site internet outage (local monitoring continues)', agent_offline: 'Monitoring agent not reporting', storage_warning: 'Recorder storage / disk warning' };
+  const CAUSES: Record<string, string[]> = {
+    camera_unreachable: ['Loose RJ45 at the PoE switch', 'PoE port failure: moved to a spare port', 'Camera power adapter replaced', 'Cable cut during civil work, re-crimped', 'Camera rebooted after a power fluctuation'],
+    recorder_unreachable: ['NVR hung after a power cut; restarted by the site team', 'Router replaced by the ISP; NVR re-addressed', 'UPS battery failure at the rack'],
+    network_lost: ['Main switch power adapter failure'],
+    internet_outage: ['ISP fibre cut in the area', 'Broadband router reboot'],
+    agent_offline: ['Site internet outage: the local agent kept monitoring and synced its queued events', 'Agent PC switched off by staff over the weekend'],
+    storage_warning: ['Disk replaced under warranty'],
+    recording_not_confirmed: ['Recording schedule restored after a firmware update'],
+  };
+  const hist: Inc[] = [];
+  const cats = ['camera_unreachable', 'camera_unreachable', 'camera_unreachable', 'camera_unreachable', 'recorder_unreachable', 'internet_outage', 'agent_offline', 'storage_warning', 'recording_not_confirmed'];
+  for (let i = 0; i < 40; i++) {
+    const k = r.pick([1, 1, 2, 3, 3, 4, 4, 5]);
+    let cat = r.pick(cats);
+    if ((cat === 'storage_warning' || cat === 'recording_not_confirmed') && !SITES[k - 1].caps.recording) cat = 'camera_unreachable';
+    if (cat === 'agent_offline' && k === 5) cat = 'camera_unreachable';
+    const cam = r.pick(site[k].cams);
+    const start = r.int(2 * 1440, 30 * 1440);
+    const dur = cat === 'camera_unreachable' ? r.int(12, 180) : cat === 'recorder_unreachable' ? r.int(25, 240) : cat === 'agent_offline' || cat === 'internet_outage' ? r.int(20, 300) : r.int(60, 900);
+    const isCam = cat === 'camera_unreachable' || cat === 'recording_not_confirmed';
+    hist.push({
+      siteK: k, type: isCam ? 'camera' : cat === 'agent_offline' ? 'agent' : cat === 'internet_outage' ? 'site' : 'recorder', deviceId: isCam ? cam.id : cat === 'agent_offline' ? agent[k] ?? null : cat === 'internet_outage' ? site[k].id : site[k].nvr,
+      deviceCode: isCam ? cam.code : cat === 'agent_offline' ? `AGT-0${k}` : cat === 'internet_outage' ? null : site[k].nvrCode, category: cat,
+      severity: cat === 'recorder_unreachable' ? 'critical' : cat === 'agent_offline' || cat === 'recording_not_confirmed' || (isCam && cam.critical) ? 'high' : 'medium',
+      status: r.rnd() < 0.7 ? 'CLOSED' : 'RESOLVED', start, ackAfter: r.int(2, 35), resolveAfter: dur, affected: cat === 'recorder_unreachable' || cat === 'agent_offline' ? site[k].cams.map((c) => c.code) : undefined,
+      tech: ['ravi', 'mani', 'arun', 'bala', 'senthil'][k - 1], rootCause: r.pick(CAUSES[cat]),
+    });
+  }
+  const cam = (code: string) => { for (const k of [1, 2, 3, 4, 5]) { const c = site[k].cams.find((x) => x.code === code); if (c) return { ...c, siteK: k }; } throw new Error(code); };
+  const now: Inc[] = [
+    { siteK: 1, type: 'camera', deviceId: cam('CAM-011').id, deviceCode: 'CAM-011', category: 'camera_unreachable', severity: 'medium', status: 'RESOLVED', start: 300, ackAfter: 4, resolveAfter: 95, tech: 'ravi', rootCause: 'Intermittent PoE port; moved to port 14', reopen: 1, evidence: 3 },
+    { siteK: 5, type: 'camera', deviceId: cam('CAM-044').id, deviceCode: 'CAM-044', category: 'camera_unreachable', severity: 'medium', status: 'RESOLVED', start: 180, ackAfter: 7, resolveAfter: 64, tech: 'senthil', rootCause: 'Camera adapter replaced', evidence: 3 },
+    { siteK: 3, type: 'camera', deviceId: cam('CAM-024').id, deviceCode: 'CAM-024', category: 'camera_unreachable', severity: 'medium', status: 'CLOSED', start: 55, resolveAfter: 3, mergedInto: 1 },
+    { siteK: 3, type: 'recorder', deviceId: site[3].nvr, deviceCode: 'NVR-03', category: 'recorder_unreachable', severity: 'critical', status: 'ASSIGNED', start: 52, ackAfter: 5, affected: site[3].cams.map((c) => c.code), tech: 'arun' },
+    { siteK: 2, type: 'agent', deviceId: agent[2], deviceCode: 'AGT-02', category: 'agent_offline', severity: 'high', status: 'OPEN', start: 37, affected: site[2].cams.map((c) => c.code), escLevel: 1 },
+    { siteK: 1, type: 'camera', deviceId: cam('CAM-014').id, deviceCode: 'CAM-014', category: 'camera_unreachable', severity: 'medium', status: 'IN_PROGRESS', start: 38, ackAfter: 6, tech: 'ravi' },
+    { siteK: 4, type: 'site', deviceId: site[4].id, deviceCode: null, category: 'internet_outage', severity: 'medium', status: 'ACKNOWLEDGED', start: 26, ackAfter: 9, tech: 'bala' },
+    { siteK: 4, type: 'camera', deviceId: cam('CAM-036').id, deviceCode: 'CAM-036', category: 'recording_not_confirmed', severity: 'high', status: 'OPEN', start: 92 },
+    { siteK: 4, type: 'recorder', deviceId: site[4].nvr, deviceCode: 'NVR-04', category: 'storage_warning', severity: 'medium', status: 'ACKNOWLEDGED', start: 600, ackAfter: 22, tech: 'bala' },
+    { siteK: 1, type: 'camera', deviceId: cam('CAM-017').id, deviceCode: 'CAM-017', category: 'camera_unreachable', severity: 'medium', status: 'RESTORATION_CHECK', start: 24, ackAfter: 3, tech: 'ravi', evidence: 2 },
+  ];
+  const all = [...hist, ...now].sort((a, b) => b.start - a.start);
+  const incId: Record<number, string> = {};
+  const numberOf: Record<number, string> = {};
+  let tl = 0, na = 0;
+  const timeline = (incidentId: string, at: Date, type: string, message: string, actor = 'system', data?: unknown) => put('incidentTimelineEvent', o, sid(o, 'tl', ++tl), { organizationId: o, incidentId, at, type, message, actor, ...(data ? { data } : {}) });
+  const note = (incidentId: string, t: { id: string; name: string; phone: string } | { name: string; phone: string; id?: undefined }, type: string, purpose: string, body: string, at: Date) =>
+    put('notificationAttempt', o, sid(o, 'na', ++na), { organizationId: o, incidentId, technicianId: t.id ?? null, recipientType: type, recipientName: t.name, recipientPhone: t.phone, channel: 'whatsapp', purpose, body, idempotencyKey: `demo:${na}`, status: 'simulated', scheduledFor: at, sentAt: at, costEstimate: dec(0.12), simulated: true, lastError: 'SIMULATED: demo workspace (synthetic number is never contacted)', isDemo: true });
+  const nowIdx = (x: Inc) => now.indexOf(x);
+  for (const [n, x] of all.entries()) {
+    const number = `INC-${1001 + n}`;
+    const first = ago(x.start);
+    const ack = x.ackAfter !== undefined ? ago(x.start - x.ackAfter) : null;
+    const resolved = x.resolveAfter !== undefined ? ago(x.start - x.resolveAfter) : null;
+    const s0 = site[x.siteK];
+    const tech = x.tech ? T[x.tech] : undefined;
+    const active = !['RESOLVED', 'CLOSED'].includes(x.status);
+    const openKey = active ? `${x.type}:${x.deviceId ?? '-'}:${x.category}` : null;
+    const evidence = x.evidence ? Array.from({ length: x.evidence }, (_, j) => ({ at: ago(Math.max(0, (resolved ? x.start - x.resolveAfter! : 3) + (x.evidence! - j))).toISOString(), check: x.category === 'agent_offline' ? 'heartbeat' : 'reachability', ok: true, eventId: `demo:evidence:${n}:${j}`, source: 'demo' })) : null;
+    const merged = x.mergedInto !== undefined;
+    const row = await put('downtimeIncident', o, sid(o, 'inc', n), {
+      organizationId: o, number, siteId: s0.id, customerId: s0.customerId, deviceType: x.type, deviceId: x.deviceId, deviceCode: x.deviceCode, category: x.category, severity: x.severity, status: x.status,
+      title: `${CAT[x.category]}${x.deviceCode ? `: ${x.deviceCode}` : ''} at ${s0.name}`.slice(0, 190), affectedCount: x.affected?.length ?? 1, affectedDevices: x.affected ?? (x.deviceCode ? [x.deviceCode] : []),
+      firstDetectedAt: first, lastCheckedAt: resolved ?? ago(1), acknowledgedAt: ack, acknowledgedBy: ack ? `technician:${tech?.name ?? 'NOC'}` : null, assignedTechnicianId: tech && x.status !== 'OPEN' ? tech.id : null, assignedAt: tech && ack && !['OPEN', 'ACKNOWLEDGED'].includes(x.status) ? ack : null,
+      inProgressAt: x.status === 'IN_PROGRESS' ? ago(x.start - (x.ackAfter ?? 0) - 10) : null, restorationCheckAt: x.status === 'RESTORATION_CHECK' ? ago(3) : null, resolvedAt: merged ? ago(52) : resolved, closedAt: x.status === 'CLOSED' ? (merged ? ago(52) : resolved) : null,
+      resolvedBy: merged ? 'correlation' : resolved ? 'verification' : null, rootCause: merged ? 'Merged into the NVR-03 recorder incident: the same root cause.' : resolved ? x.rootCause : null, resolutionNote: resolved && !merged ? `DEMO: ${x.rootCause}.` : null,
+      restorationEvidence: evidence ?? undefined, reopenCount: x.reopen ?? 0, lastReopenedAt: x.reopen ? ago(x.start - 40) : null, escalationLevel: x.escLevel ?? 0, nextEscalationAt: null, openKey, correlationKey: `${x.type}:${x.deviceId ?? '-'}:${x.category}`, isDemo: true,
+    });
+    incId[n] = row.id;
+    numberOf[n] = number;
+    // Timeline + WhatsApp previews (all SIMULATED).
+    await timeline(row.id, first, 'detected', `${CAT[x.category]} confirmed after 3 failed checks (debounce 180 s).`, 'system', { severity: x.severity, rule: 'deterministic', demo: true });
+    if (merged) { await timeline(row.id, ago(52), 'correlated', 'Merged into the NVR-03 recorder incident: the same root cause.'); continue; }
+    const alertTo = tech ?? T.dinesh;
+    const dur = Math.max(3, Math.round(3 + (x.category === 'agent_offline' ? 10 : 0)));
+    const alert = x.category === 'agent_offline'
+      ? `The monitoring agent at ${s0.name} has not reported for ${dur} minutes. Camera states are UNKNOWN (not confirmed offline). Incident ${number} is open (${x.severity}). Please reply "ACK ${number}" to acknowledge and check the device or network connection. Reply "HELP ${number}" for first checks.`
+      : `${x.type === 'recorder' ? 'Recorder' : x.type === 'camera' ? 'Camera' : 'Monitoring'} ${x.deviceCode ?? ''} at ${s0.name} — ${CAT[x.category]} for ${dur} minutes.${x.affected ? ` ${x.affected.length} cameras affected.` : ''} Incident ${number} is open (${x.severity}). Please reply "ACK ${number}" to acknowledge. Reply "HELP ${number}" for first checks.`.replace(/\s+/g, ' ');
+    await note(row.id, alertTo, 'technician', 'alert', alert, new Date(first.getTime() + 60_000));
+    await timeline(row.id, new Date(first.getTime() + 60_000), 'notified', `Alert for ${alertTo.name}. Escalates if not acknowledged in 15 min.`);
+    if (x.escLevel) {
+      const esc = `Escalation L1: ${number} (${CAT[x.category]}${x.deviceCode ? `, ${x.deviceCode}` : ''}) at ${s0.name} has not been acknowledged for 16 minutes. Please acknowledge or assign it: reply "ACK ${number}".`;
+      await note(row.id, T.priya, 'supervisor', 'escalation', esc, new Date(first.getTime() + 16 * 60_000));
+      await timeline(row.id, new Date(first.getTime() + 16 * 60_000), 'escalated', `Not acknowledged in time: escalated to supervisor (${T.priya.name}), level 1.`, 'system', { level: 1 });
+    }
+    if (ack) {
+      await timeline(row.id, ack, 'acknowledged', `Acknowledged by ${alertTo.name} (whatsapp).`, `technician:${alertTo.name}`);
+      await note(row.id, alertTo, 'technician', 'reply', `${number} acknowledged. Assigned to ${alertTo.name}. Status: investigating. Reply "HELP ${number}" for first checks.`, ack);
+      if (tech && !['ACKNOWLEDGED'].includes(x.status)) await timeline(row.id, ack, 'assigned', `Assigned to ${tech.name} (technician).`, `technician:${tech.name}`);
+    }
+    if (x.status === 'IN_PROGRESS') await timeline(row.id, ago(x.start - (x.ackAfter ?? 0) - 10), 'in_progress', 'Work started: reached site, checking the PoE switch.', `technician:${tech?.name}`);
+    if (x.reopen) {
+      await timeline(row.id, ago(x.start - 30), 'resolved', 'Restoration verified by 3 consecutive successful checks.', 'system');
+      await timeline(row.id, ago(x.start - 40), 'reopened', 'The fault came back 10 min after resolution (inside the 30-minute correlation window): incident reopened.', 'system');
+    }
+    if (evidence) await timeline(row.id, new Date(evidence[0].at), 'restoration_check', `${x.deviceCode ?? 'Device'} responded again. Restoration check started: 3 consecutive successful checks needed.`, 'system', { evidence: evidence[0] });
+    if (resolved) {
+      await timeline(row.id, resolved, 'resolved', `Restoration verified by ${evidence?.length ?? 3} consecutive successful checks. Root cause: ${x.rootCause}`, 'system');
+      await note(row.id, alertTo, 'technician', 'restored', `${x.deviceCode ?? 'The site'} is responding again. Restoration of ${number} was verified by 3 consecutive successful checks. Incident duration: ${x.resolveAfter} minutes.`, resolved);
+      const c = custs.find((c0) => C[c0.key] === s0.customerId)!;
+      if (c.notify && x.type !== 'agent') {
+        await note(row.id, { name: c.contactName, phone: phoneFor(0, 900 + custs.indexOf(c)) }, 'customer', 'customer_report', `Service update from your CCTV monitoring team: ${number} at ${s0.name} (${CAT[x.category]}${x.deviceCode ? `, ${x.deviceCode}` : ''}) is resolved. Downtime: ${x.resolveAfter} minutes. Cause: ${x.rootCause}. Restoration was verified by fresh monitoring checks.`, resolved);
+        await timeline(row.id, resolved, 'customer_notified', `Resolution summary for ${c.name} (${c.contactName}).`);
+      }
+      if (x.status === 'CLOSED') await timeline(row.id, new Date(resolved.getTime() + 3_600_000), 'closed', 'Closed after customer confirmation.', 'user:Demo NOC');
+    }
+    if (nowIdx(x) === 3) { // the NVR incident absorbed CAM-024
+      const camIdx = all.findIndex((y) => y.mergedInto !== undefined);
+      if (camIdx >= 0) await timeline(row.id, ago(52), 'correlated', `${numberOf[camIdx] ?? 'CAM-024 incident'} (CAM-024) merged into this incident.`);
+    }
+  }
+
+  // Daily uptime snapshots (same rule as the dashboard: down camera-minutes from incidents; unknown excluded).
+  const rows = await prisma.downtimeIncident.findMany({ where: { organizationId: o, resolvedBy: { not: 'correlation' }, category: { in: ['camera_unreachable', 'recorder_unreachable', 'network_lost', 'stream_unavailable', 'agent_offline', 'status_unknown'] } } });
+  for (let d = 1; d <= 30; d++) {
+    const day = addDays(today, -d);
+    const ds = dayOnly(day).getTime() - IST, de = ds + DAY;
+    for (const k of [1, 2, 3, 4, 5]) {
+      const camsN = site[k].cams.length;
+      let down = 0, unknown = 0, incidents = 0;
+      for (const x of rows.filter((y) => y.siteId === site[k].id)) {
+        const st = x.firstDetectedAt.getTime(), en = (x.resolvedAt ?? new Date(NOW)).getTime();
+        if (st >= ds && st < de) incidents++;
+        const ov = Math.min(en, de) - Math.max(st, ds);
+        if (ov <= 0) continue;
+        const m = Math.round(ov / 60_000) * (['camera_unreachable', 'stream_unavailable'].includes(x.category) ? 1 : Math.max(1, x.affectedCount));
+        if (['agent_offline', 'status_unknown'].includes(x.category)) unknown += m; else down += m;
+      }
+      const total = camsN * 1440, measured = total - Math.min(unknown, total);
+      await prisma.siteUptimeSnapshot.upsert({ where: { siteId_day: { siteId: site[k].id, day: dayOnly(day) } }, create: { organizationId: o, siteId: site[k].id, day: dayOnly(day), cameraMinutesTotal: total, cameraMinutesDown: down, cameraMinutesUnknown: unknown, uptimePct: new Prisma.Decimal(measured ? (((measured - Math.min(down, measured)) / measured) * 100).toFixed(3) : '100'), incidents, isDemo: true }, update: { cameraMinutesTotal: total, cameraMinutesDown: down, cameraMinutesUnknown: unknown, uptimePct: new Prisma.Decimal(measured ? (((measured - Math.min(down, measured)) / measured) * 100).toFixed(3) : '100'), incidents } });
+      (counts[o] ??= {}).siteUptimeSnapshot = ((counts[o] ??= {}).siteUptimeSnapshot ?? 0) + 1;
+    }
+  }
+  return o;
+}
+
 async function main() {
   await assertSafe();
   const demoIds = Object.values(DEMO_ORGS).map((o) => o.id);
@@ -710,6 +969,7 @@ async function main() {
     real_estate: await realEstateWorkspace(),
     manufacturing: await manufacturingWorkspace(),
     agency: await agencyWorkspace(),
+    cctv: await cctvWorkspace(),
   };
   const ids: string[] = Object.values(created);
 

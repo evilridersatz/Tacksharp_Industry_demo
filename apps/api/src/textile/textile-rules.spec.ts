@@ -58,6 +58,10 @@ describe('textile: understanding enquiries', () => {
       fabric: 'cotton', product: 'shirting', colour: 'white', quantity: 500, unit: 'metre', targetPrice: 180, destination: 'Tiruppur', buyerType: 'wholesaler',
     });
     expect(extractTextileFacts('silk saree 200 pcs')).toMatchObject({ fabric: 'silk', product: 'saree', quantity: 200, unit: 'piece' });
+    expect(extractTextileFacts('I need 200 cotton formal shirts for our office staff')).toMatchObject({ fabric: 'cotton', product: 'shirt', quantity: 200, unit: 'piece' });
+    expect(extractTextileFacts('We need 1500 metres of poplin for a school uniform order.')).toEqual({ fabric: 'poplin', quantity: 1500, unit: 'metre' });
+    expect(extractTextileFacts('cotton shirt fabric 500 m')).toMatchObject({ product: 'shirting', quantity: 500, unit: 'metre' });
+    expect(extractTextileFacts('50 kurtas')).toMatchObject({ product: 'kurta', quantity: 50, unit: 'piece' });
     expect(extractTextileFacts('எனக்கு பட்டு புடவை 100 sarees வேணும்')).toMatchObject({ fabric: 'silk', product: 'saree', quantity: 100, unit: 'piece' });
     expect(extractTextileFacts('2k mtrs rayon')).toMatchObject({ fabric: 'rayon', quantity: 2000, unit: 'metre' });
     expect(extractTextileFacts('rate 250 per metre')).toMatchObject({ targetPrice: 250 });

@@ -377,6 +377,8 @@ const AI_WORD = /(?:\bai\b|a\.i\.|robot|ரோபோ|\bbot\b|machine|மெஷ�
 const ACCOMPANY = /(?:(?:நீங்க|neenga|ninga)\s*(?:\S+\s+)?(?:போறீங்களா|போவீங்களா|போறீங்க\?|வருவீங்களா|வர்றீங்களா|வரீங்களா|வருவீங்க\?|poreengala|poveengala|varuveengala|vareengala|varreengala))|(?:யாரு?\s*(?:கூட\s*)?(?:வருவாங்க|வருவா|கூட்டிட்டு போவாங்க|காட்டுவாங்க))|(?:yaaru?\s*(?:kooda\s*)?(?:varuvaanga|kootittu povaanga|kaatuvaanga))|(?:\b(?:will|are)\s+you\s+(?:come|coming|be there|go|going)\b)|(?:\bwho\s+will\s+(?:come|be there|show)\b)/iu;
 const WHAT_PROPS = /(?:என்ன|enna|\bwhat\b|\bwhich\b|எந்த|endha)\s*(?:\S+\s+){0,2}?(?:properties|property|projects?|options?|flats?|வீடு|veedu|ப்ராபர்ட்டி)/iu;
 
+const SHOW_PROPS = /^(?:(?:please|pls|ok|okay|can you|could you)\s+)*(?:show|send|share|list|give)\s+(?:me\s+)?(?:the\s+|all\s+(?:the\s+)?|your\s+|some\s+|more\s+)?(?:options?|properties|projects|flats|listings?)\b[\s.!?]*(?:please|pls)?[\s.!?]*$/iu;
+
 export function commonQuestion(text: string): CommonQuestion | undefined {
   const t = (text ?? '').trim();
   if (!t) return undefined;
@@ -384,6 +386,8 @@ export function commonQuestion(text: string): CommonQuestion | undefined {
   const asking = /[?？]/.test(t) || /(?:ஆ|ஆ\?|ஆங்க|தானா|ஆ\s*$|aa\b|thaana|dhaana)/iu.test(t) || /\b(?:are|r)\s+(?:you|u)\b/i.test(t);
   if (AI_WORD.test(t) && YOU.test(t) && asking) return 'ai';
   if (WHAT_PROPS.test(t) && (/[?？]/.test(t) || /(?:இருக்கு|iruku|irukku|have|available|kaatunga|காட்டுங்க)/iu.test(t))) return 'whatProperties';
+  // "Show me the options", "send the properties", "list the projects": a request for the list, answered by rules.
+  if (SHOW_PROPS.test(t)) return 'whatProperties';
   return undefined;
 }
 

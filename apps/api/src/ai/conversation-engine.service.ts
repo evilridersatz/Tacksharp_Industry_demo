@@ -431,7 +431,14 @@ export class ConversationEngine {
     // A day / time heard this turn is a new fact too ("நாளைக்கு 9 மணி" after we asked the area): never swapped away.
     const newFacts = Object.keys(turn.captured).length > 0 || mentionsWhen(text, now);
     if (intent !== 'REPEAT_REQUEST' && !turn.lineCheck && !newFacts && !turn.booking && !turn.actions.endCall && session.lastAssistant && similarReply(response, session.lastAssistant)) {
-      for (const alt of [this.alternativeReply(turn), say.anythingElse(this.style(session))]) {
+      // The alternative wording is real-estate specific (area / budget / visit): textile and generic businesses only get a
+      // neutral line, never "Which locality would you prefer?" (demo walkthrough, 2026-10-19).
+      const alternatives = genericMode
+        ? [ConversationEngine.genericNoted(this.style(session))]
+        : textileMode
+          ? [say.anythingElse(this.style(session))]
+          : [this.alternativeReply(turn), say.anythingElse(this.style(session))];
+      for (const alt of alternatives) {
         if (alt && !similarReply(alt, session.lastAssistant)) {
           response = session.channel !== 'voice' ? shapeChatReply(alt) : alt;
           deduped = true;
@@ -1024,6 +1031,13 @@ export class ConversationEngine {
       }
     }
 
+    // 5b. "When can you deliver?" with nothing new in the message: never a promised date; the quotation carries it.
+    if (quality === 'ok' && !changed && /\b(deliver(?:y|ed)?|dispatch|ship(?:ping)?|when\s+(?:can|will)\s+(?:i|we)\s+(?:get|receive))\b|டெலிவரி/iu.test(text)) {
+      const quoted = turn.actions.outcome === 'requested_quotation' || session.outcome === 'requested_quotation' || Boolean(await this.prisma.quotation.count({ where: { organizationId: org, leadId: session.leadId } }).catch(() => 0));
+      if (!quoted && what && f.quantity) st.offeredQuoteTurn = turn.turn;
+      return { kind: 'say', text: tx.deliveryOnQuotation(style, quoted) };
+    }
+
     // 6. Catalogue / photos.
     const matches = await this.catalogueMatches(org, f);
     if (quality === 'ok' && wantsCatalogue(text)) {
@@ -1045,13 +1059,27 @@ export class ConversationEngine {
         const ok = await recordTask(`Enquiry not in the catalogue: ${what}${f.quantity ? `, ${f.quantity} ${f.unit ?? ''}` : ''}. Check if we can supply.`);
         return { kind: 'say', text: tx.notInCatalogue(style, what, ok) };
       }
+      const sameAsShown = Boolean(st.productIds?.length) && matches.map((m) => m.id).join() === st.productIds!.join();
       st.productIds = matches.map((m) => m.id);
+      // A detail added to the item already on screen ("white colour, in 2 weeks"): offer the quotation for it instead of
+      // listing the same products again.
+      if (sameAsShown && f.quantity && !wantsCatalogue(text) && !/price|rate|evlo|விலை/iu.test(text)) {
+        st.offeredQuoteTurn = turn.turn;
+        return { kind: 'say', text: tx.confirmQuoteRequest(style, `${f.quantity} ${f.unit ?? ''} ${what}`.replace(/\s+/g, ' ').trim()) };
+      }
       if (f.quantity) st.offeredQuoteTurn = turn.turn;
       turn.actions.outcome = turn.actions.outcome ?? 'interested';
       return { kind: 'say', text: tx.presentMatches(style, matches as tx.CatalogueRow[], voice, Boolean(f.quantity)) };
     }
 
-    // 8. Only what is still missing.
+    // 8. Only what is still missing. A bare "yes" / "ok" with nothing on file right after a quotation request points to
+    // that request instead of starting the enquiry over (demo walkthrough, 2026-10-19).
+    if (!changed && quality === 'ok' && (yes || /^(ok(ay)?|sure|fine|seri|sari|சரி)[\s.!]*$/iu.test(text.trim()))) {
+      const recent = await this.prisma.quotation
+        .findFirst({ where: { organizationId: org, leadId: session.leadId, createdAt: { gte: new Date(turn.now.getTime() - 86_400_000) } }, orderBy: { createdAt: 'desc' }, select: { number: true } })
+        .catch(() => null);
+      if (recent) return { kind: 'say', text: tx.quotePending(style, recent.number) };
+    }
     if (!what) return { kind: 'say', text: session.turn <= 1 ? tx.textileWelcome(style, session.customerName) : tx.askWhat(style) };
     if (!f.quantity) return { kind: 'say', text: tx.askQuantity(style, what) };
     if (st.productIds?.length) {
@@ -1925,7 +1953,9 @@ export class ConversationEngine {
     const { session, intent } = turn;
     const st = this.style(session);
     if (intent === 'GOODBYE') return { kind: 'say', text: st === 'en' ? 'Thank you! Have a good day.' : 'நன்றி! நல்ல நாளா இருக்கட்டும்.', end: true };
-    if (session.state !== 'HANDOFF') {
+    // A chat thread's HANDOFF state is reset at the next message (threads continue), so the flag remembers the handoff:
+    // later messages are noted for the team, not answered with a second greeting and a second task.
+    if (!session.genericHandedOff && session.state !== 'HANDOFF') {
       try {
         await this.requestHandoff(session, `New enquiry (no AI assistant for this industry yet): "${turn.text.slice(0, 200)}"`);
       } catch (error) {
@@ -1933,6 +1963,7 @@ export class ConversationEngine {
         return { kind: 'say', text: say.handoffFailed(st) };
       }
       session.state = 'HANDOFF';
+      session.genericHandedOff = true;
       turn.actions.handoff = true;
       turn.actions.outcome = 'human_requested';
       return {
@@ -1944,7 +1975,12 @@ export class ConversationEngine {
             : `${session.organizationName ?? 'எங்களை'} தொடர்பு கொண்டதற்கு நன்றி. எங்கள் team member விரைவில் இங்கே பதில் சொல்வார்.`,
       };
     }
-    return { kind: 'say', text: st === 'en' ? 'Noted. Our team has your message and will reply here.' : st === 'tl' ? 'Noted. Engal team ungal message-a paathu inga reply pannuvaanga.' : 'குறித்துக்கொண்டோம். எங்கள் team இங்கே பதில் சொல்வார்.' };
+    session.state = 'HANDOFF';
+    return { kind: 'say', text: ConversationEngine.genericNoted(st) };
+  }
+
+  private static genericNoted(st: string) {
+    return st === 'en' ? 'Noted. Our team has your message and will reply here.' : st === 'tl' ? 'Noted. Engal team ungal message-a paathu inga reply pannuvaanga.' : 'குறித்துக்கொண்டோம். எங்கள் team இங்கே பதில் சொல்வார்.';
   }
 
   private async requestHandoff(s: Session, reason: string) {

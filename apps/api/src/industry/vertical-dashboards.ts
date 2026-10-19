@@ -168,3 +168,33 @@ export async function hospitalDashboard(prisma: PrismaService, org: string, days
   ];
   return { kpis, charts, notes: ['Administrative data only: no clinical information is stored or shown.', 'Insurance statuses are recorded by staff from the insurer / TPA; the assistant never decides them.'] };
 }
+
+/** CCTV monitoring (VisionOps): built from MonitoringService.overview (incidents, devices, agents of this org only). */
+export function cctvDashboard(o: {
+  days: number;
+  kpis: Record<string, number | null>;
+  charts: { availability: Array<{ day: string; uptimePct: number | null }>; downtimeBySite: Array<{ site: string; downMinutes: number }>; byRootCause: Array<{ label: string; count: number }>; responseByWeek: Array<{ week: string; mttaMinutes: number | null; mttrMinutes: number | null }>; incidentsByDay: Array<{ day: string; incidents: number }>; statusMix: Array<{ status: string; count: number }> };
+  notes: string[];
+}) {
+  const k = o.kpis;
+  const lbl = (d: string) => d.slice(5).split('-').reverse().join('/');
+  const kpis: Kpi[] = [
+    { key: 'cameras', label: 'Cameras monitored', value: k.cameras, format: 'number', tone: 'brand', hint: `${k.sites} sites · ${k.customers} customers` },
+    { key: 'online', label: 'Online now', value: k.online, format: 'number', tone: 'sky' },
+    { key: 'offline', label: 'Offline now', value: k.offline, format: 'number', tone: 'rose', hint: `${k.unknown} unknown (no fresh data)` },
+    { key: 'active', label: 'Active incidents', value: k.activeIncidents, format: 'number', tone: 'amber', hint: `${k.unacknowledged} not acknowledged` },
+    { key: 'uptime', label: `Uptime (${o.days} days)`, value: k.uptimePct, format: 'pct', tone: 'brand', hint: 'Measured camera-minutes; unknown time excluded' },
+    { key: 'mtta', label: 'Mean time to acknowledge', value: k.mttaMinutes === null ? null : r1(k.mttaMinutes! / 60), format: 'hours' },
+    { key: 'mttr', label: 'Mean time to restore', value: k.mttrMinutes === null ? null : r1(k.mttrMinutes! / 60), format: 'hours' },
+    { key: 'outage_sites', label: 'Sites with network / recorder outage', value: k.sitesWithOutage, format: 'number', tone: 'rose' },
+  ];
+  const charts: Chart[] = [
+    { key: 'availability', title: 'Camera availability per day', kind: 'line', unit: '%', labels: o.charts.availability.map((d) => lbl(d.day)), series: [{ name: 'Uptime %', values: o.charts.availability.map((d) => d.uptimePct ?? 0) }], source: 'Downtime incidents × cameras affected' },
+    { key: 'incidents', title: 'Incidents per day', kind: 'line', unit: 'incidents', labels: o.charts.incidentsByDay.map((d) => lbl(d.day)), series: [{ name: 'Incidents', values: o.charts.incidentsByDay.map((d) => d.incidents) }], source: 'Downtime incidents (merged duplicates excluded)' },
+    bar('downtime_site', 'Downtime by site', 'camera-minutes', o.charts.downtimeBySite.slice(0, 8).map((s) => [s.site, s.downMinutes]), 'Down camera-minutes in the period', 'Down camera-minutes'),
+    bar('root_cause', 'Incidents by root cause', 'incidents', o.charts.byRootCause.map((c) => [c.label, c.count]), 'Incident category (deterministic rules)', 'Incidents'),
+    { key: 'response', title: 'Response times per week', kind: 'bar', unit: 'minutes', labels: o.charts.responseByWeek.map((w) => lbl(w.week)), series: [{ name: 'Time to acknowledge (min)', values: o.charts.responseByWeek.map((w) => w.mttaMinutes ?? 0) }, { name: 'Time to restore (min)', values: o.charts.responseByWeek.map((w) => w.mttrMinutes ?? 0) }], source: 'Incident acknowledgment / resolution times' },
+    { key: 'status', title: 'Cameras by status', kind: 'donut', unit: 'cameras', labels: o.charts.statusMix.map((s) => s.status), series: [{ name: 'Cameras', values: o.charts.statusMix.map((s) => s.count) }], source: 'Camera inventory, current status' },
+  ];
+  return { kpis, charts, notes: o.notes };
+}

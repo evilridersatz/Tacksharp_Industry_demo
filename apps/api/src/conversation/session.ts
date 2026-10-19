@@ -115,6 +115,8 @@ export type Session = {
     /** We asked "confirm quotation Q-…?" on this turn. */
     pendingAccept?: { quotationId: string; askedTurn: number };
   };
+  /** Retail / manufacturing / agency: this thread was already handed to the team (one task per thread, not per message). */
+  genericHandedOff?: boolean;
   /** We asked "when can we call?" after a "no" to "can we talk now?". */
   /** Properties the customer turned down in this conversation ("அது வேண்டாம்"): never offered again. */
   rejectedPropertyIds?: string[];

@@ -1,0 +1,15 @@
+{
+  "cloudUrl": "https://platform-api.tacksharp.in",
+  "token": "vo_xxxxxxxxxx.<secret shown once when you register the agent>",
+  "hostLabel": "Site PC, Ambattur warehouse",
+  "intervalSeconds": 60,
+  "timeoutMs": 3000,
+  "queueFile": "./visionops-queue.jsonl",
+  "backupLink": false,
+  "gateway": { "host": "192.168.1.1", "port": 80 },
+  "devices": [
+    { "code": "NVR-01", "type": "recorder", "host": "192.168.1.10", "port": 80 },
+    { "code": "CAM-014", "type": "camera", "host": "192.168.1.34", "port": 80, "rtspPort": 554, "checks": ["stream"] }
+  ],
+  "_note": "Camera / NVR usernames and passwords, if a vendor adapter needs them, belong only in this local file. They are never sent to the cloud."
+}

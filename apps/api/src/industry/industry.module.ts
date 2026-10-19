@@ -5,10 +5,11 @@ import { IndustryController, QualityController } from './industry.controller.js'
 import { IndustryService } from './industry.service.js';
 import { ScenarioService } from './scenario.service.js';
 import { VerticalsModule } from '../verticals/verticals.module.js';
+import { VisionOpsModule } from '../visionops/visionops.module.js';
 
 /** Multi-industry workspace, dashboards, agent catalogue / playground and manufacturing quality records. */
 @Module({
-  imports: [AgentsModule, AiModule, VerticalsModule],
+  imports: [AgentsModule, AiModule, VerticalsModule, VisionOpsModule],
   controllers: [IndustryController, QualityController],
   providers: [IndustryService, ScenarioService],
   exports: [IndustryService],

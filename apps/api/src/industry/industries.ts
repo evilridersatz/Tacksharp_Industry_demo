@@ -11,10 +11,10 @@
  * The web app renders this; it never decides status on its own.
  */
 
-export const INDUSTRY_IDS = ['textile', 'restaurant', 'food', 'hotel', 'hospital', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
+export const INDUSTRY_IDS = ['textile', 'restaurant', 'food', 'hotel', 'hospital', 'cctv', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
 export type IndustryId = (typeof INDUSTRY_IDS)[number];
 /** Industries an organization's Settings can choose (restaurant comes from the organization itself). */
-export const SETTABLE_INDUSTRIES = ['real_estate', 'textile', 'retail', 'manufacturing', 'agency', 'food', 'hotel', 'hospital'] as const;
+export const SETTABLE_INDUSTRIES = ['real_estate', 'textile', 'retail', 'manufacturing', 'agency', 'food', 'hotel', 'hospital', 'cctv'] as const;
 
 export const INDUSTRY_LABEL: Record<IndustryId, string> = {
   textile: 'Textile & Apparel',
@@ -22,6 +22,7 @@ export const INDUSTRY_LABEL: Record<IndustryId, string> = {
   food: 'Restaurant & Food Ordering',
   hotel: 'Hotel & Room Booking',
   hospital: 'Hospital & Healthcare',
+  cctv: 'CCTV Monitoring (VisionOps)',
   real_estate: 'Real Estate',
   retail: 'Retail & E-commerce',
   manufacturing: 'Manufacturing & Quality',
@@ -39,7 +40,7 @@ export function effectiveIndustry(vertical: string | null | undefined, settingsI
 
 export type Channel = 'whatsapp' | 'voice' | 'dashboard' | 'scheduled';
 export type Runtime =
-  | { type: 'conversation'; engine: 'textile' | 'real_estate' | 'restaurant' | 'generic' | 'food' | 'hotel' | 'hospital'; voice?: boolean }
+  | { type: 'conversation'; engine: 'textile' | 'real_estate' | 'restaurant' | 'generic' | 'food' | 'hotel' | 'hospital' | 'cctv'; voice?: boolean }
   | { type: 'task'; kind: string; agent: 'marketing' | 'sales' | 'finance' | 'operations' }
   | { type: 'workflow'; source: string; note: string }
   | { type: 'dashboard'; route: string }
@@ -64,7 +65,7 @@ export type CatalogueAgent = {
 };
 
 const NO_INVENT = 'Never invents prices, stock, discounts, delivery dates or confirmations: answers come from your records.';
-const conv = (engine: 'textile' | 'real_estate' | 'restaurant' | 'generic' | 'food' | 'hotel' | 'hospital', voice = false): Runtime => ({ type: 'conversation', engine, voice });
+const conv = (engine: 'textile' | 'real_estate' | 'restaurant' | 'generic' | 'food' | 'hotel' | 'hospital' | 'cctv', voice = false): Runtime => ({ type: 'conversation', engine, voice });
 const task = (kind: string, agent: 'marketing' | 'sales' | 'finance' | 'operations'): Runtime => ({ type: 'task', kind, agent });
 const flow = (source: string, note: string): Runtime => ({ type: 'workflow', source, note });
 const na = (reason: string): Runtime => ({ type: 'unavailable', reason });
@@ -187,6 +188,16 @@ export const AGENT_CATALOGUE: CatalogueAgent[] = [
   { id: 'agency.feedback', industry: 'agency', name: 'Feedback Analysis Agent', purpose: 'Analyse feedback themes.', channels: ['dashboard'], capabilities: [], runtime: na('Not built.'), tools: [], handoff: '-', rules: [] },
 
   // ------------------------------------------------------------------ shared
+  // ------------------------------------------------------------------ CCTV monitoring (Tacksharp VisionOps)
+  { id: 'cctv.health', industry: 'cctv', name: 'Camera Health Agent', purpose: 'Turns health checks from site agents (and configured cloud targets) into device status: online, degraded, offline, unknown; recording only when the recorder proves it.', channels: ['dashboard', 'scheduled'], capabilities: ['Reachability, stream, recording and storage checks (per device capability)', 'Debounce: N failed checks over a minimum time', 'UNKNOWN when telemetry is stale'], runtime: flow('monitoring_engine', 'Deterministic monitoring engine (POST /monitoring/agent/events); no model decides a device status.'), tools: ['health_events.write', 'devices.write'], handoff: '-', rules: ['A ping never marks a camera as recording.', 'Silence from an agent is UNKNOWN, never offline.'] },
+  { id: 'cctv.triage', industry: 'cctv', name: 'Incident Triage Agent', purpose: 'Opens one incident per device and fault, folds blind cameras into a recorder / network incident and sets severity by rule.', channels: ['dashboard'], capabilities: ['Deduplication (one open incident per device + fault)', 'Recorder / network correlation', 'Severity rules (critical camera, recorder, network)', 'Reopen inside the correlation window'], runtime: flow('incident_engine', 'Incident engine with a unique open key (database-enforced) and transactions.'), tools: ['incidents.write'], handoff: '-', rules: ['Rules, not a model, set severity and state.'] },
+  { id: 'cctv.followup', industry: 'cctv', name: 'Technician Follow-up Agent', purpose: 'Alerts the on-duty technician on WhatsApp, records "ACK INC-…" replies, assigns the incident and escalates to supervisor and manager when nobody acknowledges.', channels: ['whatsapp', 'scheduled'], capabilities: ['Shift / on-call aware alerts', 'Quiet hours', 'Escalation L1 → L2', 'Idempotent, rate-limited sends'], runtime: conv('cctv'), tools: ['incidents.acknowledge', 'incidents.assign', 'notifications.send (DRY_RUN-gated)'], handoff: 'Escalates by rule; never promises an arrival time.', scenario: 'ack', rules: ['Never invents a repair status or a technician arrival time.', 'Under DRY_RUN messages are recorded as SIMULATED.'] },
+  { id: 'cctv.troubleshooting', industry: 'cctv', name: 'Troubleshooting Agent', purpose: 'Sends safe first checks for the fault (power, cable, NVR channel, disk) when the technician asks "HELP INC-…".', channels: ['whatsapp'], capabilities: ['Fault-specific first checks', 'English / Tanglish'], runtime: conv('cctv'), tools: ['incidents.read'], handoff: '-', scenario: 'help', rules: ['Has no remote control of any device and never claims to restart or reconfigure one.'] },
+  { id: 'cctv.restoration', industry: 'cctv', name: 'Restoration Verification Agent', purpose: 'Closes the loop only on evidence: N consecutive fresh successful checks after the failure. "Fixed" from a person moves the incident to restoration check, not resolved.', channels: ['dashboard', 'scheduled'], capabilities: ['Evidence list on the incident', 'Reset on a new failure', 'Restored message to the technician'], runtime: flow('restoration', 'Incident engine: RESTORATION_CHECK → RESOLVED by verification.'), tools: ['incidents.write'], handoff: '-', rules: ['Never marks an incident resolved without fresh monitoring evidence.'] },
+  { id: 'cctv.customer_updates', industry: 'cctv', name: 'Customer Resolution Report Agent', purpose: 'Sends the customer a resolution summary (downtime, cause, verified restoration) when they opted in.', channels: ['whatsapp'], capabilities: ['Per-customer opt-in', 'Uses the recorded root cause only'], runtime: flow('notifications', 'NotificationAttempt purpose "customer_report" after verified restoration.'), tools: ['notifications.send (DRY_RUN-gated)'], handoff: '-', rules: ['Sent only after verified restoration.'] },
+  { id: 'cctv.reporting', industry: 'cctv', name: 'Reporting Agent', purpose: 'Site and customer uptime, downtime, unresolved incidents and SLA breaches for AMC reports.', channels: ['dashboard'], capabilities: ['Uptime by site / customer', 'SLA breaches from contract targets', 'CSV export'], runtime: { type: 'dashboard', route: '/visionops/reports' }, tools: ['incidents.read', 'contracts.read'], handoff: '-', rules: ['Unknown (no data) time is reported separately, never counted as uptime.'] },
+  { id: 'cctv.voice_escalation', industry: 'cctv', name: 'Voice Escalation Agent', purpose: 'Calls the manager when an incident stays unacknowledged.', channels: ['voice'], capabilities: [], runtime: na('Off by default; outbound escalation calls need Plivo / Sarvam verification for this use before they can be enabled.'), tools: [], handoff: '-', rules: [] },
+  { id: 'cctv.video_ai', industry: 'cctv', name: 'Video Analytics Agent', purpose: 'Analyses footage (intrusion, tampering, scene change).', channels: ['dashboard'], capabilities: [], runtime: na('VisionOps monitors device health only; no footage is sent to the cloud and no video model is connected.'), tools: [], handoff: '-', rules: [] },
   { id: 'shared.handoff', industry: 'shared', name: 'Human Handoff Agent', purpose: 'Moves a conversation to your team with history and reason; the AI stops replying there.', channels: ['whatsapp', 'voice'], capabilities: ['Context preserved', 'Reason recorded'], runtime: { type: 'workflow', source: 'handoff', note: 'Handoffs page / conversations marked human handoff.' }, tools: ['conversations.handoff'], handoff: 'Always available.', rules: [] },
   { id: 'shared.stop', industry: 'shared', name: 'Opt-out (STOP) Guard', purpose: 'STOP opts the customer out of every message and call; START opts back in.', channels: ['whatsapp'], capabilities: ['Immediate opt-out', 'Fixed confirmation'], runtime: { type: 'workflow', source: 'opt_out', note: 'Applied in the webhook before anything else.' }, tools: [], handoff: '-', rules: ['Never answered by the sales assistant.'] },
 ];

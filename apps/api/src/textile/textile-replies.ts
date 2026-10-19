@@ -118,6 +118,30 @@ export function quoteRequested(style: Style, number: string): string {
   });
 }
 
+/** A bare "yes" / "ok" after the quotation was already requested: say where it is instead of starting over. */
+export function quotePending(style: Style, number: string): string {
+  return pick(style, {
+    en: `Your quotation request ${number} is already with our team; they will send the final quotation here. Anything else you need?`,
+    ta: `உங்க quotation request ${number} ஏற்கனவே நம்ம team-கிட்ட இருக்கு; final quotation இங்க அனுப்புவாங்க. வேற ஏதாவது வேணுமா?`,
+    tl: `Unga quotation request ${number} already namma team-kitta irukku; final quotation inga anuppuvaanga. Vera edhaavadhu venumaa?`,
+  });
+}
+
+/** "When can you deliver?": no date is promised by the assistant; the team confirms it with stock on the quotation. */
+export function deliveryOnQuotation(style: Style, quoted: boolean): string {
+  return pick(style, {
+    en: quoted
+      ? 'Our team confirms the delivery date on your quotation, after checking stock for your quantity.'
+      : 'The delivery date depends on stock for your quantity; our team confirms it on the quotation. Shall I ask them for one?',
+    ta: quoted
+      ? 'உங்க quantity-க்கு stock check பண்ணி, delivery date-ஐ quotation-ல நம்ம team சொல்லுவாங்க.'
+      : 'Delivery date உங்க quantity-க்கான stock-ஐ பொறுத்தது; quotation-ல team சொல்லுவாங்க. Quotation கேக்கட்டுமா?',
+    tl: quoted
+      ? 'Unga quantity-ku stock check panni, delivery date-a quotation-la namma team solluvaanga.'
+      : 'Delivery date unga quantity-kaana stock-a poruthadhu; quotation-la team solluvaanga. Quotation kekkattuma?',
+  });
+}
+
 export function salespersonWillHelp(style: Style, recorded: boolean): string {
   if (!recorded) {
     return pick(style, {

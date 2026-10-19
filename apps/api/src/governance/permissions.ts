@@ -6,14 +6,16 @@ import { ForbiddenException } from '@nestjs/common';
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: ['*'],
-  manager: ['sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view'],
+  manager: ['sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
   sales: ['sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
-  operations: ['operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*'],
+  operations: ['operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
   // Hotel front desk: reservations, check-in / check-out, room status.
   front_desk: ['bookings.*', 'agents.view', 'agents.run'],
   // Hospital reception: appointments and patient enquiries; insurance desk: insurance cases (decisions recorded from the insurer).
   reception: ['clinic.*', 'insurance.view', 'agents.view', 'agents.run'],
   insurance: ['insurance.*', 'clinic.view', 'agents.view'],
+  // VisionOps field technician / NOC operator: sees devices and incidents, acknowledges and works them.
+  technician: ['monitoring.view', 'monitoring.operate', 'agents.view'],
   finance: ['finance.*', 'agents.view', 'agents.run'],
   // Marketing staff draft, import, segment and approve content; sending to customers needs marketing.approve_campaign
   // (admin / manager), so every campaign passes through the approval queue.
@@ -51,6 +53,11 @@ export const PERMISSIONS = {
   viewInsurance: 'insurance.view',
   manageInsurance: 'insurance.manage',
   recordInsuranceDecision: 'insurance.record_decision',
+  monitoringView: 'monitoring.view',
+  /** Acknowledge, assign, work and resolve incidents. */
+  monitoringOperate: 'monitoring.operate',
+  /** Customers, sites, devices, technicians, agents (tokens), contracts, settings. */
+  monitoringManage: 'monitoring.manage',
 } as const;
 
 export function can(role: string | undefined, permission: string): boolean {

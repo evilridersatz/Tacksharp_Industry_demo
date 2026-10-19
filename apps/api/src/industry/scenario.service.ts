@@ -10,6 +10,10 @@ import { HospitalService } from '../verticals/hospital/hospital.service.js';
 import { VerticalFollowUps } from '../verticals/vertical-followups.service.js';
 import { addDays, inr, istDay } from '../verticals/common.js';
 import type { IndustryId } from './industries.js';
+import { MonitoringEngine } from '../visionops/engine.service.js';
+import { IncidentsService } from '../visionops/incidents.service.js';
+import { MonitoringNotifier } from '../visionops/notifier.service.js';
+import { CCTV_SCENARIOS, runCctvScenario } from '../visionops/scenarios.js';
 
 export type StepStatus = 'passed' | 'failed' | 'blocked' | 'simulated' | 'provider_required';
 export type Step = { name: string; kind: 'chat' | 'voice' | 'api' | 'follow_up' | 'check' | 'provider'; input?: string; output?: string; status: StepStatus; detail?: string; ms?: number };
@@ -25,6 +29,7 @@ const SCENARIOS: Record<string, Array<{ id: string; title: string; description: 
   retail: [{ id: 'generic_chat', title: 'Shopper enquiry and stock scan', description: 'The acknowledgement + handoff flow and the low-stock scan.' }],
   manufacturing: [{ id: 'generic_chat', title: 'Complaint triage and quality summary', description: 'A customer complaint handed to the team and the quality summary task on recorded inspections.' }],
   agency: [{ id: 'generic_chat', title: 'Lead enquiry and campaign brief', description: 'A lead acknowledged and handed over; a campaign brief drafted by the marketing agent.' }],
+  cctv: CCTV_SCENARIOS,
 };
 
 /**
@@ -42,6 +47,9 @@ export class ScenarioService {
     @Optional() private readonly hospital?: HospitalService,
     @Optional() private readonly followUps?: VerticalFollowUps,
     @Optional() private readonly orchestrator?: Orchestrator,
+    @Optional() private readonly monitoringEngine?: MonitoringEngine,
+    @Optional() private readonly monitoringIncidents?: IncidentsService,
+    @Optional() private readonly monitoringNotifier?: MonitoringNotifier,
   ) {}
 
   list(industry: IndustryId) {
@@ -60,6 +68,10 @@ export class ScenarioService {
       else if (scenarioId === 'gr_tanglish') await this.gr(ctx);
       else if (scenarioId === 'hotel_booking') await this.hotelBooking(ctx);
       else if (scenarioId === 'hospital_journey') await this.hospitalJourney(ctx);
+      else if (industry === 'cctv') {
+        if (!this.monitoringEngine || !this.monitoringIncidents || !this.monitoringNotifier) ctx.steps.push({ name: 'VisionOps services', kind: 'check', status: 'blocked', detail: 'Monitoring module not loaded.' });
+        else await runCctvScenario({ prisma: this.prisma, ai: this.ai, engine: this.monitoringEngine, incidents: this.monitoringIncidents, notifier: this.monitoringNotifier }, org, scenarioId, ctx.steps as never);
+      }
       else await this.generic(ctx, industry);
     } catch (e) {
       ctx.steps.push({ name: 'Scenario stopped', kind: 'check', status: 'failed', detail: errorMessage(e).slice(0, 300) });

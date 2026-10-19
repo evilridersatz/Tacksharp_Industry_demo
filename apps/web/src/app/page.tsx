@@ -18,6 +18,7 @@ import { useWorkspace } from '@/lib/industry';
 import { industryDef } from '@/lib/industries';
 import { IndustryDashboard } from '@/components/industry-dashboard';
 import { RestaurantOverview } from '@/components/restaurant/overview';
+import { VisionOpsOverview } from '@/components/visionops-overview';
 import type { ActivityEvent, FollowUp, Summary } from '@/lib/types';
 import {
   CALL_OUTCOME,
@@ -52,6 +53,7 @@ export default function DashboardPage() {
   if (!workspace) return <Skeleton className="h-[480px] rounded-[18px]" />;
   if (workspace.industry === 'restaurant') return <RestaurantOverview />;
   if (workspace.industry === 'real_estate') return <RealEstateDashboard />;
+  if (workspace.industry === 'cctv') return <VisionOpsOverview />;
   return <IndustryDashboard title={`${industryDef(workspace.industry).short} overview`} />;
 }
 

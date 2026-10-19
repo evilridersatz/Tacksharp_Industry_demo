@@ -258,6 +258,22 @@ export default function SettingsPage() {
             </div>
           </Card>}
 
+          {show('monitoring') && d.monitoring && <Card className="xl:col-span-2">
+            <CardHeader title="Camera monitoring rules" subtitle="Deterministic rules: status and incidents are decided by code from health checks, never by AI" />
+            <div className="px-5 pb-3">
+              <Row label="Confirm a fault after" hint="Consecutive failed checks, spanning at least the debounce time (no alert for a blip)"><div className="flex flex-wrap gap-2"><Num label="Failed checks" value={d.monitoring.failureThreshold} onChange={(v) => set('monitoring', { failureThreshold: v })} suffix="failed checks" min={1} max={20} /><Num label="Debounce seconds" value={d.monitoring.debounceSeconds} onChange={(v) => set('monitoring', { debounceSeconds: v })} suffix="seconds" max={3600} /></div></Row>
+              <Row label="Restoration needs" hint="An incident is resolved only after this many fresh successful checks"><Num label="Restore successes" value={d.monitoring.restoreSuccesses} onChange={(v) => set('monitoring', { restoreSuccesses: v })} suffix="successful checks" min={1} max={20} /></Row>
+              <Row label="Agent silent after" hint="No heartbeat: cameras become UNKNOWN (not offline) and an agent incident opens"><Num label="Stale minutes" value={d.monitoring.staleAfterMinutes} onChange={(v) => set('monitoring', { staleAfterMinutes: v })} suffix="minutes" min={2} max={1440} /></Row>
+              <Row label="Reopen window" hint="The same fault again within this time reopens the incident instead of creating a new one"><Num label="Correlation window" value={d.monitoring.correlationWindowMinutes} onChange={(v) => set('monitoring', { correlationWindowMinutes: v })} suffix="minutes" max={1440} /></Row>
+              <Row label="Escalation" hint="Supervisor after the acknowledgment deadline, manager after the next step"><div className="flex flex-wrap gap-2"><Num label="Acknowledge deadline" value={d.monitoring.ackDeadlineMinutes} onChange={(v) => set('monitoring', { ackDeadlineMinutes: v })} suffix="min to acknowledge" min={1} max={1440} /><Num label="Escalation step" value={d.monitoring.escalationStepMinutes} onChange={(v) => set('monitoring', { escalationStepMinutes: v })} suffix="min per level" min={1} max={1440} /></div></Row>
+              <Row label="Quiet hours (IST)" hint="Non-critical alerts wait until the end; critical alerts still reach the on-call person"><div className="flex flex-wrap items-center gap-2"><Toggle label="Quiet hours" checked={d.monitoring.quietHours.enabled} onChange={(v) => set('monitoring', { quietHours: { ...d.monitoring.quietHours, enabled: v } })} /><Text label="Quiet start" value={d.monitoring.quietHours.start} onChange={(v) => set('monitoring', { quietHours: { ...d.monitoring.quietHours, start: v } })} placeholder="22:00" /><Text label="Quiet end" value={d.monitoring.quietHours.end} onChange={(v) => set('monitoring', { quietHours: { ...d.monitoring.quietHours, end: v } })} placeholder="07:00" /></div></Row>
+              <Row label="Customer resolution reports" hint="Only for customers that opted in"><Toggle label="Customer reports" checked={d.monitoring.notifyCustomerOnResolution} onChange={(v) => set('monitoring', { notifyCustomerOnResolution: v })} /></Row>
+              <Row label="Voice escalation" hint="Off by default; never calls in DRY_RUN or demo; needs provider verification"><Toggle label="Voice escalation" checked={d.monitoring.voiceEscalation} onChange={(v) => set('monitoring', { voiceEscalation: v })} /></Row>
+              <Row label="WhatsApp alert template" hint="Approved template (one variable) for alerts outside the 24-hour window"><Text label="Alert template" value={d.monitoring.alertTemplate} onChange={(v) => set('monitoring', { alertTemplate: v })} placeholder="camera_alert" /></Row>
+              <Row label="WhatsApp cost per message" hint="For per-tenant cost tracking; enter your Meta rate"><Num label="WhatsApp cost" value={d.monitoring.whatsappCostInr} onChange={(v) => set('monitoring', { whatsappCostInr: v })} suffix="₹ per message" max={100} step={0.01} /></Row>
+            </div>
+          </Card>}
+
           {show('speed') && <Card>
             <CardHeader title="Speed to lead" subtitle="How fast the AI reaches a new Meta lead" />
             <div className="px-5 pb-3">

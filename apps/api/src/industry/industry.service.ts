@@ -7,7 +7,8 @@ import { errorMessage, log } from '../common/logger.js';
 import { Orchestrator } from '../agents/orchestrator.service.js';
 import { AiService } from '../ai/ai.service.js';
 import { QualityService } from './quality.service.js';
-import { foodDashboard, hospitalDashboard, hotelDashboard } from './vertical-dashboards.js';
+import { cctvDashboard, foodDashboard, hospitalDashboard, hotelDashboard } from './vertical-dashboards.js';
+import { MonitoringService } from '../visionops/monitoring.service.js';
 import { dataInventory } from './data-inventory.js';
 import { AGENT_CATALOGUE, INDUSTRY_LABEL, SETTABLE_INDUSTRIES, catalogueFor, effectiveIndustry, type CatalogueAgent, type IndustryId } from './industries.js';
 
@@ -71,6 +72,7 @@ export class IndustryService {
     private readonly quality: QualityService,
     @Optional() private readonly orchestrator?: Orchestrator,
     @Optional() private readonly ai?: AiService,
+    @Optional() private readonly monitoring?: MonitoringService,
   ) {}
 
   async workspace(organizationId: string) {
@@ -111,6 +113,7 @@ export class IndustryService {
       : ws.industry === 'food' ? await foodDashboard(this.prisma, organizationId, days, since)
       : ws.industry === 'hotel' ? await hotelDashboard(this.prisma, organizationId, days, since)
       : ws.industry === 'hospital' ? await hospitalDashboard(this.prisma, organizationId, days, since)
+      : ws.industry === 'cctv' && this.monitoring ? cctvDashboard((await this.monitoring.overview(organizationId, { days })) as never)
       : await this.sales(organizationId, days, since, ws.industry === 'retail');
     return { ...base, kpis: built.kpis, charts: built.charts, notes: [...notes, ...built.notes] };
   }

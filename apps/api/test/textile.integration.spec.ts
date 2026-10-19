@@ -297,7 +297,25 @@ describe.skipIf(!enabled)('Textile sales (integration)', () => {
       expect(q.notes).toMatch(/Customer on whatsapp: "Need white cotton shirting 500 metres, deliver to Tiruppur"/); // their words, not "yes"
       expect(Number(q.items[0].unitPrice)).toBe(182.5); // the approved catalogue price, never a guess
       expect(await prisma.followUp.findFirst({ where: { customerId: lead.customerId, channel: 'human', status: 'open' } })).toBeTruthy();
+      // After the request: a stray "yes" points to it (no new enquiry), and a delivery question never gets a promised date.
+      const again = await send('yes');
+      expect(again.response).toMatch(new RegExp(`${q.number} is already with our team`));
+      const when = await send('when can you deliver?');
+      expect(when.response).toMatch(/delivery date on your quotation/);
+      expect(when.response).not.toMatch(/\b\d+\s*(days?|weeks?)\b/i);
+      expect(await prisma.quotation.count({ where: { leadId: lead.leadId } })).toBe(1);
       expect(llm.run).not.toHaveBeenCalled();
+    });
+
+    it('a detail added to the item on screen offers the quotation instead of listing the same products again', async () => {
+      const lead = await newLead();
+      const send = chat(lead);
+      const first = await send('Need cotton shirting 500 metres');
+      expect(first.response).toMatch(/Cotton Poplin Shirting/);
+      const more = await send('white colour, delivery to Tiruppur');
+      expect(more.response).toMatch(/Shall I ask our team for a quotation for 500 metre white cotton shirting\?/);
+      const yes = await send('yes');
+      expect(yes.response).toMatch(/Quotation request Q-\d{4}-\d{4} is with our team/);
     });
 
     it('counted stock (Operations) overrides the manual "in stock" label: never promised beyond what is available', async () => {

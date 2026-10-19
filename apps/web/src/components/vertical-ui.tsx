@@ -37,6 +37,12 @@ const STATUS_TONE: Record<string, ToneName> = {
   not_required: 'slate', simulated_paid: 'cyan', simulated_failed: 'red', paid_verified: 'green',
   scheduled: 'blue', simulated: 'cyan', skipped: 'slate', failed: 'red', open: 'amber',
   passed: 'green', blocked: 'amber', provider_required: 'violet',
+  // VisionOps devices, incidents, agents, notifications
+  online: 'green', offline: 'red', unknown: 'slate', degraded: 'amber', maintenance: 'slate', verified: 'green', not_confirmed: 'amber', failing: 'red', unsupported: 'slate',
+  ok: 'green', unavailable: 'red', warning: 'amber', never_seen: 'slate', revoked: 'slate', backup_link: 'amber', suspected_outage: 'red',
+  OPEN: 'red', ACKNOWLEDGED: 'amber', ASSIGNED: 'blue', IN_PROGRESS: 'violet', RESTORATION_CHECK: 'cyan', RESOLVED: 'green', CLOSED: 'slate',
+  critical: 'red', high: 'amber', medium: 'blue', low: 'slate', deferred: 'amber', queued: 'blue', sent: 'blue', delivered: 'green', read: 'green',
+  healthy: 'green', outage: 'red', active: 'green', expiring: 'amber',
 };
 
 export function Pill({ status, children, tone, className }: { status?: string; children?: ReactNode; tone?: ToneName; className?: string }) {
@@ -44,7 +50,7 @@ export function Pill({ status, children, tone, className }: { status?: string; c
   return (
     <span className={cx('inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold ring-1 ring-inset', PILL[t], className)}>
       <span className="size-1.5 rounded-full bg-current opacity-70" aria-hidden />
-      {children ?? (status ?? '').replace(/_/g, ' ')}
+      {children ?? (status ?? '').replace(/_/g, ' ').toLowerCase()}
     </span>
   );
 }

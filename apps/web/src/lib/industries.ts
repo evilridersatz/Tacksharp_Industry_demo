@@ -1,7 +1,8 @@
 import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
-  TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound, type LucideIcon,
+  TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, type LucideIcon,
 } from 'lucide-react';
 
 /**
@@ -9,7 +10,7 @@ import {
  * how that industry looks: navigation, terminology, accent, settings sections and playground examples. Every nav entry
  * points to a page that exists; nothing here grants access (the API checks every request).
  */
-export const INDUSTRY_IDS = ['textile', 'restaurant', 'food', 'hotel', 'hospital', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
+export const INDUSTRY_IDS = ['textile', 'restaurant', 'food', 'hotel', 'hospital', 'cctv', 'real_estate', 'retail', 'manufacturing', 'agency'] as const;
 export type IndustryId = (typeof INDUSTRY_IDS)[number];
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; badge?: 'live' | 'handoff' | 'orders' };
@@ -29,7 +30,7 @@ export type IndustryDef = {
   nav: NavGroup[];
   terms: { customer: string; customers: string; lead: string; leads: string; order: string; orders: string; product: string; products: string };
   /** Settings sections that apply (ids used by the Settings page). */
-  settings: Array<'industry' | 'speed' | 'calling' | 'nurture' | 'visits' | 'team' | 'roi' | 'textile' | 'finance' | 'restaurant' | 'food' | 'hotel' | 'hospital'>;
+  settings: Array<'industry' | 'speed' | 'calling' | 'nurture' | 'visits' | 'team' | 'roi' | 'textile' | 'finance' | 'restaurant' | 'food' | 'hotel' | 'hospital' | 'monitoring'>;
   search: { placeholder: string; href: string };
 };
 
@@ -39,6 +40,12 @@ const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
 ];
 const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
+
+/** Product family a workspace belongs to. One login and one API; the family only changes the switcher grouping and the brand line. */
+export type ProductFamily = 'agents' | 'visionops';
+export const PRODUCT_LABEL: Record<ProductFamily, string> = { agents: 'Tacksharp AI Agents', visionops: 'Tacksharp VisionOps' };
+export const PRODUCT_TAGLINE: Record<ProductFamily, string> = { agents: 'AI employees platform', visionops: 'Centralized CCTV monitoring' };
+export const productOf = (industry: string | null | undefined): ProductFamily => (industry === 'cctv' ? 'visionops' : 'agents');
 
 export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
   textile: {
@@ -159,6 +166,29 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
     terms: { customer: 'patient', customers: 'patients', lead: 'lead', leads: 'leads', order: 'appointment', orders: 'appointments', product: 'service', products: 'services' },
     settings: ['industry', 'hospital', 'team'],
     search: { placeholder: 'Search appointments…', href: '/hospital/appointments' },
+  },
+  cctv: {
+    id: 'cctv', label: 'CCTV Monitoring (VisionOps)', short: 'VisionOps', tagline: 'Centralized CCTV monitoring: manage all sites from one screen.', icon: Cctv,
+    accent: '#1e5bd8', accentSoft: '#e8effd', onDark: '#8fb0ff',
+    nav: [
+      { section: 'Monitoring', items: [
+        { href: '/', label: 'Operations center', icon: LayoutDashboard },
+        { href: '/visionops/incidents', label: 'Incidents', icon: Siren },
+        { href: '/visionops/sites', label: 'Sites', icon: MapPin },
+        { href: '/visionops/cameras', label: 'Cameras & recorders', icon: Cctv },
+      ] },
+      { section: 'Service', items: [
+        { href: '/visionops/team', label: 'Technicians & agents', icon: UserCog },
+        { href: '/visionops/notifications', label: 'WhatsApp alerts', icon: BellRing },
+        { href: '/visionops/reports', label: 'Uptime & SLA reports', icon: FileBarChart },
+        { href: '/visionops/plans', label: 'Plans & cost', icon: Calculator },
+      ] },
+      { section: 'AI', items: [{ href: '/agents', label: 'AI agents', icon: Bot }] },
+      SETUP,
+    ],
+    terms: { customer: 'customer', customers: 'customers', lead: 'enquiry', leads: 'enquiries', order: 'incident', orders: 'incidents', product: 'camera', products: 'cameras' },
+    settings: ['industry', 'monitoring'],
+    search: { placeholder: 'Search cameras…', href: '/visionops/cameras' },
   },
   real_estate: {
     id: 'real_estate', label: 'Real Estate', short: 'Real estate', tagline: 'Lead qualification, AI calls and site visits.', icon: Building2,

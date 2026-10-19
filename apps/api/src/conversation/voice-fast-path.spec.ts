@@ -20,6 +20,9 @@ describe('voice fast path (real call 2026-10-10 evening)', () => {
     expect(commonQuestion('neenga machine-aa?')).toBe('ai');
     expect(commonQuestion('என்ன properties இருக்கு?')).toBe('whatProperties');
     expect(commonQuestion('what options do you have?')).toBe('whatProperties');
+    expect(commonQuestion('Show me the options')).toBe('whatProperties');
+    expect(commonQuestion('please send all the properties')).toBe('whatProperties');
+    expect(commonQuestion('show me the way to the site')).toBeUndefined();
     expect(commonQuestion('Porur la 2 BHK venum')).toBeUndefined();
     expect(commonQuestion('சரிங்க')).toBeUndefined();
     expect(commonQuestion('நாளைக்கு காலை ஒம்பது மணி')).toBeUndefined();

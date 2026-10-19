@@ -5,6 +5,7 @@ import { OrderingEngine } from '../restaurant/ordering-engine.service.js';
 import { config } from '../common/config.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { VERTICAL_INDUSTRIES, VerticalAssistant, type VerticalIndustry } from '../verticals/vertical-assistant.service.js';
+import { TechnicianAssistant } from '../visionops/technician-assistant.service.js';
 
 export type { GenerateResponseInput, GenerateResponseResult } from './conversation-engine.service.js';
 export type { AiUsageMetrics } from './llm-runner.service.js';
@@ -24,6 +25,7 @@ export class AiService {
     private readonly ordering: OrderingEngine,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly verticals?: VerticalAssistant,
+    @Optional() private readonly visionops?: TechnicianAssistant,
   ) {}
 
   /** Food / hotel / hospital businesses (Settings → Industry) get their own assistant; null = not one of those. */
@@ -39,6 +41,8 @@ export class AiService {
     if ((await this.tenancy.vertical(organizationId)) !== 'restaurant') {
       const vertical = await this.verticalIndustry(organizationId);
       if (vertical) return this.verticals!.generate(vertical, { ...input, organizationId });
+      // CCTV monitoring (VisionOps): technicians acknowledge / update incidents; customer contacts get a read-only status.
+      if (this.visionops && this.settings && (await this.settings.get(organizationId)).industry === 'cctv') return this.visionops.generate({ ...input, organizationId });
       return this.engine.generate(input);
     }
     const result = await this.ordering.generate({

@@ -12,7 +12,7 @@ catalogue per industry + a playground run, tenant isolation, live-workspace play
 drawer, and no horizontal overflow at 320 / 375 / 390 / 768 / 1024 / 1366 / 1440 px. Nothing is sent to anyone.
 """
 from playwright.sync_api import sync_playwright
-import os, re, subprocess, tempfile
+import json, os, re, subprocess, tempfile
 
 WEB, API = 'http://localhost:3001', 'http://localhost:3000'
 DB = os.environ.get('TEST_DB_NAME', 'tacksharp_test')
@@ -38,6 +38,7 @@ MENU = {
     'food': (['Orders & kitchen', 'Menu & availability', 'Complaints & handoffs', 'Sales & analytics'], ['Quotations', 'Site visits', 'Menu & stock', 'Reservations', 'Appointments']),
     'hotel': (['Reservations', 'Availability calendar', 'Rooms & rates', 'Occupancy & revenue'], ['Quotations', 'Site visits', 'Menu & availability', 'Appointments', 'Orders & kitchen']),
     'hospital': (['Appointments', 'Doctors & OPD hours', 'Insurance & claims', 'Patients'], ['Quotations', 'Site visits', 'Reservations', 'Orders & kitchen', 'Menu & stock']),
+    'cctv': (['Operations center', 'Incidents', 'Sites', 'Cameras & recorders', 'Technicians & agents', 'WhatsApp alerts', 'Uptime & SLA reports', 'Plans & cost'], ['Quotations', 'Site visits', 'Reservations', 'Appointments', 'Menu & stock', 'Leads & CRM']),
 }
 # A KPI label that must be on the overview, and one that must not.
 KPI = {
@@ -50,11 +51,12 @@ KPI = {
     'hospital': ('No-show rate', 'Occupancy tonight'),
 }
 # Overflow pages per industry (besides / and /agents).
-EXTRA_PAGE = {'textile': '/catalogue', 'restaurant': '/orders', 'real_estate': '/leads', 'retail': '/sales-orders', 'manufacturing': '/quality', 'agency': '/leads', 'food': '/food/orders', 'hotel': '/hotel/availability', 'hospital': '/hospital/appointments'}
+EXTRA_PAGE = {'cctv': '/visionops/incidents', 'textile': '/catalogue', 'restaurant': '/orders', 'real_estate': '/leads', 'retail': '/sales-orders', 'manufacturing': '/quality', 'agency': '/leads', 'food': '/food/orders', 'hotel': '/hotel/availability', 'hospital': '/hospital/appointments'}
 # Module pages that must load with data (heading text expected on the page).
 MODULE_PAGES = {
     'food': [('/food/orders', 'Waiting to be accepted'), ('/food/menu', 'Delivery zones'), ('/demo-data', 'Orders'), ('/scenarios', 'Order on WhatsApp')],
     'hotel': [('/hotel/reservations', 'Arrivals today'), ('/hotel/availability', 'sellable'), ('/hotel/rooms', 'Need housekeeping'), ('/demo-data', 'Reservations'), ('/scenarios', 'Room booking')],
+    'cctv': [('/visionops/incidents', 'Not acknowledged'), ('/visionops/sites', 'Site map'), ('/visionops/cameras', 'Addresses are masked'), ('/visionops/team', 'Add a person'), ('/visionops/notifications', 'Simulated (not sent)'), ('/visionops/reports', 'By customer'), ('/visionops/plans', 'Operating cost estimate'), ('/demo-data', 'Cameras'), ('/scenarios', 'End to end')],
     'hospital': [('/hospital/appointments', 'Still to come today'), ('/hospital/doctors', 'OPD hours / week'), ('/hospital/insurance', 'Documents pending'), ('/hospital/patients', 'From campaigns'), ('/demo-data', 'Insurance cases'), ('/scenarios', 'Campaign lead')],
 }
 
@@ -94,12 +96,23 @@ with sync_playwright() as p:
     home = api('/auth/me')['body']['organizationId']
     spaces = api('/auth/workspaces')['body']
     demos = {w['industry']: w for w in spaces if w['isDemo'] and w['organizationId'].startswith('org_demo_')}
-    check('owner can open all nine demo workspaces', set(demos) == set(MENU), ', '.join(sorted(demos)))
+    check(f'owner can open all {len(MENU)} demo workspaces', set(demos) == set(MENU), ', '.join(sorted(demos)))
 
     def switch_to(w):
         pg.get_by_role('button', name='Switch workspace').first.click(); pg.wait_for_timeout(700)
         pg.get_by_role('option').filter(has_text=w['name']).first.click()
         pg.wait_for_url(WEB + '/', timeout=15000); pg.wait_for_timeout(2500)
+
+    # Product families: one login, two groups in the switcher; VisionOps workspaces only under VisionOps.
+    pg.goto(WEB + '/'); pg.wait_for_timeout(1500)
+    pg.get_by_role('button', name='Switch workspace').first.click(); pg.wait_for_timeout(1200)
+    agents_box, vo_box = pg.get_by_role('listbox', name='Tacksharp AI Agents'), pg.get_by_role('listbox', name='Tacksharp VisionOps')
+    check('switcher groups workspaces into Tacksharp AI Agents and Tacksharp VisionOps', agents_box.count() == 1 and vo_box.count() == 1)
+    if vo_box.count() and agents_box.count():
+        cctv_name = demos['cctv']['name'] if 'cctv' in demos else '?'
+        check('switcher: CCTV workspace listed only under VisionOps', cctv_name in vo_box.inner_text() and cctv_name not in agents_box.inner_text() and agents_box.get_by_role('option').count() == len([x for x in spaces if x['industry'] != 'cctv']))
+    pg.screenshot(path=os.path.join(SHOTS, 'switcher-families.png'))
+    pg.keyboard.press('Escape')
 
     for ind, (must, never) in MENU.items():
         w = demos.get(ind)
@@ -122,6 +135,13 @@ with sync_playwright() as p:
             check(f'{ind}: dashboard shows "{yes}"', yes in figures)
             check(f'{ind}: dashboard has no "{no}"', no not in figures)
             check(f'{ind}: charts carry their data source', pg.get_by_text('Source:').count() >= 2)
+        if ind == 'cctv':
+            pg.wait_for_selector('section[aria-label="Live status"]', timeout=15000); pg.wait_for_timeout(1500)
+            board = pg.locator('section[aria-label="Live status"]').inner_text()
+            ov = api('/monitoring/overview?days=30')['body']['kpis']
+            check('cctv: status board shows live counts from the API', all(x in board for x in ['CAMERAS', 'ONLINE', 'OFFLINE', 'UNKNOWN', 'NOT ACKNOWLEDGED']) and str(ov['cameras']) in board and str(ov['offline']) in board, board[:160].replace(chr(10), ' '))
+            check('cctv: one health tile per (non-lab) site', pg.get_by_role('list', name='Sites').get_by_role('listitem').count() == int(sql(f"SELECT COUNT(*) FROM MonitoringSite WHERE organizationId='{w['organizationId']}' AND code NOT LIKE 'LAB-%'")))
+            check('cctv: charts and "Needs attention" render', pg.get_by_text('Camera availability').count() > 0 and pg.get_by_text('Needs attention').count() > 0 and pg.get_by_text('Incidents by root cause').count() > 0)
         pg.screenshot(path=os.path.join(SHOTS, f'overview-{ind}.png'), full_page=True)
 
         # Agents: own catalogue only.
@@ -138,6 +158,28 @@ with sync_playwright() as p:
             body = pg.locator('main').inner_text()
             check(f'{ind}: {path} shows its data', text in body and 'Not part of' not in body, body[:120].replace(chr(10), ' '))
             pg.screenshot(path=os.path.join(SHOTS, f"page-{ind}-{path.strip('/').replace('/', '-')}.png"), full_page=True)
+
+        if ind == 'cctv':
+            # Work a real (lab) incident from the dashboard: the scenario opens one, the UI acknowledges it.
+            run = api('/industry/scenarios/run', {'scenarioId': 'cctv_camera_offline'})['body']
+            check('cctv: scenario runner opened a lab incident', run.get('ok') is True, json.dumps(run.get('summary')))
+            inc = next((i for i in api('/monitoring/incidents?status=active&q=LAB-01')['body']['rows'] if i['status'] == 'OPEN'), None)
+            if inc:
+                pg.goto(WEB + f"/visionops/incidents?open={inc['id']}"); pg.wait_for_timeout(2500)
+                dlg = pg.locator('dialog[open]')
+                check('cctv: incident detail shows timeline, WhatsApp preview and first checks', all(t in dlg.inner_text().lower() for t in ['timeline', 'whatsapp', 'first checks', 'please reply "ack', 'check the camera power']) and any(t in dlg.inner_text().lower() for t in ['simulated', 'deferred']), dlg.inner_text()[:200].replace(chr(10), ' '))
+                dlg.get_by_role('button', name='Acknowledge').click(); pg.wait_for_timeout(1800)
+                check('cctv: Acknowledge from the dashboard updates the incident', api(f"/monitoring/incidents/{inc['id']}")['body']['status'] == 'ACKNOWLEDGED')
+                dlg.get_by_label('Root cause (what was fixed)').fill('UI test: cable reseated'); dlg.get_by_role('button', name='Mark fixed').click(); pg.wait_for_timeout(1800)
+                after = api(f"/monitoring/incidents/{inc['id']}")['body']
+                check('cctv: "Mark fixed" without fresh checks waits for evidence (not resolved)', after['status'] == 'RESTORATION_CHECK', after['status'])
+                pg.screenshot(path=os.path.join(SHOTS, 'cctv-incident-detail.png'), full_page=True)
+                pg.keyboard.press('Escape')
+            srt = api('/monitoring/cameras?pageSize=200&sort=lastSeen')['body']['rows']
+            seen = [c['lastSeenAt'] for c in srt if c['lastSeenAt']]
+            check('cctv: cameras sort by longest without a successful check', seen == sorted(seen) and len(srt) > 0)
+            cams = api('/monitoring/cameras?pageSize=200')['body']
+            check('cctv: no camera credentials or RTSP URLs in API responses', 'rtsp://' not in json.dumps(cams) and all((c['networkAddress'] or '').count('•') >= 1 for c in cams['rows'] if c['networkAddress']))
 
         # Isolation: what the API shows equals this organization's rows.
         if ind in ('real_estate', 'agency', 'textile', 'retail', 'food', 'hotel', 'hospital'):
@@ -182,6 +224,17 @@ with sync_playwright() as p:
                 if over > 1: bad.append(f'{path}@{width}:{over}px')
             if width in (375, 1024): pg.screenshot(path=os.path.join(SHOTS, f'resp-{ind}-{width}.png'))
         check(f'{ind}: no horizontal page overflow at {"/".join(map(str, WIDTHS))} px', not bad, ', '.join(bad[:8]))
+        if ind == 'cctv':
+            bad = []
+            for width in (320, 390, 768, 1280):
+                pg.set_viewport_size({'width': width, 'height': 860})
+                for path, _ in MODULE_PAGES['cctv']:
+                    pg.goto(WEB + path); pg.wait_for_timeout(1200)
+                    over = pg.evaluate('document.documentElement.scrollWidth - window.innerWidth')
+                    if over > 1: bad.append(f'{path}@{width}:{over}px')
+                if width == 390: pg.screenshot(path=os.path.join(SHOTS, 'resp-cctv-incidents-390.png'))
+                if width == 768: pg.screenshot(path=os.path.join(SHOTS, 'resp-cctv-768.png'), full_page=True)
+            check('cctv: every VisionOps page fits 320–1280 px without sideways scrolling', not bad, ', '.join(bad[:8]))
 
     # Accessible drawer (phone width).
     pg.set_viewport_size({'width': 375, 'height': 800}); pg.goto(WEB + '/'); pg.wait_for_timeout(1500)

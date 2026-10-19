@@ -193,10 +193,16 @@ export type TenantSettings = {
   team: { alertPhones: string[]; alertOnBooking: boolean; alertOnHotLead: boolean; alertTemplate: string };
   hotLead: { enabled: boolean; maxTimelineDays: number };
   roi: { costPerLeadInr: number; voiceCostPerMinuteInr: number; whatsappCostPerMessageInr: number };
-  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency' | 'food' | 'hotel' | 'hospital';
+  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency' | 'food' | 'hotel' | 'hospital' | 'cctv';
   food: { taxPct: number; packagingFee: number; pickupEnabled: boolean; deliveryEnabled: boolean; deliveryZones: Array<{ name: string; keywords: string[]; fee: number; minOrder: number; etaMinutes: number }>; faqs: Array<{ q: string; a: string }> };
   hotel: { checkInTime: string; checkOutTime: string; taxPct: number; autoConfirm: boolean; holdMinutes: number; depositPct: number; freeCancellationHours: number; cancellationPolicy: string; maxNights: number; faqs: Array<{ q: string; a: string }> };
   hospital: { emergencyNumber: string; bookingWindowDays: number; reminderHoursBefore: number; faqs: Array<{ q: string; a: string }> };
+  monitoring: {
+    failureThreshold: number; debounceSeconds: number; restoreSuccesses: number; staleAfterMinutes: number; correlationWindowMinutes: number;
+    ackDeadlineMinutes: number; escalationStepMinutes: number; quietHours: { enabled: boolean; start: string; end: string };
+    notifyCustomerOnResolution: boolean; voiceEscalation: boolean; alertTemplate: string; whatsappCostInr: number;
+    plans: Array<{ code: string; name: string; pricePerCameraInr: number; features: string[] }>;
+  };
   textile: { quoteReminderDays: number; feedbackAfterHours: number; notifyOrderStatus: boolean; maxDiscountPct: number };
   finance: { paymentTermsDays: number; dispatchPaymentRule: 'none' | 'any_verified' | 'full'; autoDraftInvoice: boolean };
   agents: { paused: string[] };

@@ -269,6 +269,15 @@ export class ConversationsService {
       await this.prisma.message.update({ where: { id: row.id }, data: { deliveryStatus: next, deliveryError: next === 'failed' ? (error ?? 'failed').slice(0, 500) : null, deliveryUpdatedAt: new Date() } });
       updated++;
     }
+    // VisionOps incident alerts sent to technicians are tracked the same way (delivery status tracking).
+    if (next === 'delivered' || next === 'read' || next === 'failed') {
+      const alerts = await this.prisma.notificationAttempt.findMany({ where: { organizationId, providerMessageId }, select: { id: true, status: true, deliveredAt: true } }).catch(() => []);
+      for (const a of alerts) {
+        if (next !== 'failed' && (rank[a.status] ?? 0) >= rank[next]) continue;
+        await this.prisma.notificationAttempt.update({ where: { id: a.id }, data: { status: next, ...(next === 'failed' ? { lastError: (error ?? 'failed').slice(0, 500) } : { deliveredAt: a.deliveredAt ?? new Date() }) } });
+        updated++;
+      }
+    }
     return updated;
   }
 

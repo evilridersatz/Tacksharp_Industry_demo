@@ -33,6 +33,8 @@ const FABRICS: Array<[string, RegExp]> = [
   ['net', /\bnet\s*(fabric|cloth)?\b/iu],
   ['jacquard', /\bjacquard\b/iu],
   ['muslin', /\bmuslin\b/iu],
+  ['poplin', /\bpoplin\b/iu],
+  ['twill', /\btwill\b/iu],
 ];
 
 const PRODUCTS: Array<[string, RegExp]> = [
@@ -40,6 +42,11 @@ const PRODUCTS: Array<[string, RegExp]> = [
   ['dress material', /\b(dress\s*materials?|chudi(dar)?|churidar|salwar)\b|சுடிதார்/iu],
   ['shirting', /\bshirting\b|\bshirt\s*(fabric|cloth|material)/iu],
   ['suiting', /\bsuiting\b/iu],
+  // Ready-made garments ("200 cotton formal shirts"): matched against catalogue names such as "Cotton Formal Shirt".
+  ['t-shirt', /\bt-?shirts?\b|\btees?\b/iu],
+  ['shirt', /\bshirts?\b|சட்டை/iu],
+  ['kurta', /\bkurtas?\b/iu],
+  ['trouser', /\b(trousers?|pants)\b/iu],
   ['kurti', /\bkurtis?\b/iu],
   ['dhoti', /\b(dhotis?|veshtis?|vesti)\b|வேட்டி/iu],
   ['towel', /\btowels?\b|துண்டு/iu],
@@ -60,8 +67,10 @@ const UNIT_WORDS: Array<[string, RegExp]> = [
   ['kg', /^(kg|kgs|kilo|kilos|கிலோ)$/iu],
   ['roll', /^(roll|rolls|thaan|than)$/iu],
   ['set', /^(set|sets)$/iu],
-  ['piece', /^(sarees?|saris?|kurtis?|towels?|dhotis?)$/iu],
+  ['piece', /^(sarees?|saris?|kurtis?|towels?|dhotis?|shirts?|t-?shirts?|kurtas?|trousers|pants|uniforms?|bedsheets?)$/iu],
 ];
+/** "200 cotton formal shirts": a count followed by up to three describing words and a garment. */
+const COUNTED_GARMENT = /(\d+(?:\.\d+)?)\s*(k|thousand)?\s+(?:[a-z-]+\s+){1,3}?(sarees?|saris?|kurtis?|kurtas?|towels?|dhotis?|t-?shirts?|shirts?|trousers|pants|uniforms?|bed\s*sheets?)\b/i;
 
 export function extractTextileFacts(text: string): TextileFacts {
   const t = (text ?? '').replace(/,(?=\d{3})/g, '');
@@ -78,9 +87,9 @@ export function extractTextileFacts(text: string): TextileFacts {
     priceSpan = price[0];
   }
   const rest = priceSpan ? t.replace(priceSpan, ' ') : t;
-  const q = rest.match(/(\d+(?:\.\d+)?)\s*(k|thousand|ஆயிரம்)?\s*([a-zA-Z஀-௿]+)?/g) ?? [];
+  const q = rest.match(/(\d+(?:\.\d+)?)\s*(k\b|thousand|ஆயிரம்)?\s*([a-zA-Z஀-௿]+)?/g) ?? [];
   for (const m of q) {
-    const parts = m.match(/(\d+(?:\.\d+)?)\s*(k|thousand|ஆயிரம்)?\s*([a-zA-Z஀-௿]+)?/);
+    const parts = m.match(/(\d+(?:\.\d+)?)\s*(k\b|thousand|ஆயிரம்)?\s*([a-zA-Z஀-௿]+)?/);
     if (!parts) continue;
     const unitWord = parts[3] ?? '';
     const unit = UNIT_WORDS.find(([, re]) => re.test(unitWord))?.[0];
@@ -91,6 +100,16 @@ export function extractTextileFacts(text: string): TextileFacts {
       f.quantity = n;
       f.unit = unit;
       break;
+    }
+  }
+  if (f.quantity === undefined) {
+    const g = rest.match(COUNTED_GARMENT);
+    if (g) {
+      const n = Number(g[1]) * (g[2] ? 1000 : 1);
+      if (n > 0 && n < 10_000_000) {
+        f.quantity = n;
+        f.unit = 'piece';
+      }
     }
   }
   const dest = t.match(/\b(?:deliver(?:y)?\s+(?:to|at)|ship(?:ping)?\s+to|send\s+(?:it\s+)?to|to)\s+([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,})?)/) ?? t.match(/([A-Za-z஀-௿]{3,})-?க்கு\s*(?:delivery|டெலிவரி|அனுப்ப)/u);

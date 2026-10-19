@@ -7,13 +7,13 @@ import { Bell, Check, ChevronsUpDown, FlaskConical, Loader2, LogOut, Menu, Searc
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
-import { INDUSTRIES, industryDef, type IndustryDef, type NavItem } from '@/lib/industries';
+import { INDUSTRIES, PRODUCT_LABEL, PRODUCT_TAGLINE, industryDef, productOf, type IndustryDef, type NavItem, type ProductFamily } from '@/lib/industries';
 import { forgetWorkspace, switchWorkspace, useWorkspace, type WorkspaceOption } from '@/lib/industry';
 import { cx } from './ui';
 
 type Badges = { live?: number; handoff?: number; orders?: number };
 
-function Logo() {
+function Logo({ product = 'agents' }: { product?: ProductFamily }) {
   return (
     <div className="flex items-center gap-2.5 px-2">
       <span className="grid size-9 place-items-center rounded-full bg-[conic-gradient(from_200deg,#7c5cf0,#e11d48,#f59e0b,#7c5cf0)]">
@@ -21,7 +21,7 @@ function Logo() {
       </span>
       <div className="leading-tight">
         <p className="text-[15px] font-bold text-white">Tacksharp.ai</p>
-        <p className="text-[11px] text-slate-400">AI employees platform</p>
+        <p className="text-[11px] text-slate-400">{PRODUCT_TAGLINE[product]}</p>
       </div>
     </div>
   );
@@ -166,35 +166,45 @@ function WorkspaceSwitcher({ def }: { def: IndustryDef | null }) {
       </button>
       {open && (
         <div className="absolute inset-x-0 top-full z-30 mt-1.5 overflow-hidden rounded-[12px] border border-white/10 bg-sidebar-2 shadow-2xl">
-          <p className="px-3 pt-2.5 pb-1 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">Your workspaces</p>
           {!list && !error && <p className="flex items-center gap-2 px-3 py-3 text-[12.5px] text-slate-400"><Loader2 className="size-4 animate-spin" /> Loading…</p>}
           {error && <p role="alert" className="px-3 py-2 text-[12.5px] text-rose-300">{error}</p>}
-          <ul role="listbox" aria-label="Workspaces" className="max-h-[320px] overflow-y-auto pb-1.5">
-            {list?.map((w) => {
-              const d = INDUSTRIES[w.industry] ?? industryDef(w.industry);
-              const WIcon = d.icon;
+          <div className="max-h-[360px] overflow-y-auto pb-1.5">
+            {(['agents', 'visionops'] as const).map((fam) => {
+              const items = (list ?? []).filter((w) => productOf(w.industry) === fam);
+              if (!items.length) return null;
               return (
-                <li key={w.organizationId} role="option" aria-selected={w.current}>
-                  <button
-                    type="button"
-                    disabled={w.current || busy !== null}
-                    onClick={() => pick(w.organizationId)}
-                    className="flex min-h-11 w-full items-center gap-2.5 px-3 py-1.5 text-left hover:bg-white/[0.06] disabled:cursor-default"
-                  >
-                    <WIcon className="size-4 shrink-0" style={{ color: d.onDark }} aria-hidden />
-                    <span className="min-w-0 flex-1 leading-tight">
-                      <span className="block truncate text-[12.5px] font-semibold text-white">{w.name}</span>
-                      <span className="block truncate text-[11px] text-slate-400">
-                        {w.industryLabel}
-                        {w.isDemo ? ' · Demo data' : ''}
-                      </span>
-                    </span>
-                    {busy === w.organizationId ? <Loader2 className="size-4 animate-spin text-slate-400" /> : w.current && <Check className="size-4 text-slate-300" aria-label="Current" />}
-                  </button>
-                </li>
+                <div key={fam}>
+                  <p id={`ws-${fam}`} className="px-3 pt-2.5 pb-1 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{PRODUCT_LABEL[fam]}</p>
+                  <ul role="listbox" aria-labelledby={`ws-${fam}`}>
+                    {items.map((w) => {
+                      const d = INDUSTRIES[w.industry] ?? industryDef(w.industry);
+                      const WIcon = d.icon;
+                      return (
+                        <li key={w.organizationId} role="option" aria-selected={w.current}>
+                          <button
+                            type="button"
+                            disabled={w.current || busy !== null}
+                            onClick={() => pick(w.organizationId)}
+                            className="flex min-h-11 w-full items-center gap-2.5 px-3 py-1.5 text-left hover:bg-white/[0.06] disabled:cursor-default"
+                          >
+                            <WIcon className="size-4 shrink-0" style={{ color: d.onDark }} aria-hidden />
+                            <span className="min-w-0 flex-1 leading-tight">
+                              <span className="block truncate text-[12.5px] font-semibold text-white">{w.name}</span>
+                              <span className="block truncate text-[11px] text-slate-400">
+                                {w.industryLabel}
+                                {w.isDemo ? ' · Demo data' : ''}
+                              </span>
+                            </span>
+                            {busy === w.organizationId ? <Loader2 className="size-4 animate-spin text-slate-400" /> : w.current && <Check className="size-4 text-slate-300" aria-label="Current" />}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               );
             })}
-          </ul>
+          </div>
           {list && list.length < 2 && <p className="border-t border-white/10 px-3 py-2 text-[11.5px] text-slate-400">Ask an admin for access to other workspaces.</p>}
           <Link href="/onboarding" className="flex min-h-11 items-center border-t border-white/10 px-3 text-[12.5px] font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white">
             Setup guide
@@ -317,7 +327,7 @@ function Shell({ children }: { children: ReactNode }) {
 
   const sidebar = (onNavigate?: () => void) => (
     <div className="flex min-h-full flex-col bg-sidebar px-3 py-5">
-      <Logo />
+      <Logo product={productOf(workspace?.industry)} />
       {me && <WorkspaceSwitcher def={def} />}
       {def && <NavList def={def} badges={badges} onNavigate={onNavigate} />}
       <div className="mt-auto flex flex-col gap-4 pt-6">

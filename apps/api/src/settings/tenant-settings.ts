@@ -11,7 +11,7 @@ import { nextAllowedCallTime } from '../common/time.js';
 export type TenantSettings = {
   /** Which sales assistant this business uses. real_estate (default) is unchanged; textile switches the AI agent,
    *  dashboard pages and follow-ups to the textile catalogue / quotation / order flow. */
-  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency' | 'food' | 'hotel' | 'hospital';
+  industry: 'real_estate' | 'textile' | 'retail' | 'manufacturing' | 'agency' | 'food' | 'hotel' | 'hospital' | 'cctv';
   /** Restaurant & food ordering (cafes, cloud kitchens, takeaway). GR Chicken keeps its own engine and settings. */
   food: {
     /** Tax % applied to items without their own tax rate (GST on restaurant food is usually 5%). */
@@ -45,6 +45,35 @@ export type TenantSettings = {
     bookingWindowDays: number;
     reminderHoursBefore: number;
     faqs: Array<{ q: string; a: string }>;
+  };
+  /** CCTV camera health & downtime monitoring (Tacksharp VisionOps). Status is decided by code from health checks. */
+  monitoring: {
+    /** Consecutive failed checks before a fault is confirmed (and one incident opened). */
+    failureThreshold: number;
+    /** ...and the device must have been failing at least this long (debounce against blips). */
+    debounceSeconds: number;
+    /** Consecutive successful fresh checks required before an incident is resolved by verification. */
+    restoreSuccesses: number;
+    /** No heartbeat from a site agent for this long: its devices become "unknown" (never "offline"). */
+    staleAfterMinutes: number;
+    /** The same fault on the same device within this window after resolution reopens the incident. */
+    correlationWindowMinutes: number;
+    /** No acknowledgment within this many minutes: escalate to the supervisor. */
+    ackDeadlineMinutes: number;
+    /** Further escalation (supervisor -> manager) this many minutes after the previous level. */
+    escalationStepMinutes: number;
+    /** Non-critical alerts inside quiet hours wait until the end; critical ones go to on-call people. */
+    quietHours: { enabled: boolean; start: string; end: string };
+    /** Send the customer a resolution summary (only for customers that opted in). */
+    notifyCustomerOnResolution: boolean;
+    /** Voice escalation calls. Off by default; demo / DRY_RUN never call. */
+    voiceEscalation: boolean;
+    /** Approved WhatsApp template (one body variable) for alerts when the 24-hour window is closed. */
+    alertTemplate: string;
+    /** Estimated cost per WhatsApp message (INR) for cost tracking; 0 = not set. */
+    whatsappCostInr: number;
+    /** Sellable plans; prices are configurable and subject to cost validation. */
+    plans: Array<{ code: string; name: string; pricePerCameraInr: number; features: string[] }>;
   };
   textile: {
     /** Days after a quotation is sent before the customer gets one reminder (0 = no reminder). */
@@ -136,6 +165,16 @@ export const DEFAULT_SETTINGS: TenantSettings = {
     cancellationPolicy: 'Free cancellation up to 24 hours before check-in; after that the first night is charged.', maxNights: 30, faqs: [],
   },
   hospital: { emergencyNumber: '108', bookingWindowDays: 14, reminderHoursBefore: 24, faqs: [] },
+  monitoring: {
+    failureThreshold: 3, debounceSeconds: 180, restoreSuccesses: 3, staleAfterMinutes: 10, correlationWindowMinutes: 30,
+    ackDeadlineMinutes: 15, escalationStepMinutes: 30, quietHours: { enabled: true, start: '22:00', end: '07:00' },
+    notifyCustomerOnResolution: true, voiceEscalation: false, alertTemplate: '', whatsappCostInr: 0,
+    plans: [
+      { code: 'basic', name: 'Basic monitoring', pricePerCameraInr: 30, features: ['Health checks', 'Offline alerts', 'Camera status dashboard', 'Basic uptime report', 'Incident history'] },
+      { code: 'pro', name: 'Service desk', pricePerCameraInr: 45, features: ['Everything in Basic', 'WhatsApp follow-ups & acknowledgment', 'Escalation workflow', 'Multi-site analytics', 'Local agent management'] },
+      { code: 'sla', name: 'SLA & AMC', pricePerCameraInr: 60, features: ['Everything in Service desk', 'SLA & AMC reports', 'Customer resolution reports', 'Voice escalation (when verified)'] },
+    ],
+  },
   textile: { quoteReminderDays: 2, feedbackAfterHours: 24, notifyOrderStatus: true, maxDiscountPct: 10 },
   agents: { paused: [] },
   finance: { paymentTermsDays: 15, dispatchPaymentRule: 'none', autoDraftInvoice: true },
@@ -221,7 +260,7 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
     : bf.deliveryZones;
 
   return {
-    industry: (['real_estate', 'textile', 'retail', 'manufacturing', 'agency', 'food', 'hotel', 'hospital'] as const).includes(i.industry as never) ? (i.industry as TenantSettings['industry']) : base.industry,
+    industry: (['real_estate', 'textile', 'retail', 'manufacturing', 'agency', 'food', 'hotel', 'hospital', 'cctv'] as const).includes(i.industry as never) ? (i.industry as TenantSettings['industry']) : base.industry,
     food: {
       taxPct: num(fd.taxPct, bf.taxPct, 0, 28, false),
       packagingFee: num(fd.packagingFee, bf.packagingFee, 0, 500, false),
@@ -248,6 +287,7 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
       reminderHoursBefore: num(hp.reminderHoursBefore, bp.reminderHoursBefore, 0, 72),
       faqs: faqs(hp.faqs, bp.faqs),
     },
+    monitoring: sanitizeMonitoring(obj(i.monitoring), base.monitoring ?? DEFAULT_SETTINGS.monitoring),
     textile: {
       quoteReminderDays: num(tx.quoteReminderDays, base.textile.quoteReminderDays, 0, 30),
       feedbackAfterHours: num(tx.feedbackAfterHours, base.textile.feedbackAfterHours, 0, 24 * 14),
@@ -303,6 +343,32 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
       voiceCostPerMinuteInr: num(r.voiceCostPerMinuteInr, base.roi.voiceCostPerMinuteInr, 0, 1000, false),
       whatsappCostPerMessageInr: num(r.whatsappCostPerMessageInr, base.roi.whatsappCostPerMessageInr, 0, 1000, false),
     },
+  };
+}
+
+function sanitizeMonitoring(m: Record<string, unknown>, b: TenantSettings['monitoring']): TenantSettings['monitoring'] {
+  const q = obj(m.quietHours);
+  const plans = Array.isArray(m.plans)
+    ? m.plans.slice(0, 6).map((p) => {
+        const o = obj(p);
+        const code = str(o.code, '', 30).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        return { code, name: str(o.name, code, 60), pricePerCameraInr: num(o.pricePerCameraInr, 0, 0, 10_000, false), features: (Array.isArray(o.features) ? o.features : []).map((f) => str(f, '', 80)).filter(Boolean).slice(0, 12) };
+      }).filter((p) => p.code)
+    : b.plans;
+  return {
+    failureThreshold: num(m.failureThreshold, b.failureThreshold, 1, 20),
+    debounceSeconds: num(m.debounceSeconds, b.debounceSeconds, 0, 3600),
+    restoreSuccesses: num(m.restoreSuccesses, b.restoreSuccesses, 1, 20),
+    staleAfterMinutes: num(m.staleAfterMinutes, b.staleAfterMinutes, 2, 24 * 60),
+    correlationWindowMinutes: num(m.correlationWindowMinutes, b.correlationWindowMinutes, 0, 24 * 60),
+    ackDeadlineMinutes: num(m.ackDeadlineMinutes, b.ackDeadlineMinutes, 1, 24 * 60),
+    escalationStepMinutes: num(m.escalationStepMinutes, b.escalationStepMinutes, 1, 24 * 60),
+    quietHours: { enabled: bool(q.enabled, b.quietHours.enabled), start: hhmm(q.start, b.quietHours.start), end: hhmm(q.end, b.quietHours.end) },
+    notifyCustomerOnResolution: bool(m.notifyCustomerOnResolution, b.notifyCustomerOnResolution),
+    voiceEscalation: bool(m.voiceEscalation, b.voiceEscalation),
+    alertTemplate: /^[a-z0-9_]*$/.test(str(m.alertTemplate, b.alertTemplate, 100)) ? str(m.alertTemplate, b.alertTemplate, 100) : b.alertTemplate,
+    whatsappCostInr: num(m.whatsappCostInr, b.whatsappCostInr, 0, 100, false),
+    plans: plans.length ? plans : b.plans,
   };
 }
 

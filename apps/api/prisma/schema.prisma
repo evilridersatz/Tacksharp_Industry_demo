@@ -69,6 +69,12 @@ model Organization {
   doctors             Doctor[]
   appointments        Appointment[]
   insuranceCases      InsuranceCase[]
+  monitoringCustomers MonitoringCustomer[]
+  monitoringSites     MonitoringSite[]
+  recorderDevices     RecorderDevice[]
+  cameraDevices       CameraDevice[]
+  monitoringAgents    MonitoringAgent[]
+  downtimeIncidents   DowntimeIncident[]
 }
 
 /// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
@@ -1758,4 +1764,409 @@ model InsuranceCase {
   @@unique([organizationId, reference])
   @@index([organizationId, status])
   @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tacksharp VisionOps: CCTV camera health and downtime monitoring.
+// The tenant (Organization) is the CCTV installer / AMC provider; MonitoringCustomer is one of ITS clients.
+// Camera passwords and RTSP URLs are NEVER stored here: they stay in the site's local monitoring agent.
+// Device status and incidents are decided by deterministic code from health evidence, never by a model.
+// ---------------------------------------------------------------------------------------------
+
+model MonitoringCustomer {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  name               String
+  /// retail | warehouse | hospital | factory | school | apartment | hotel | office | other
+  industry           String              @default("other")
+  region             String?
+  contactName        String?
+  contactPhone       String?
+  /// The customer gets a resolution summary on WhatsApp when an incident closes (still DRY_RUN-gated).
+  notifyOnResolution Boolean             @default(false)
+  isDemo             Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sites              MonitoringSite[]
+  contracts          ServiceContract[]
+
+  @@unique([organizationId, name])
+}
+
+model MonitoringSite {
+  id                String               @id @default(cuid())
+  organizationId    String
+  customerId        String
+  /// Short code shown everywhere, e.g. CHN-WH-01.
+  code              String
+  name              String
+  address           String?              @db.Text
+  city              String?
+  region            String?
+  latitude          Decimal?             @db.Decimal(9, 6)
+  longitude         Decimal?             @db.Decimal(9, 6)
+  /// local_agent | cloud
+  monitoringMode    String               @default("local_agent")
+  /// online | suspected_outage | unknown: what the cloud can tell about the site's internet path.
+  internetStatus    String               @default("unknown")
+  lastHealthyCheckAt DateTime?
+  isDemo            Boolean              @default(false)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer          MonitoringCustomer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  recorders         RecorderDevice[]
+  cameras           CameraDevice[]
+  agents            MonitoringAgent[]
+  incidents         DowntimeIncident[]
+  technicians       SiteTechnician[]
+  snapshots         SiteUptimeSnapshot[]
+  contracts         ServiceContract[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, customerId])
+}
+
+model RecorderDevice {
+  id                   String           @id @default(cuid())
+  organizationId       String
+  siteId               String
+  code                 String
+  name                 String
+  /// nvr | dvr
+  kind                 String           @default("nvr")
+  manufacturer         String?
+  model                String?
+  channels             Int              @default(8)
+  /// LAN address as configured on the local agent (not a secret; shown masked).
+  networkAddress       String?
+  /// agent_tcp | agent_onvif | agent_rtsp | vendor_api | cloud_tcp
+  monitoringMethod     String           @default("agent_tcp")
+  /// What this device can really prove: {reachability, stream, recording, storage} booleans.
+  capabilities         Json
+  /// online | offline | unknown | degraded | maintenance
+  status               String           @default("unknown")
+  /// ok | warning | failed | unsupported
+  storageStatus        String           @default("unsupported")
+  storageDetail        String?
+  /// verified | not_confirmed | failing | unsupported
+  recordingStatus      String           @default("unsupported")
+  consecutiveFailures  Int              @default(0)
+  consecutiveSuccesses Int              @default(0)
+  failingSince         DateTime?
+  lastSeenAt           DateTime?
+  lastCheckAt          DateTime?
+  isDemo               Boolean          @default(false)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site                 MonitoringSite   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  cameras              CameraDevice[]
+
+  @@unique([organizationId, code])
+  @@index([siteId])
+}
+
+model CameraDevice {
+  id                      String          @id @default(cuid())
+  organizationId          String
+  siteId                  String
+  recorderId              String?
+  code                    String
+  name                    String
+  location                String?
+  manufacturer            String?
+  model                   String?
+  channelNo               Int?
+  networkAddress          String?
+  monitoringMethod        String          @default("agent_tcp")
+  capabilities            Json
+  /// A critical camera (cash counter, gate) raises a higher-severity incident.
+  critical                Boolean         @default(false)
+  /// online | offline | unknown | degraded | maintenance
+  status                  String          @default("unknown")
+  /// ok | unavailable | unsupported
+  streamStatus            String          @default("unsupported")
+  /// verified | not_confirmed | failing | unsupported. Never "verified" from a ping alone.
+  recordingStatus         String          @default("unsupported")
+  consecutiveFailures     Int             @default(0)
+  consecutiveSuccesses    Int             @default(0)
+  failingSince            DateTime?
+  lastSeenAt              DateTime?
+  lastCheckAt             DateTime?
+  lastRecordingVerifiedAt DateTime?
+  isDemo                  Boolean         @default(false)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  organization            Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site                    MonitoringSite  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  recorder                RecorderDevice? @relation(fields: [recorderId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, code])
+  @@index([siteId, status])
+  @@index([recorderId])
+}
+
+model MonitoringAgent {
+  id              String           @id @default(cuid())
+  organizationId  String
+  siteId          String
+  code            String
+  name            String
+  /// sha256 of the agent secret. The secret is shown once at registration and never stored.
+  tokenHash       String
+  /// Public part of the token ("vo_ab12cd34"), used to find the agent.
+  tokenPrefix     String           @unique
+  /// never_seen | online | offline | revoked
+  status          String           @default("never_seen")
+  version         String?
+  hostLabel       String?
+  /// The agent has its own 4G link: it can alert even when the site's broadband is down.
+  hasBackupLink   Boolean          @default(false)
+  lastHeartbeatAt DateTime?
+  lastEventAt     DateTime?
+  lastSyncAt      DateTime?
+  /// Events the agent reported as still queued locally at its last heartbeat.
+  queuedEvents    Int              @default(0)
+  isDemo          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site            MonitoringSite   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  heartbeats      AgentHeartbeat[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+}
+
+model AgentHeartbeat {
+  id             String          @id @default(cuid())
+  organizationId String
+  agentId        String
+  sentAt         DateTime
+  receivedAt     DateTime        @default(now())
+  queueDepth     Int             @default(0)
+  version        String?
+  uptimeSec      Int?
+  /// primary | backup_4g
+  link           String          @default("primary")
+  isDemo         Boolean         @default(false)
+  agent          MonitoringAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, receivedAt])
+  @@index([organizationId, receivedAt])
+}
+
+model HealthEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  siteId         String
+  agentId        String?
+  /// camera | recorder | agent | site
+  deviceType     String
+  deviceId       String?
+  /// reachability | stream | recording | storage | gateway
+  check          String
+  ok             Boolean
+  observedAt     DateTime
+  receivedAt     DateTime  @default(now())
+  latencyMs      Int?
+  detail         String?   @db.Text
+  /// agent | cloud | simulated | demo
+  source         String    @default("agent")
+  /// The sender's own event id ("<agent>:<id>"): a replayed batch never counts twice.
+  externalId     String?
+  /// Sent late from the agent's offline queue (observed well before it was received).
+  replayed       Boolean   @default(false)
+  incidentId     String?
+  isDemo         Boolean   @default(false)
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId, siteId, observedAt])
+  @@index([deviceId, observedAt])
+}
+
+model DowntimeIncident {
+  id                  String                  @id @default(cuid())
+  organizationId      String
+  /// INC-1042, unique per organization.
+  number              String
+  siteId              String
+  customerId          String
+  /// camera | recorder | agent | site
+  deviceType          String
+  deviceId            String?
+  deviceCode          String?
+  /// camera_unreachable | recorder_unreachable | recording_not_confirmed | stream_unavailable | network_lost |
+  /// agent_offline | storage_warning | status_unknown
+  category            String
+  /// critical | high | medium | low
+  severity            String
+  /// OPEN | ACKNOWLEDGED | ASSIGNED | IN_PROGRESS | RESTORATION_CHECK | RESOLVED | CLOSED
+  status              String                  @default("OPEN")
+  title               String
+  affectedCount       Int                     @default(1)
+  affectedDevices     Json?
+  firstDetectedAt     DateTime
+  lastCheckedAt       DateTime
+  acknowledgedAt      DateTime?
+  acknowledgedBy      String?
+  assignedTechnicianId String?
+  assignedAt          DateTime?
+  inProgressAt        DateTime?
+  restorationCheckAt  DateTime?
+  resolvedAt          DateTime?
+  closedAt            DateTime?
+  /// verification (fresh successful checks) | user:<id>
+  resolvedBy          String?
+  rootCause           String?                 @db.Text
+  resolutionNote      String?                 @db.Text
+  /// The checks that proved restoration: [{at, check, ok, eventId}].
+  restorationEvidence Json?
+  reopenCount         Int                     @default(0)
+  lastReopenedAt      DateTime?
+  escalationLevel     Int                     @default(0)
+  nextEscalationAt    DateTime?
+  /// Set while the incident is not resolved: one open incident per device + fault (duplicates impossible).
+  openKey             String?
+  /// device + fault, kept after resolution: a recurrence inside the correlation window reopens this incident.
+  correlationKey      String
+  isDemo              Boolean                 @default(false)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  organization        Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site                MonitoringSite          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  timeline            IncidentTimelineEvent[]
+  notifications       NotificationAttempt[]
+  assignedTechnician  SiteTechnician?         @relation(fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, openKey])
+  @@index([organizationId, status])
+  @@index([organizationId, correlationKey])
+  @@index([siteId, status])
+  @@index([nextEscalationAt])
+}
+
+model IncidentTimelineEvent {
+  id             String           @id @default(cuid())
+  organizationId String
+  incidentId     String
+  at             DateTime         @default(now())
+  /// detected | confirmed | notified | acknowledged | assigned | in_progress | escalated | restoration_check |
+  /// restored | resolved | closed | reopened | note | customer_notified | troubleshooting | correlated
+  type           String
+  /// system | ai | technician:<id> | user:<id>
+  actor          String           @default("system")
+  message        String           @db.Text
+  data           Json?
+  incident       DowntimeIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId, at])
+}
+
+model SiteTechnician {
+  id              String             @id @default(cuid())
+  organizationId  String
+  /// null = covers every site of the organization.
+  siteId          String?
+  name            String
+  phone           String
+  /// technician | supervisor | manager
+  role            String             @default("technician")
+  onCall          Boolean            @default(false)
+  /// Working hours (IST): {days:[1..6], start:"09:00", end:"19:00"}. Outside them only on-call people are alerted.
+  shift           Json?
+  whatsappConsent Boolean            @default(true)
+  optedOutAt      DateTime?
+  active          Boolean            @default(true)
+  isDemo          Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  site            MonitoringSite?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  incidents       DowntimeIncident[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId, siteId])
+}
+
+model NotificationAttempt {
+  id                String           @id @default(cuid())
+  organizationId    String
+  incidentId        String
+  technicianId      String?
+  /// technician | supervisor | manager | customer
+  recipientType     String
+  recipientName     String?
+  recipientPhone    String
+  /// whatsapp | voice
+  channel           String           @default("whatsapp")
+  /// alert | escalation | restored | customer_report | reply | troubleshooting
+  purpose           String
+  body              String           @db.Text
+  /// One message per incident + purpose + recipient (+ level): retries never double-send.
+  idempotencyKey    String
+  /// queued | deferred | simulated | sent | delivered | read | failed | skipped | cancelled
+  status            String           @default("queued")
+  scheduledFor      DateTime         @default(now())
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  providerMessageId String?
+  attempts          Int              @default(0)
+  lastError         String?          @db.Text
+  /// Estimated provider cost in INR (configurable rate), for per-tenant cost tracking.
+  costEstimate      Decimal          @default(0) @db.Decimal(8, 3)
+  simulated         Boolean          @default(false)
+  isDemo            Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  incident          DowntimeIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status, scheduledFor])
+  @@index([incidentId])
+}
+
+model ServiceContract {
+  id              String             @id @default(cuid())
+  organizationId  String
+  customerId      String
+  siteId          String?
+  reference       String
+  /// amc | warranty | monitoring_only
+  kind            String             @default("amc")
+  planCode        String             @default("basic")
+  startDate       DateTime           @db.Date
+  endDate         DateTime           @db.Date
+  /// Restore-within target (hours) and response target (minutes) used in SLA reports.
+  slaHours        Int                @default(24)
+  responseMinutes Int                @default(60)
+  cameraLimit     Int?
+  monthlyFee      Decimal?           @db.Decimal(10, 2)
+  notes           String?            @db.Text
+  isDemo          Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  customer        MonitoringCustomer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  site            MonitoringSite?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, reference])
+}
+
+model SiteUptimeSnapshot {
+  id                    String         @id @default(cuid())
+  organizationId        String
+  siteId                String
+  day                   DateTime       @db.Date
+  cameraMinutesTotal    Int
+  cameraMinutesDown     Int            @default(0)
+  cameraMinutesUnknown  Int            @default(0)
+  uptimePct             Decimal        @db.Decimal(6, 3)
+  incidents             Int            @default(0)
+  isDemo                Boolean        @default(false)
+  site                  MonitoringSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, day])
+  @@index([organizationId, day])
 }

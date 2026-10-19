@@ -58,6 +58,7 @@ PER = {
     'retail': ['/textile/products', '/textile/orders', '/finance/overview', '/marketing/overview', '/marketing/campaigns', '/operations/inventory', '/agents', '/agents/tasks'],
     'manufacturing': ['/quality/inspections', '/quality/stats?days=30', '/operations/tasks', '/agents', '/agents/tasks', '/agents/work-tasks/list'],
     'agency': ['/marketing/overview', '/marketing/campaigns', '/marketing/customers', '/marketing/performance', '/agents', '/agents/tasks'],
+    'cctv': ['/monitoring/overview?days=30', '/monitoring/overview?days=7', '/monitoring/customers', '/monitoring/sites', '/monitoring/sites/{site}', '/monitoring/cameras?pageSize=50', '/monitoring/cameras?status=offline', '/monitoring/cameras/{camera}', '/monitoring/incidents?status=active', '/monitoring/incidents?status=all&pageSize=100', '/monitoring/incidents/{incident}', '/monitoring/notifications', '/monitoring/reports/uptime', '/monitoring/technicians', '/monitoring/agents', '/monitoring/contracts'],
 }
 
 def day(k):
@@ -84,6 +85,10 @@ for w in sorted(demos, key=lambda x: x['industry']):
     if ind == 'hospital':
         a = call('GET', '/hospital/appointments')[1]; ids['appointment'] = a[0]['id'] if a else 'none'
         i = call('GET', '/hospital/insurance')[1]; ids['insurance'] = i[0]['id'] if i else 'none'
+    if ind == 'cctv':
+        ids['site'] = call('GET', '/monitoring/sites')[1][0]['id']
+        ids['camera'] = call('GET', '/monitoring/cameras?status=offline')[1]['rows'][0]['id']
+        ids['incident'] = call('GET', '/monitoring/incidents?status=active')[1]['rows'][0]['id']
     rows = []
     for path in COMMON + PER.get(ind, []):
         p = path.format(**ids)
@@ -107,6 +112,15 @@ for w in sorted(demos, key=lambda x: x['industry']):
     if ind == 'hospital': match('appointments', '/hospital/appointments'); match('insurance_cases', '/hospital/insurance')
     if ind == 'manufacturing': match('inspections', '/quality/inspections')
     if ind in ('real_estate', 'agency', 'textile', 'retail'): match('leads', '/leads')
+    if ind == 'cctv':
+        inc = call('GET', '/monitoring/incidents?status=all&pageSize=5')[1]
+        check(f"cctv: /monitoring/incidents lists all incidents ({ents['mon_incidents']['total']})", inc['total'] == ents['mon_incidents']['total'], f"API {inc['total']} vs DB {ents['mon_incidents']['total']}")
+        ov = call('GET', '/monitoring/overview?days=30')[1]['kpis']
+        cams = call('GET', '/monitoring/cameras?pageSize=200')[1]
+        check('cctv: overview camera count = inventory (lab excluded)', ov['cameras'] == cams['total'] == 50, f"{ov['cameras']} / {cams['total']}")
+        check('cctv: online + offline + unknown + degraded + maintenance = cameras', ov['online'] + ov['offline'] + ov['unknown'] + ov['degraded'] + ov['maintenance'] == ov['cameras'])
+        notif = call('GET', '/monitoring/notifications')[1]
+        check('cctv: every demo WhatsApp message is simulated (DRY_RUN)', all(n['status'] in ('simulated', 'deferred', 'cancelled', 'skipped') for n in notif['rows']) and notif['liveMessages'] == 0, json.dumps(notif['byStatus']))
     sc_rows = []
     for sc in call('GET', '/industry/scenarios')[1]['scenarios']:
         st, res, ms = call('POST', '/industry/scenarios/run', {'scenarioId': sc['id']})
