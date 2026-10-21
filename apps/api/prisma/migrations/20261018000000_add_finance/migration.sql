@@ -1,0 +1,102 @@
+-- Finance (textile): invoices from confirmed orders, invoice lines, payments with verification.
+-- NEW TABLES ONLY: Invoice, InvoiceItem, Payment. No existing table, column or row is changed.
+-- Idempotent (CREATE TABLE IF NOT EXISTS). Requires 20261016000000_add_textile_sales (SalesOrder) first.
+-- Back up the database before applying:  mysqldump tacksharp > backup.sql   then:  npx prisma migrate deploy
+
+CREATE TABLE IF NOT EXISTS `Invoice` (
+    `id` VARCHAR(191) NOT NULL,
+    `organizationId` VARCHAR(191) NOT NULL,
+    `number` VARCHAR(191) NOT NULL,
+    `orderId` VARCHAR(191) NOT NULL,
+    `customerId` VARCHAR(191) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'draft',
+    `activeKey` VARCHAR(191) NULL,
+    `currency` VARCHAR(191) NOT NULL DEFAULT 'INR',
+    `invoiceDate` DATETIME(3) NULL,
+    `dueDate` DATETIME(3) NULL,
+    `subtotal` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `discount` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `taxPercent` DECIMAL(5, 2) NOT NULL DEFAULT 0,
+    `tax` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `shipping` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `total` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `amountPaid` DECIMAL(14, 2) NOT NULL DEFAULT 0,
+    `taxSource` VARCHAR(191) NOT NULL DEFAULT 'quotation',
+    `notes` TEXT NULL,
+    `createdBy` VARCHAR(191) NOT NULL,
+    `issuedAt` DATETIME(3) NULL,
+    `cancelledAt` DATETIME(3) NULL,
+    `cancelReason` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `Invoice_activeKey_key`(`activeKey`),
+    UNIQUE INDEX `Invoice_organizationId_number_key`(`organizationId`, `number`),
+    INDEX `Invoice_organizationId_status_idx`(`organizationId`, `status`),
+    INDEX `Invoice_organizationId_dueDate_idx`(`organizationId`, `dueDate`),
+    INDEX `Invoice_organizationId_orderId_idx`(`organizationId`, `orderId`),
+    INDEX `Invoice_orderId_fkey`(`orderId`),
+    INDEX `Invoice_customerId_fkey`(`customerId`),
+    PRIMARY KEY (`id`),
+    CONSTRAINT `Invoice_organizationId_fkey` FOREIGN KEY (`organizationId`) REFERENCES `Organization`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `Invoice_orderId_fkey` FOREIGN KEY (`orderId`) REFERENCES `SalesOrder`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `Invoice_customerId_fkey` FOREIGN KEY (`customerId`) REFERENCES `Customer`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `InvoiceItem` (
+    `id` VARCHAR(191) NOT NULL,
+    `invoiceId` VARCHAR(191) NOT NULL,
+    `productId` VARCHAR(191) NULL,
+    `sku` VARCHAR(191) NULL,
+    `description` VARCHAR(191) NOT NULL,
+    `quantity` DECIMAL(12, 2) NOT NULL,
+    `unit` VARCHAR(191) NOT NULL,
+    `unitPrice` DECIMAL(12, 2) NOT NULL,
+    `lineTotal` DECIMAL(14, 2) NOT NULL,
+
+    INDEX `InvoiceItem_invoiceId_idx`(`invoiceId`),
+    PRIMARY KEY (`id`),
+    CONSTRAINT `InvoiceItem_invoiceId_fkey` FOREIGN KEY (`invoiceId`) REFERENCES `Invoice`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `Payment` (
+    `id` VARCHAR(191) NOT NULL,
+    `organizationId` VARCHAR(191) NOT NULL,
+    `invoiceId` VARCHAR(191) NULL,
+    `orderId` VARCHAR(191) NULL,
+    `customerId` VARCHAR(191) NOT NULL,
+    `amount` DECIMAL(14, 2) NOT NULL,
+    `currency` VARCHAR(191) NOT NULL DEFAULT 'INR',
+    `method` VARCHAR(191) NOT NULL,
+    `reference` VARCHAR(191) NULL,
+    `referenceKey` VARCHAR(191) NULL,
+    `transactionId` VARCHAR(191) NULL,
+    `paidAt` DATETIME(3) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'pending_verification',
+    `source` VARCHAR(191) NOT NULL,
+    `verificationSource` VARCHAR(191) NULL,
+    `evidence` TEXT NULL,
+    `enteredBy` VARCHAR(191) NOT NULL,
+    `verifiedBy` VARCHAR(191) NULL,
+    `verifiedAt` DATETIME(3) NULL,
+    `rejectedReason` TEXT NULL,
+    `reversedBy` VARCHAR(191) NULL,
+    `reversedAt` DATETIME(3) NULL,
+    `reversalReason` TEXT NULL,
+    `notes` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    INDEX `Payment_organizationId_status_idx`(`organizationId`, `status`),
+    INDEX `Payment_organizationId_invoiceId_idx`(`organizationId`, `invoiceId`),
+    INDEX `Payment_organizationId_referenceKey_idx`(`organizationId`, `referenceKey`),
+    INDEX `Payment_organizationId_customerId_idx`(`organizationId`, `customerId`),
+    INDEX `Payment_invoiceId_fkey`(`invoiceId`),
+    INDEX `Payment_orderId_fkey`(`orderId`),
+    INDEX `Payment_customerId_fkey`(`customerId`),
+    PRIMARY KEY (`id`),
+    CONSTRAINT `Payment_organizationId_fkey` FOREIGN KEY (`organizationId`) REFERENCES `Organization`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `Payment_invoiceId_fkey` FOREIGN KEY (`invoiceId`) REFERENCES `Invoice`(`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT `Payment_orderId_fkey` FOREIGN KEY (`orderId`) REFERENCES `SalesOrder`(`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT `Payment_customerId_fkey` FOREIGN KEY (`customerId`) REFERENCES `Customer`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

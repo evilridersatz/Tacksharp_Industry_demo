@@ -1,0 +1,1761 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Organization {
+  id           String         @id @default(cuid())
+  name         String
+  /// real_estate | restaurant. Decides which conversation engine and dashboard the tenant gets.
+  vertical     String         @default("real_estate")
+  /// A demonstration workspace with synthetic data only (seeded). Never a real business; real messages are never sent.
+  isDemo       Boolean        @default(false)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  calls        Call[]
+  customers    Customer[]
+  users        User[]
+  Conversation Conversation[]
+  followUps    FollowUp[]
+  leads        Lead[]
+  Message      Message[]
+  properties   Property[]
+  SiteVisit    SiteVisit[]
+  channels     OrganizationChannel[]
+  settings     OrganizationSettings?
+  outlets        Outlet[]
+  menuCategories MenuCategory[]
+  menuItems      MenuItem[]
+  orders         Order[]
+  orderEvents    OrderEvent[]
+  offerCampaigns OfferCampaign[]
+  offerClaims    OfferClaim[]
+  orderFollowUps OrderFollowUp[]
+  inventoryMovements InventoryMovement[]
+  inboundMessages InboundMessage[]
+
+  textileProducts     TextileProduct[]
+  textileRequirements TextileRequirement[]
+  quotations          Quotation[]
+  salesOrders         SalesOrder[]
+  feedback            Feedback[]
+  auditEvents         AuditEvent[]
+  agentTasks          AgentTask[]
+  agentTaskEvents     AgentTaskEvent[]
+  approvals           Approval[]
+  workTasks           WorkTask[]
+  inventoryBalances   InventoryBalance[]
+  stockMovements      StockMovement[]
+  invoices            Invoice[]
+  payments            Payment[]
+  marketingSegments   MarketingSegment[]
+  marketingCampaigns  MarketingCampaign[]
+  campaignRecipients  CampaignRecipient[]
+  contentItems        ContentItem[]
+  contentRevisions    ContentRevision[]
+  collectionNotes     CollectionNote[]
+  expenses            Expense[]
+  memberships         OrganizationMembership[]
+  qualityInspections  QualityInspection[]
+  agentSessions       AgentSession[]
+  roomTypes           RoomType[]
+  rooms               Room[]
+  roomRates           RoomRate[]
+  reservations        Reservation[]
+  departments         Department[]
+  doctors             Doctor[]
+  appointments        Appointment[]
+  insuranceCases      InsuranceCase[]
+}
+
+/// Which organization owns an inbound identifier (WhatsApp phone_number_id, the Plivo number a customer dialed,
+/// a Meta page id). Webhooks resolve the organization from here; an unknown identifier is rejected, never
+/// silently assigned to a default organization.
+model OrganizationChannel {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// whatsapp_phone_number_id | plivo_number | meta_page_id
+  kind           String
+  externalId     String
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, externalId])
+  @@index([organizationId])
+}
+
+/// Per-business automation settings edited in the dashboard (cadence, reminders, team alerts, ROI inputs).
+/// One JSON document; the application fills in defaults for anything missing.
+model OrganizationSettings {
+  organizationId String       @id
+  data           Json
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Property {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  location       String
+  type           String
+  bhk            Int
+  price          Decimal      @db.Decimal(15, 2)
+  status         String       @default("available")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  SiteVisit      SiteVisit[]
+
+  @@index([organizationId])
+  @@index([organizationId, location])
+  @@index([organizationId, bhk])
+  @@index([organizationId, status])
+}
+
+model Customer {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String?
+  phone          String?
+  email          String?
+  language       String?
+  source         String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  location       String?
+  budget         Decimal?       @db.Decimal(15, 2)
+  bhk            Int?
+  propertyType   String?
+  /// Free-text facts the AI saved: timeline, objections, liked property, callback notes.
+  purchaseTimeline     String?
+  objections           String?   @db.Text
+  interestedPropertyId String?
+  callbackAt           DateTime?
+  /// Set when the customer says not interested / wrong number. Blocks all automation.
+  doNotContact         Boolean   @default(false)
+  lastInboundAt        DateTime?
+  /// Restaurant follow-ups: may we message / call this customer (recorded by staff, or given by ordering on WhatsApp).
+  messagingConsent     Boolean   @default(false)
+  callingConsent       Boolean   @default(false)
+  /// Customer replied STOP. Blocks all business-initiated messages and calls until they reply START.
+  optedOutAt           DateTime?
+  /// Synthetic record created by the demo seed (never a real person).
+  isDemo               Boolean   @default(false)
+  /// Marketing labels / segments ("saree_buyer", "wedding", "festival"...): a JSON string array.
+  tags                 Json?
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  calls          Call[]
+  Conversation   Conversation[]
+  followUps      FollowUp[]
+  leads          Lead[]
+  SiteVisit      SiteVisit[]
+  orders         Order[]
+  offerClaims    OfferClaim[]
+  orderFollowUps OrderFollowUp[]
+  reservations   Reservation[]
+  appointments   Appointment[]
+  insuranceCases InsuranceCase[]
+
+  quotations     Quotation[]
+  salesOrders    SalesOrder[]
+  feedback       Feedback[]
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId])
+  @@index([organizationId, email])
+  invoices       Invoice[]
+  payments       Payment[]
+}
+
+model Lead {
+  id             String       @id @default(cuid())
+  organizationId String
+  customerId     String
+  status         String       @default("new")
+  budget         Decimal?     @db.Decimal(15, 2)
+  location       String?
+  bhk            Int?
+  propertyType   String?
+  source         String?
+  /// Campaign / form name from the lead source.
+  campaign       String?
+  /// External source id (e.g. Meta leadgen_id) used to drop duplicate webhooks.
+  externalRef    String?
+  notes          String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  calls          Call[]
+  followUps      FollowUp[]
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  SiteVisit      SiteVisit[]
+  textileRequirement TextileRequirement?
+  quotations     Quotation[]
+  salesOrders    SalesOrder[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@unique([organizationId, externalRef])
+  @@index([customerId], map: "Lead_customerId_fkey")
+}
+
+model FollowUp {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  leadId             String
+  customerId         String
+  channel            String       @default("whatsapp")
+  action             String       @default("message")
+  message            String?      @db.Text
+  scheduledAt        DateTime
+  status             String       @default("scheduled")
+  attempts           Int          @default(0)
+  cancellationReason String?
+  /// sequence = automatic lead sequence, callback = customer-requested, retry = call retry, task = human task
+  source             String       @default("sequence")
+  lastError          String?      @db.Text
+  completedAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead               Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, scheduledAt])
+  @@index([organizationId, status])
+  @@index([leadId])
+  @@index([customerId])
+}
+
+model Conversation {
+  id             String       @id
+  organizationId String
+  customerId     String?
+  channel        String
+  externalId     String?
+  status         String       @default("active")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime
+  Customer       Customer?    @relation(fields: [customerId], references: [id])
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  Message        Message[]
+
+  @@unique([organizationId, channel, externalId])
+  @@index([customerId], map: "Conversation_customerId_fkey")
+  @@index([organizationId, channel])
+  @@index([organizationId, customerId])
+  @@index([organizationId])
+}
+
+model Message {
+  id             String       @id
+  organizationId String
+  conversationId String
+  role           String
+  content        String       @db.Text
+  /// Provider message id (WhatsApp wamid) of a message we sent; delivery receipts are matched on it.
+  externalId     String?
+  metadata       Json?
+  /// Outbound WhatsApp only: accepted (Meta took it) | sent | delivered | read | failed | unknown (send timed out:
+  /// Meta may or may not have it; never retried automatically, so the customer never gets it twice).
+  /// "accepted" is NOT delivered: only a delivery receipt from Meta sets delivered / read.
+  deliveryStatus    String?
+  deliveryError     String?   @db.VarChar(500)
+  deliveryUpdatedAt DateTime?
+  createdAt      DateTime     @default(now())
+  Conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([organizationId, conversationId])
+  @@index([organizationId])
+  @@index([organizationId, externalId])
+}
+
+model SiteVisit {
+  id             String       @id
+  organizationId String
+  leadId         String
+  customerId     String
+  propertyId     String
+  scheduledAt    DateTime
+  status         String       @default("scheduled")
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime
+  Customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Lead           Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  Property       Property     @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([leadId])
+  @@index([organizationId])
+  @@index([organizationId, scheduledAt])
+  @@index([organizationId, status])
+  @@index([propertyId])
+}
+
+/// One phone call (outbound or inbound) handled by the AI voice agent.
+model Call {
+  id             String       @id @default(cuid())
+  organizationId String
+  leadId         String?
+  customerId     String
+  direction      String       @default("outbound")
+  /// queued | ringing | in_progress | completed | no_answer | busy | failed
+  status         String       @default("queued")
+  /// connected | no_answer | busy | failed | interested | not_interested | callback_requested |
+  /// human_requested | qualified | site_visit_requested | site_visit_booked | wrong_number | invalid_number
+  outcome        String?
+  toNumber       String
+  fromNumber     String
+  providerCallId String?
+  providerRequestId String?
+  attempt        Int          @default(1)
+  turns          Int          @default(0)
+  silentTurns    Int          @default(0)
+  language       String?
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  durationSec    Int?
+  hangupCause    String?
+  /// Why the call ended: customer_goodbye | done_after_order | handoff | max_turns | no_response | technical |
+  /// conversation_end (we ended it) or customer_or_network_hangup / no_answer / busy / failed (they or the network did)
+  endReason      String?
+  followUpId     String?
+  summary        String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([leadId])
+  @@index([providerCallId])
+}
+
+/// Dashboard user. organizationId on every request comes from here, never from the browser.
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  email          String       @unique
+  name           String?
+  passwordHash   String
+  role           String       @default("admin")
+  lastLoginAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships    OrganizationMembership[]
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Restaurant vertical (GR Chicken: fresh chicken, sold by the kg, collected at the shop).
+// Prices, discounts and totals live here and are only ever computed by the server; the language
+// model never sets them.
+// ---------------------------------------------------------------------------------------------
+
+/// A shop where customers collect their order.
+model Outlet {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  name               String
+  address            String       @db.Text
+  area               String?
+  phone              String?
+  /// IST "HH:mm".
+  opensAt            String       @default("07:00")
+  closesAt           String       @default("21:00")
+  /// Minutes the shop needs to cut and pack an order (earliest pickup = now + this).
+  prepMinutes        Int          @default(30)
+  minOrderValue      Decimal      @default(0) @db.Decimal(10, 2)
+  /// Accept pickup times outside opening hours (for testing a demo tenant). Staff still confirm every order.
+  acceptOutsideHours Boolean      @default(false)
+  active             Boolean      @default(true)
+  /// True for placeholder data that has NOT been verified with the client.
+  isDemo             Boolean      @default(false)
+  sortOrder          Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders             Order[]
+
+  @@index([organizationId])
+}
+
+model MenuCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items          MenuItem[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+/// A product: broiler chicken, country chicken, boneless, eggs ...
+model MenuItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  categoryId     String
+  name           String
+  description    String?      @db.Text
+  /// Price per unit (per kg for unit = kg).
+  price          Decimal      @db.Decimal(10, 2)
+  /// kg | piece
+  unit           String       @default("kg")
+  /// Cuts the shop offers for this product, e.g. ["Curry cut", "Biryani cut", "Whole"]. Empty = no cut choice.
+  cutOptions     Json
+  minQty         Decimal      @default(0.5) @db.Decimal(8, 3)
+  maxQty         Decimal      @default(10) @db.Decimal(8, 3)
+  /// Quantities must be multiples of this (0.25 = quarter kg).
+  qtyStep        Decimal      @default(0.25) @db.Decimal(8, 3)
+  available      Boolean      @default(true)
+  imageUrl       String?      @db.Text
+  /// Comma-separated other names customers use ("broiler, kozhi, chicken").
+  aliases        String?      @db.Text
+  isDemo         Boolean      @default(false)
+  sortOrder      Int          @default(0)
+  /// Stock on hand in this product's unit (kg or pieces). NULL = stock is not tracked (only `available` applies).
+  stockQty          Decimal?  @db.Decimal(10, 3)
+  /// At or below this the shop gets a low-stock alert. NULL = no alert.
+  lowStockThreshold Decimal?  @db.Decimal(10, 3)
+  /// The stock numbers are demo / sample values, not counted shop inventory.
+  stockIsDemo       Boolean   @default(false)
+  stockUpdatedAt    DateTime?
+  /// Last stock alert sent for this product: low | out | NULL (none since stock was last above the threshold).
+  stockAlertLevel   String?
+  /// Food menus: sizes / portions [{name, price}] (when present the chosen variant's price applies), add-ons
+  /// [{name, price}], tax rate and veg flag. NULL for GR Chicken items (kg / cuts).
+  variants          Json?
+  addOns            Json?
+  taxRatePct        Decimal?  @db.Decimal(5, 2)
+  isVeg             Boolean?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems     OrderItem[]
+  stockMovements InventoryMovement[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([organizationId, available])
+  @@index([categoryId])
+}
+
+/// An offer customers claim on WhatsApp, e.g. "₹50 off for website customers".
+model OfferCampaign {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  /// Short code customers send from the WhatsApp link, e.g. GR50.
+  code           String
+  /// Rupees off the order.
+  amount         Decimal      @db.Decimal(10, 2)
+  minOrderValue  Decimal      @default(0) @db.Decimal(10, 2)
+  validDays      Int          @default(7)
+  /// Approved WhatsApp template used to start the chat when the customer has not messaged in 24h ({{1}} = name).
+  templateName   String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claims         OfferClaim[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+/// One customer's offer: created from the WhatsApp link, the website, or by staff; claimed by one order.
+model OfferClaim {
+  id              String        @id @default(cuid())
+  organizationId  String
+  campaignId      String
+  customerId      String
+  phone           String
+  /// whatsapp_link | website | dashboard
+  source          String
+  /// Order number on the GR Chicken website that earned the offer (when the website sent it).
+  websiteOrderRef String?
+  /// pending_send | sent | send_failed | started | claimed | expired | cancelled
+  status          String
+  sendError       String?       @db.Text
+  orderId         String?       @unique
+  amount          Decimal       @db.Decimal(10, 2)
+  expiresAt       DateTime
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign        OfferCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  customer        Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order           Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, websiteOrderRef])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([campaignId])
+}
+
+/// A pickup order. Created only after the customer explicitly confirmed the server-computed total.
+model Order {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// Short reference shown to the customer and staff, e.g. GR-7K2Q9X.
+  orderNumber    String
+  customerId     String
+  conversationId String?
+  outletId       String
+  channel        String
+  /// pending | confirmed | preparing | ready | completed (collected) | cancelled
+  status         String       @default("pending")
+  /// When the customer said they will collect it.
+  pickupAt       DateTime
+  subtotal       Decimal      @db.Decimal(10, 2)
+  /// Offer discount (₹50 ...), never more than the subtotal.
+  discount       Decimal      @default(0) @db.Decimal(10, 2)
+  total          Decimal      @db.Decimal(10, 2)
+  /// cash_at_shop | upi_at_shop | paid_online
+  paymentMethod  String
+  /// unpaid | paid | customer_says_paid (paid online, staff must verify)
+  paymentStatus  String       @default("unpaid")
+  /// not_integrated = the order lives only in Tacksharp; staff enter it into the shop's POS.
+  posStatus      String       @default("not_integrated")
+  /// Same confirmation retried (webhook retry, double tap) -> the same order, never a second one.
+  idempotencyKey String
+  customerName   String?
+  customerPhone  String?
+  /// Reply language: tamil | tanglish | english (the ready call speaks it).
+  language       String?
+  /// pending | calling | answered | no_answer | failed | whatsapp_sent | not_sent
+  readyNotice    String?
+  readyNoticeAt  DateTime?
+  readyCallId    String?
+  readyNoticeNote String?     @db.Text
+  notes          String?      @db.Text
+  isDemo         Boolean      @default(false)
+  /// When the customer collected the order (GR Chicken is pickup: "delivered" = collected). Follow-ups start from here.
+  collectedAt    DateTime?
+  feedbackRating Int?
+  feedbackComment String?     @db.Text
+  feedbackAt     DateTime?
+  /// whatsapp | voice
+  feedbackChannel String?
+  /// open | resolved (set when the customer rates 1-2 or complains)
+  complaintStatus String?
+  complaintNote  String?      @db.Text
+  /// none | scheduled | in_progress | done | skipped
+  followUpStatus String?
+  lastContactAt  DateTime?
+  nextFollowUpAt DateTime?
+  /// Demo orders only: how the simulated customer behaves in dry-run follow-ups.
+  demoScenario   String?
+  /// Food ordering: pickup | delivery (GR Chicken is always pickup).
+  fulfilment      String      @default("pickup")
+  deliveryAddress String?     @db.Text
+  deliveryZone    String?
+  deliveryFee     Decimal     @default(0) @db.Decimal(10, 2)
+  taxAmount       Decimal     @default(0) @db.Decimal(10, 2)
+  dispatchedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  outlet         Outlet       @relation(fields: [outletId], references: [id], onDelete: Restrict)
+  items          OrderItem[]
+  events         OrderEvent[]
+  offerClaim     OfferClaim?
+  followUps      OrderFollowUp[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, orderNumber])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([organizationId, pickupAt])
+  @@index([customerId])
+  @@index([outletId])
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  menuItemId String
+  /// Name, cut and price as charged (snapshot), so later menu edits never change a placed order.
+  name       String
+  cut        String?
+  unit       String   @default("kg")
+  unitPrice  Decimal  @db.Decimal(10, 2)
+  quantity   Decimal  @db.Decimal(8, 3)
+  lineTotal  Decimal  @db.Decimal(10, 2)
+  /// Food: chosen size / portion and add-ons [{name, price}] (snapshot).
+  variant    String?
+  addOns     Json?
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([menuItemId])
+}
+
+/// Audit trail: order created, status changes, payment changes, ready call result, who did it.
+model OrderEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  orderId        String
+  /// created | status_changed | payment_changed | ready_notice | note
+  type           String
+  fromStatus     String?
+  toStatus       String?
+  /// "ai" | "system" | "user:<id>"
+  actor          String
+  note           String?      @db.Text
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+/// One business-initiated message or call about an order: confirmation, status update, feedback request
+/// (WhatsApp) or feedback call (voice). Processed by the restaurant follow-up queue; every attempt and
+/// result is recorded here, including simulated (dry-run) ones.
+model OrderFollowUp {
+  id                String       @id @default(cuid())
+  organizationId    String
+  orderId           String
+  customerId        String
+  /// order_confirmation | status_update | feedback_request | feedback_call
+  kind              String
+  /// whatsapp | voice
+  channel           String
+  /// scheduled | retrying | sent | delivered | read | completed | no_answer | failed | skipped | cancelled
+  status            String       @default("scheduled")
+  scheduledAt       DateTime
+  attempts          Int          @default(0)
+  maxAttempts       Int          @default(3)
+  /// Same logical follow-up created twice (retries, double clicks, re-runs) -> one row.
+  dedupeKey         String
+  /// true = simulated: no provider was contacted.
+  dryRun            Boolean      @default(true)
+  /// Exact provider request (WhatsApp Graph API body / call request), never contains tokens.
+  payload           Json?
+  /// Outcome details: rating, transcript, simulated reply, skip reason.
+  result            Json?
+  providerMessageId String?
+  callId            String?
+  lastError         String?      @db.Text
+  completedAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer          Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, status, scheduledAt])
+  @@index([orderId])
+  @@index([customerId])
+  @@index([providerMessageId])
+}
+
+/// Every stock change (order reservation, cancellation release, staff set / adjust, demo seed). `dedupeKey` makes an
+/// order's deduction and its release happen at most once, however often a webhook or request is repeated.
+model InventoryMovement {
+  id             String       @id @default(cuid())
+  organizationId String
+  menuItemId     String
+  orderId        String?
+  /// Change in the product's unit: negative = taken out of stock.
+  delta          Decimal      @db.Decimal(10, 3)
+  balanceAfter   Decimal      @db.Decimal(10, 3)
+  /// order_reserved | order_cancelled | staff_set | staff_adjust | demo_seed
+  reason         String
+  actor          String?
+  dedupeKey      String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  menuItem       MenuItem     @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, menuItemId, createdAt])
+  @@index([orderId])
+}
+
+/// One inbound WhatsApp message, keyed by Meta's message id. The unique key makes a re-delivered webhook a no-op;
+/// the status is claimed with compare-and-set so only one worker ever answers it; the reply text and its send state
+/// are stored here (not only in Redis), so a retry after a crash or a Redis timeout never sends the reply twice.
+model InboundMessage {
+  id                String       @id @default(cuid())
+  organizationId    String
+  channel           String       @default("whatsapp")
+  providerMessageId String
+  fromPhone         String
+  messageType       String
+  /// What the worker needs to answer it (text / media id / profile name), so a lost queue job can be re-queued.
+  payload           Json?
+  /// received (persisted, not yet queued) | queued | processing | replied | reply_unknown | failed | skipped
+  status            String       @default("received")
+  attempts          Int          @default(0)
+  /// A worker holds the message until then; a crashed worker's claim expires and another may continue.
+  lockedUntil       DateTime?
+  conversationId    String?
+  replyText         String?      @db.Text
+  /// pending (generated, not sent) | sending (request in flight) | accepted (Meta took it) | unknown | failed
+  replyStatus       String?
+  replyProviderId   String?
+  lastError         String?      @db.VarChar(500)
+  receivedAt        DateTime     @default(now())
+  processedAt       DateTime?
+  updatedAt         DateTime     @updatedAt
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, providerMessageId])
+  @@index([organizationId, status, receivedAt])
+}
+
+
+// =============================================================================================
+// Textile sales (industry = textile). New tables only; nothing above changes in the database.
+// Prices, stock and specifications are entered by the business: the AI never invents them.
+// =============================================================================================
+
+/// A catalogue item. `price` is shown to customers only when `priceApproved` is true; stock is manually maintained.
+model TextileProduct {
+  id             String       @id @default(cuid())
+  organizationId String
+  sku            String
+  name           String
+  fabricCategory String
+  composition    String?
+  gsm            Int?
+  width          String?
+  colour         String?
+  design         String?
+  sizes          String?
+  moq            Int?
+  /// metre | piece | kg | set
+  priceUnit      String       @default("metre")
+  currency       String       @default("INR")
+  price          Decimal?     @db.Decimal(12, 2)
+  priceApproved  Boolean      @default(false)
+  /// Purchase / production cost per price unit, entered by the business. Gross margin is shown only where this is set.
+  unitCost       Decimal?     @db.Decimal(12, 2)
+  /// in_stock | low | out_of_stock | unknown (manually maintained)
+  stockStatus    String       @default("unknown")
+  imageUrls      Json?
+  catalogueUrl   String?      @db.VarChar(500)
+  leadTimeDays   Int?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotationItems QuotationItem[]
+  orderItems     SalesOrderItem[]
+  inventory      InventoryBalance[]
+  stockMovements StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, active])
+  @@index([organizationId, fabricCategory])
+}
+
+/// What a textile buyer asked for (one per lead), filled by the AI from the conversation or by a salesperson.
+model TextileRequirement {
+  id               String       @id @default(cuid())
+  organizationId   String
+  leadId           String       @unique
+  /// wholesaler | retailer | garment_manufacturer | exporter | boutique | other
+  buyerType        String?
+  productInterest  String?
+  fabricCategory   String?
+  colour           String?
+  quantity         Decimal?     @db.Decimal(12, 2)
+  quantityUnit     String?
+  targetPrice      Decimal?     @db.Decimal(12, 2)
+  destination      String?
+  neededBy         String?
+  assignedTo       String?
+  notes            String?      @db.Text
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead             Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+/// draft -> pending_approval -> approved -> sent -> accepted | rejected | expired
+model Quotation {
+  id             String       @id @default(cuid())
+  organizationId String
+  customerId     String
+  leadId         String?
+  number         String
+  status         String       @default("draft")
+  currency       String       @default("INR")
+  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
+  discount       Decimal      @default(0) @db.Decimal(14, 2)
+  taxPercent     Decimal      @default(0) @db.Decimal(5, 2)
+  tax            Decimal      @default(0) @db.Decimal(14, 2)
+  shipping       Decimal      @default(0) @db.Decimal(14, 2)
+  total          Decimal      @default(0) @db.Decimal(14, 2)
+  validUntil     DateTime?
+  paymentTerms   String?
+  deliveryTerms  String?
+  salesperson    String?
+  /// ai_request | manual
+  origin         String       @default("manual")
+  notes          String?      @db.Text
+  sentAt         DateTime?
+  decidedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  items          QuotationItem[]
+  order          SalesOrder?
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+model QuotationItem {
+  id          String          @id @default(cuid())
+  quotationId String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal         @db.Decimal(12, 2)
+  unit        String          @default("metre")
+  unitPrice   Decimal         @db.Decimal(12, 2)
+  lineTotal   Decimal         @db.Decimal(14, 2)
+  quotation   Quotation       @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product     TextileProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([quotationId])
+}
+
+/// pending_confirmation -> confirmed -> processing -> ready_to_dispatch -> dispatched -> delivered; cancelled
+model SalesOrder {
+  id               String       @id @default(cuid())
+  organizationId   String
+  customerId       String
+  leadId           String?
+  /// One order per quotation: converting the same quotation twice returns the existing order.
+  quotationId      String?      @unique
+  number           String
+  status           String       @default("pending_confirmation")
+  /// unpaid | partial | paid (manually maintained)
+  paymentStatus    String       @default("unpaid")
+  currency         String       @default("INR")
+  total            Decimal      @default(0) @db.Decimal(14, 2)
+  expectedDelivery DateTime?
+  shippingAddress  String?      @db.Text
+  salesperson      String?
+  notes            String?      @db.Text
+  deliveredAt      DateTime?
+  /// Dispatch details recorded by Operations (courier / transporter and its tracking or LR number).
+  dispatchedAt     DateTime?
+  courier          String?
+  trackingRef      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead             Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  quotation        Quotation?   @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  items            SalesOrderItem[]
+  feedback         Feedback?
+
+  invoices         Invoice[]
+  payments         Payment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+model SalesOrderItem {
+  id          String          @id @default(cuid())
+  orderId     String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal         @db.Decimal(12, 2)
+  unit        String          @default("metre")
+  unitPrice   Decimal         @db.Decimal(12, 2)
+  lineTotal   Decimal         @db.Decimal(14, 2)
+  order       SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     TextileProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+/// requested -> received (rating 4-5) | needs_action (rating 1-3 or a complaint) -> resolved. One per order.
+model Feedback {
+  id             String       @id @default(cuid())
+  organizationId String
+  customerId     String
+  orderId        String?      @unique
+  channel        String       @default("whatsapp")
+  rating         Int?
+  comment        String?      @db.Text
+  status         String       @default("requested")
+  owner          String?
+  resolution     String?      @db.Text
+  requestedAt    DateTime     @default(now())
+  receivedAt     DateTime?
+  resolvedAt     DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order          SalesOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+}
+
+/// Who changed what (prices, statuses, conversions). Append-only.
+model AuditEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  actor          String
+  entityType     String
+  entityId       String
+  action         String
+  data           Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+}
+
+// =============================================================================================
+// AI agents (Orchestrator + Marketing / Sales / Finance / Operations) and textile operations.
+// New tables only. Agents act through these records and the textile records above - never through chat memory.
+// =============================================================================================
+
+/// One unit of agent work: routed by the Orchestrator, run by one agent, idempotent per business.
+model AgentTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// marketing | sales | finance | operations
+  agent          String
+  kind           String
+  /// event | user | schedule | handoff
+  trigger        String
+  /// PENDING | RUNNING | NEEDS_APPROVAL | COMPLETED | FAILED | CANCELLED
+  status         String       @default("PENDING")
+  /// Same key = same task: a repeated event or double click never runs the work twice.
+  idempotencyKey String       @db.VarChar(191)
+  entityType     String?
+  entityId       String?
+  input          Json?
+  result         Json?
+  error          String?      @db.Text
+  attempts       Int          @default(0)
+  maxAttempts    Int          @default(3)
+  timeoutMs      Int          @default(30000)
+  parentTaskId   String?
+  /// Handoff depth from the first task; bounded so agents can never loop.
+  depth          Int          @default(0)
+  approvalId     String?
+  requestedBy    String
+  runAfter       DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent         AgentTask?   @relation("AgentTaskHandoff", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  children       AgentTask[]  @relation("AgentTaskHandoff")
+  events         AgentTaskEvent[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([organizationId, agent, createdAt])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// Execution history of a task: started, tool used, handoff, approval, retry, result, error.
+model AgentTaskEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  taskId         String
+  type           String
+  message        String       @db.VarChar(500)
+  data           Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  task           AgentTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+/// A restricted action waiting for a person with the required permission. Enforced on the server.
+model Approval {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// e.g. quotation.discount, inventory.adjust
+  action             String
+  entityType         String
+  entityId           String
+  /// user:<id> or agent:<name>
+  requestedBy        String
+  reason             String       @db.Text
+  /// The exact proposed change; executed as-is once approved.
+  payload            Json
+  payloadHash        String       @db.VarChar(64)
+  requiredPermission String
+  /// pending | approved | rejected | cancelled | expired | executed | failed
+  status             String       @default("pending")
+  /// Set only while pending: one open request per action + record + proposal.
+  openKey            String?      @unique @db.VarChar(191)
+  decidedBy          String?
+  decidedAt          DateTime?
+  decisionNote       String?      @db.Text
+  expiresAt          DateTime?
+  executedAt         DateTime?
+  executionResult    Json?
+  taskId             String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// A job for a person (operations exception, procurement, dispatch prep; later finance reconciliation).
+model WorkTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  agent          String
+  /// exception | procurement | production | dispatch | sample | reconciliation | review
+  kind           String
+  title          String       @db.VarChar(300)
+  detail         String?      @db.Text
+  /// open | in_progress | done | cancelled
+  status         String       @default("open")
+  priority       String       @default("normal")
+  assignee       String?
+  dueAt          DateTime?
+  entityType     String?
+  entityId       String?
+  dedupeKey      String?      @unique @db.VarChar(191)
+  resolution     String?      @db.Text
+  createdBy      String
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, agent, status])
+  @@index([organizationId, entityType, entityId])
+}
+
+/// Counted stock for a catalogue item at a location. available = onHand - reserved.
+/// A product WITHOUT a row here is "not tracked": nothing about it is claimed from stock.
+model InventoryBalance {
+  id             String         @id @default(cuid())
+  organizationId String
+  productId      String
+  location       String         @default("main")
+  onHand         Decimal        @default(0) @db.Decimal(14, 2)
+  reserved       Decimal        @default(0) @db.Decimal(14, 2)
+  /// Low-stock alert when available falls to or below this.
+  lowStockAt     Decimal?       @db.Decimal(14, 2)
+  allowNegative  Boolean        @default(false)
+  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        TextileProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, location])
+  @@index([organizationId])
+}
+
+/// Every stock change, append-only: receive | adjust | reserve | release | dispatch.
+model StockMovement {
+  id             String         @id @default(cuid())
+  organizationId String
+  productId      String
+  location       String         @default("main")
+  type           String
+  quantity       Decimal        @db.Decimal(14, 2)
+  onHandAfter    Decimal        @db.Decimal(14, 2)
+  reservedAfter  Decimal        @db.Decimal(14, 2)
+  orderId        String?
+  lot            String?
+  reference      String?
+  reason         String?        @db.Text
+  actor          String
+  /// The same key never moves stock twice (retried task, double click, duplicate event).
+  idempotencyKey String         @db.VarChar(191)
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        TextileProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, productId, createdAt])
+  @@index([organizationId, orderId])
+}
+
+// =============================================================================================
+// Finance (textile): invoices from confirmed orders, payments that are VERIFIED only by an authorised person or a
+// trusted provider. New tables only. Order and quotation records are never changed by an invoice.
+// =============================================================================================
+
+/// An invoice for a confirmed order. Amounts are computed on the server from the order lines and the quotation's
+/// commercial terms. `activeKey` = one live (not cancelled) invoice per order.
+model Invoice {
+  id             String       @id @default(cuid())
+  organizationId String
+  number         String
+  orderId        String
+  customerId     String
+  /// draft | approved | issued | partially_paid | paid | cancelled   ("overdue" is derived from dueDate)
+  status         String       @default("draft")
+  activeKey      String?      @unique @db.VarChar(191)
+  currency       String       @default("INR")
+  invoiceDate    DateTime?
+  dueDate        DateTime?
+  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
+  discount       Decimal      @default(0) @db.Decimal(14, 2)
+  taxPercent     Decimal      @default(0) @db.Decimal(5, 2)
+  tax            Decimal      @default(0) @db.Decimal(14, 2)
+  shipping       Decimal      @default(0) @db.Decimal(14, 2)
+  total          Decimal      @default(0) @db.Decimal(14, 2)
+  /// Sum of VERIFIED payments (kept in step in the same transaction as each verification / reversal).
+  amountPaid     Decimal      @default(0) @db.Decimal(14, 2)
+  /// Where the tax % came from: quotation | entered
+  taxSource      String       @default("quotation")
+  notes          String?      @db.Text
+  createdBy      String
+  issuedAt       DateTime?
+  cancelledAt    DateTime?
+  cancelReason   String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order          SalesOrder   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items          InvoiceItem[]
+  payments       Payment[]
+  collectionNotes CollectionNote[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, orderId])
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  productId   String?
+  sku         String?
+  description String
+  quantity    Decimal  @db.Decimal(12, 2)
+  unit        String
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+/// A payment against an invoice. Recorded as pending_verification; becomes verified ONLY by an authorised person
+/// with evidence (manual) or a trusted provider check. Customer screenshots / references alone never verify it.
+model Payment {
+  id             String       @id @default(cuid())
+  organizationId String
+  invoiceId      String?
+  orderId        String?
+  customerId     String
+  amount         Decimal      @db.Decimal(14, 2)
+  currency       String       @default("INR")
+  /// upi | bank_transfer | cash | cheque | card | gateway | other
+  method         String
+  /// UTR / cheque no. / receipt no. as given
+  reference      String?
+  /// Normalised reference used to detect the same transaction entered twice.
+  referenceKey   String?      @db.VarChar(191)
+  transactionId  String?
+  paidAt         DateTime
+  /// pending_verification | verified | rejected | reversed
+  status         String       @default("pending_verification")
+  /// customer_claim | staff_entry | provider
+  source         String
+  /// manual | provider:<name>  (set when verified)
+  verificationSource String?
+  /// What was checked (bank statement line, cash receipt book page...). Required for manual verification.
+  evidence       String?      @db.Text
+  enteredBy      String
+  verifiedBy     String?
+  verifiedAt     DateTime?
+  rejectedReason String?      @db.Text
+  reversedBy     String?
+  reversedAt     DateTime?
+  reversalReason String?      @db.Text
+  notes          String?      @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  order          SalesOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, invoiceId])
+  @@index([organizationId, referenceKey])
+  @@index([organizationId, customerId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Marketing agent: customer segments, campaign briefs / drafts, approval-gated WhatsApp campaigns,
+// content calendar, delivery + reply tracking and attribution. Nothing is sent without an approval.
+// ---------------------------------------------------------------------------------------------
+
+/// A saved audience. Rules are always narrowed to customers who gave marketing consent and did not opt out.
+model MarketingSegment {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?      @db.VarChar(500)
+  /// { tags?: string[], language?: string, leadStatuses?: string[], leadSources?: string[], activeWithinDays?: number }
+  rules          Json
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns      MarketingCampaign[]
+
+  @@unique([organizationId, name])
+}
+
+/// A campaign brief + its message. draft -> pending_approval -> approved/queued -> sending -> completed
+/// (or rejected / paused / cancelled). Only an approved, unchanged draft is ever sent.
+model MarketingCampaign {
+  id               String       @id @default(cuid())
+  organizationId   String
+  name             String
+  objective        String?      @db.VarChar(500)
+  /// Occasion / theme: diwali | pongal | wedding | new_arrivals | clearance | other
+  occasion         String?
+  channel          String       @default("whatsapp")
+  segmentId        String?
+  /// The brief: offer, product ids, tone, language, notes.
+  brief            Json?
+  /// An APPROVED WhatsApp template (Meta) with its body variables and optional image header.
+  templateName     String?
+  templateLanguage String?
+  templateParams   Json?
+  headerImageUrl   String?      @db.VarChar(1000)
+  /// What the owner reads in the preview (the template body with variables filled for a sample customer).
+  previewText      String?      @db.Text
+  /// draft | pending_approval | approved | scheduled | sending | paused | completed | cancelled | rejected
+  status           String       @default("draft")
+  scheduledAt      DateTime?
+  /// Hash of everything that is sent (template, variables, image, audience rules) at approval time.
+  approvedHash     String?      @db.VarChar(64)
+  approvalId       String?
+  taskId           String?
+  estimatedRecipients Int?
+  /// ₹, from Settings → ROI "WhatsApp cost per message" (null when that rate is 0 / not set).
+  estimatedCost    Decimal?     @db.Decimal(10, 2)
+  /// true = DRY_RUN was on: results are simulated and labelled as such, nothing was sent.
+  simulated        Boolean      @default(false)
+  createdBy        String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  segment          MarketingSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  recipients       CampaignRecipient[]
+  contentItems     ContentItem[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+}
+
+/// One customer in one campaign.
+model CampaignRecipient {
+  id                String            @id @default(cuid())
+  organizationId    String
+  campaignId        String
+  customerId        String
+  /// queued | sent | delivered | read | replied | failed | skipped | cancelled | simulated
+  status            String            @default("queued")
+  reason            String?           @db.VarChar(500)
+  providerMessageId String?
+  /// The lead this campaign is credited with (set when the customer replies).
+  leadId            String?
+  attempts          Int               @default(0)
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  repliedAt         DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign          MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, customerId])
+  @@index([organizationId, providerMessageId])
+  @@index([organizationId, customerId, sentAt])
+}
+
+/// Content calendar: posts / statuses / broadcast ideas planned per day. No social network is connected, so
+/// "published" is recorded by a person after they post it (never claimed automatically).
+model ContentItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  title          String
+  /// whatsapp_status | instagram | facebook | whatsapp_broadcast
+  channel        String
+  /// post | story | reel_idea | broadcast
+  format         String       @default("post")
+  body           String       @db.Text
+  mediaUrl       String?      @db.VarChar(1000)
+  productIds     Json?
+  plannedFor     DateTime
+  /// idea | draft | pending_approval | approved | published | cancelled
+  status         String       @default("draft")
+  campaignId     String?
+  approvalId     String?
+  publishedAt    DateTime?
+  publishedBy    String?
+  publishedNote  String?      @db.VarChar(500)
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  revisions      ContentRevision[]
+
+  @@index([organizationId, plannedFor])
+  @@index([organizationId, status])
+}
+
+/// Every version of a content item's text: AI drafts (with the model and token usage), template drafts and manual edits.
+model ContentRevision {
+  id             String       @id @default(cuid())
+  organizationId String
+  contentItemId  String
+  title          String
+  body           String       @db.Text
+  /// ai | template | manual
+  source         String
+  model          String?
+  language       String?
+  inputTokens    Int?
+  outputTokens   Int?
+  /// Sentences the grounding check removed (unverified prices, offers, stock claims).
+  removed        Json?
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contentItem    ContentItem  @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, contentItemId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+/// Collections on an invoice: contact notes, payment promises, disputes, outcomes and approval-gated reminders.
+model CollectionNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  customerId     String
+  /// contact | promise | dispute | outcome | reminder
+  type           String
+  note           String?      @db.Text
+  promisedAmount Decimal?     @db.Decimal(14, 2)
+  promisedDate   DateTime?
+  /// promise: open | kept | broken; dispute: open | resolved; reminder: pending_approval | queued | sent | skipped | cancelled | rejected
+  status         String       @default("open")
+  approvalId     String?
+  followUpId     String?
+  createdBy      String
+  resolvedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, invoiceId, createdAt])
+  @@index([organizationId, type, status])
+}
+
+/// Business expenses recorded by Finance (not an accounting ledger). Voided, never deleted.
+model Expense {
+  id             String       @id @default(cuid())
+  organizationId String
+  spentOn        DateTime
+  /// purchase | freight | salaries | rent | utilities | marketing | other
+  category       String
+  amount         Decimal      @db.Decimal(14, 2)
+  currency       String       @default("INR")
+  vendor         String?
+  reference      String?
+  referenceKey   String?      @db.VarChar(191)
+  notes          String?      @db.Text
+  /// recorded | void
+  status         String       @default("recorded")
+  voidReason     String?      @db.Text
+  recordedBy     String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, spentOn])
+  @@index([organizationId, referenceKey])
+}
+
+/// Extra workspaces a user may switch into (their own organization is User.organizationId). The session is re-issued
+/// for the chosen organization; every API call stays scoped to the organization in the session.
+model OrganizationMembership {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String       @default("admin")
+  createdAt      DateTime     @default(now())
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+/// Manufacturing & quality control: one inspection of a batch / lot, entered by a person (no camera or CV model is
+/// connected). Defects per category; corrective actions are tracked as work tasks.
+model QualityInspection {
+  id             String       @id @default(cuid())
+  organizationId String
+  batchCode      String
+  productName    String
+  line           String?
+  inspector      String?
+  inspectedAt    DateTime
+  inspectedQty   Int
+  rejectedQty    Int          @default(0)
+  /// [{ category: string, count: number }]
+  defects        Json?
+  /// open | resolved
+  status         String       @default("open")
+  severity       String       @default("minor")
+  notes          String?      @db.Text
+  resolution     String?      @db.Text
+  resolvedAt     DateTime?
+  isDemo         Boolean      @default(false)
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, batchCode])
+  @@index([organizationId, inspectedAt])
+  @@index([organizationId, status])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Agent conversation state for the food, hotel and hospital assistants (cart, dates, slot offers).
+// One row per conversation key; durable across restarts. Never holds prices as truth: totals are recomputed.
+// ---------------------------------------------------------------------------------------------
+model AgentSession {
+  id             String       @id
+  organizationId String
+  /// food | hotel | hospital
+  kind           String
+  data           Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hotel & room booking. Rates and availability are computed by the server from these tables only.
+// ---------------------------------------------------------------------------------------------
+model RoomType {
+  id             String        @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  description    String?       @db.Text
+  bedType        String?
+  sizeSqft       Int?
+  maxAdults      Int           @default(2)
+  maxChildren    Int           @default(1)
+  /// Adults + children per room.
+  maxOccupancy   Int           @default(3)
+  /// Per room per night (weekday).
+  baseRate       Decimal       @db.Decimal(10, 2)
+  /// Friday / Saturday nights; NULL = base rate.
+  weekendRate    Decimal?      @db.Decimal(10, 2)
+  amenities      Json?
+  active         Boolean       @default(true)
+  isDemo         Boolean       @default(false)
+  sortOrder      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rooms          Room[]
+  rates          RoomRate[]
+  reservations   Reservation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+/// A physical room. Rooms that are out of service do not count as sellable inventory.
+model Room {
+  id             String        @id @default(cuid())
+  organizationId String
+  roomTypeId     String
+  number         String
+  floor          String?
+  /// available | occupied | out_of_service
+  status         String        @default("available")
+  /// clean | dirty | inspecting
+  housekeeping   String        @default("clean")
+  notes          String?       @db.Text
+  isDemo         Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roomType       RoomType      @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  reservations   Reservation[]
+
+  @@unique([organizationId, number])
+  @@index([roomTypeId])
+}
+
+/// Seasonal rate: applies to nights from startDate to endDate (inclusive).
+model RoomRate {
+  id             String       @id @default(cuid())
+  organizationId String
+  roomTypeId     String
+  name           String
+  startDate      DateTime     @db.Date
+  endDate        DateTime     @db.Date
+  rate           Decimal      @db.Decimal(10, 2)
+  isDemo         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roomType       RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@index([roomTypeId, startDate])
+  @@index([organizationId])
+}
+
+model Reservation {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// Shown to the guest, e.g. HB-7K2Q9X.
+  reference          String
+  customerId         String
+  leadId             String?
+  roomTypeId         String
+  /// Assigned at check-in.
+  roomId             String?
+  checkIn            DateTime     @db.Date
+  checkOut           DateTime     @db.Date
+  nights             Int
+  rooms              Int          @default(1)
+  adults             Int
+  children           Int          @default(0)
+  /// pending_confirmation | confirmed | checked_in | checked_out | cancelled | no_show | expired
+  status             String       @default("pending_confirmation")
+  /// A pending reservation holds inventory until this time, then expires.
+  holdExpiresAt      DateTime?
+  subtotal           Decimal      @db.Decimal(10, 2)
+  taxAmount          Decimal      @default(0) @db.Decimal(10, 2)
+  total              Decimal      @db.Decimal(10, 2)
+  /// Per-night rates as charged [{date, rate, source}].
+  rateBreakdown      Json
+  /// not_required | pending | simulated_paid | simulated_failed | paid_verified
+  paymentStatus      String       @default("not_required")
+  depositAmount      Decimal      @default(0) @db.Decimal(10, 2)
+  channel            String
+  guestName          String?
+  guestPhone         String?
+  specialRequests    String?      @db.Text
+  /// Same request retried (webhook retry, double tap) -> the same reservation.
+  idempotencyKey     String
+  cancellationReason String?      @db.Text
+  cancelledAt        DateTime?
+  checkedInAt        DateTime?
+  checkedOutAt       DateTime?
+  feedbackRating     Int?
+  feedbackComment    String?      @db.Text
+  isDemo             Boolean      @default(false)
+  createdBy          String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  roomType           RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  room               Room?        @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, reference])
+  @@index([organizationId, checkIn])
+  @@index([roomTypeId, checkIn, checkOut])
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hospital & healthcare (administrative only: no diagnosis, prescriptions or insurance decisions by AI).
+// ---------------------------------------------------------------------------------------------
+model Department {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?       @db.Text
+  active         Boolean       @default(true)
+  isDemo         Boolean       @default(false)
+  sortOrder      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  doctors        Doctor[]
+  appointments   Appointment[]
+
+  @@unique([organizationId, name])
+}
+
+model Doctor {
+  id              String        @id @default(cuid())
+  organizationId  String
+  departmentId    String
+  name            String
+  qualification   String?
+  specialty       String?
+  languages       String?
+  consultationFee Decimal       @db.Decimal(10, 2)
+  slotMinutes     Int           @default(15)
+  /// Weekly OPD hours, IST: [{day: 0-6 (Sun-Sat), start: "09:00", end: "13:00"}].
+  schedule        Json
+  /// "YYYY-MM-DD" dates the doctor is not available.
+  leaveDates      Json?
+  active          Boolean       @default(true)
+  isDemo          Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department      Department    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  appointments    Appointment[]
+
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+model Appointment {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  /// Shown to the patient, e.g. AP-7K2Q9X.
+  reference          String
+  customerId         String
+  leadId             String?
+  doctorId           String
+  departmentId       String
+  startAt            DateTime
+  endAt              DateTime
+  /// booked | confirmed | checked_in | completed | cancelled | no_show
+  status             String       @default("booked")
+  /// new | follow_up
+  visitType          String       @default("new")
+  /// What the patient said they are coming for (administrative note, never a diagnosis).
+  reasonNote         String?      @db.Text
+  channel            String
+  patientName        String?
+  patientPhone       String?
+  idempotencyKey     String
+  /// Reference of the appointment this one replaced (reschedule).
+  rescheduledFrom    String?
+  cancellationReason String?      @db.Text
+  feedbackRating     Int?
+  feedbackComment    String?      @db.Text
+  isDemo             Boolean      @default(false)
+  createdBy          String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  doctor             Doctor       @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  department         Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, reference])
+  @@index([doctorId, startAt])
+  @@index([organizationId, startAt])
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+/// Insurance administration: eligibility, pre-authorisation, claim, reimbursement. Statuses are recorded by staff
+/// from the insurer / TPA response; the assistant only reports them and chases missing documents.
+model InsuranceCase {
+  id               String       @id @default(cuid())
+  organizationId   String
+  reference        String
+  customerId       String
+  appointmentId    String?
+  /// eligibility | pre_authorisation | claim | reimbursement
+  kind             String
+  insurer          String
+  tpa              String?
+  /// Masked policy number (last 4 digits only).
+  policyRef        String
+  /// documents_pending | ready_to_submit | submitted | query_raised | approved | partially_approved | rejected | settled | closed
+  status           String       @default("documents_pending")
+  requiredDocs     Json
+  receivedDocs     Json
+  amountRequested  Decimal?     @db.Decimal(12, 2)
+  amountApproved   Decimal?     @db.Decimal(12, 2)
+  insurerReference String?
+  decisionNote     String?      @db.Text
+  /// Staff member who recorded the insurer's decision.
+  decidedBy        String?
+  lastFollowUpAt   DateTime?
+  isDemo           Boolean      @default(false)
+  createdBy        String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([customerId])
+}

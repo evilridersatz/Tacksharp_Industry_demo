@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+
+/* Tacksharp design tokens — matched to tacksharp-all-screens.png */
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-ink: #0f172a;        /* headings, numbers */
+  --color-body: #334155;       /* body text */
+  --color-muted: #64748b;      /* secondary text */
+  --color-faint: #94a3b8;      /* timestamps, hints */
+  --color-line: #e6eaf1;       /* card borders, dividers */
+  --color-canvas: #f1f4f9;     /* page background */
+  --color-sidebar: #0b1220;    /* navigation */
+  --color-sidebar-2: #151e31;  /* active nav item */
+
+  --color-brand: #0f9f6e;      /* primary buttons, positive */
+  --color-brand-dark: #0b7f58;
+  --color-brand-soft: #e5f6ee;
+  --color-violet: #7c5cf0;     /* voice */
+  --color-violet-soft: #efebfe;
+  --color-amber: #f59e0b;      /* waiting, callbacks */
+  --color-amber-soft: #fef3dc;
+  --color-sky: #0ea5e9;        /* visits */
+  --color-sky-soft: #e3f4fc;
+  --color-rose: #e11d48;       /* needs a human, failures */
+  --color-rose-soft: #fde7ec;
+
+  --radius-card: 14px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 1px rgb(15 23 42 / 0.03);
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.pane-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}

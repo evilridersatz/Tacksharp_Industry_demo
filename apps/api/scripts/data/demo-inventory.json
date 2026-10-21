@@ -1,0 +1,16 @@
+{
+  "_comment": "DEMO catalogue and stock for the MVP. Sample prices and quantities only — not verified shop data. Edit this file and re-run `npm run seed:demo-inventory`. Products a person has edited (isDemo = false) and stock staff entered are never overwritten.",
+  "categories": [
+    { "name": "Chicken", "sortOrder": 1 },
+    { "name": "Eggs", "sortOrder": 3 }
+  ],
+  "products": [
+    { "name": "Whole Chicken", "category": "Chicken", "price": 240, "unit": "kg", "stock": 20, "lowStockAt": 5, "minQty": 0.5, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "whole chicken, full chicken, muzhu kozhi, முழு கோழி" },
+    { "name": "Chicken Breast", "category": "Chicken", "price": 320, "unit": "kg", "stock": 8, "lowStockAt": 2, "minQty": 0.25, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "breast, chicken breast, breast piece, நெஞ்சுக்கறி" },
+    { "name": "Chicken Curry Cut", "category": "Chicken", "price": 260, "unit": "kg", "stock": 15, "lowStockAt": 4, "minQty": 0.5, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "curry cut, chicken curry cut, curry cut chicken, kari cut, கறி கட்" },
+    { "name": "Chicken Drumsticks", "category": "Chicken", "price": 300, "unit": "kg", "stock": 6, "lowStockAt": 2, "minQty": 0.25, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "drumstick, drumsticks, leg piece, leg pieces, லெக் பீஸ்" },
+    { "name": "Chicken Wings", "category": "Chicken", "price": 280, "unit": "kg", "stock": 5, "lowStockAt": 2, "minQty": 0.25, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "wings, wing, chicken wings" },
+    { "name": "Boneless Chicken", "category": "Chicken", "price": 360, "unit": "kg", "stock": 7, "lowStockAt": 2, "minQty": 0.25, "maxQty": 10, "qtyStep": 0.25, "cuts": [], "aliases": "boneless, bone less, boneless chicken, போன்லெஸ்" },
+    { "name": "Eggs", "category": "Eggs", "price": 8, "unit": "piece", "stock": 120, "lowStockAt": 24, "minQty": 1, "maxQty": 120, "qtyStep": 1, "cuts": [], "aliases": "egg, eggs, muttai, முட்டை" }
+  ]
+}

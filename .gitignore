@@ -1,0 +1,80 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/
+
+# Prisma
+*.db
+*.db-journal
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Runtime
+*.pid
+dump.rdb
+*.backup-*
+*.bak-*
+*.patch
+*.zip
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+
+.env
+.env.*
+!.env.example
+
+# Generated build files
+*.tsbuildinfo
+.next/
+next-env.d.ts
+
+.env
+.env.*
+!.env.example
+!.env.*.example
+node_modules/
+**/.next/
+**/dist/
+**/coverage/
+*.log
+*.pem
+*.key
+credentials*.json
+service-account*.json
+
+# Local backups
+*.bak
+*.bak.*
+*.backup
+*.backup-*
+*.bak-*
