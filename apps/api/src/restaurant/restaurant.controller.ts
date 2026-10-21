@@ -185,7 +185,7 @@ export class RestaurantController {
   /** Inbound WhatsApp messages with processing / reply status (received, queued, replied, unknown, failed). */
   @Get('whatsapp-inbound')
   whatsappInbound(@Org() organizationId: string, @Query('status') status?: string, @Query('limit') limit?: string) {
-    const allowed = ['received', 'queued', 'processing', 'replied', 'reply_unknown', 'failed', 'skipped'];
+    const allowed = ['received', 'queued', 'processing', 'replied', 'reply_unknown', 'failed', 'skipped', 'simulated'];
     if (status && !allowed.includes(status)) throw new BadRequestException(`status must be one of ${allowed.join(', ')}`);
     return this.inbound.recent(organizationId, { status, limit: Number(limit) || 50 });
   }

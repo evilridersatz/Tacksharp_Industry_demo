@@ -28,6 +28,10 @@ export class SettingsController {
       const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { vertical: true } });
       if (org?.vertical === 'restaurant') throw new BadRequestException('This is a restaurant workspace: its industry is fixed. Use the workspace switcher to open another industry.');
     }
+    // The live demo feed is switched only by POST /monitoring/live-demo (demo workspaces); a settings save never changes it.
+    const mon = (body as { monitoring?: Record<string, unknown> } | null)?.monitoring;
+    if (mon && typeof mon === 'object') delete mon.liveDemo;
+    if (body && typeof body === 'object') delete (body as Record<string, unknown>).demoLive;
     const settings = await this.settings.update(organizationId, body);
     if (this.prisma && settings.industry !== before.industry) {
       await this.prisma.auditEvent.create({ data: { organizationId, actor: `user:${user.sub}`, entityType: 'organization', entityId: organizationId, action: 'industry_changed', data: { from: before.industry, to: settings.industry } } });

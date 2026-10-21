@@ -200,7 +200,7 @@ export type TenantSettings = {
   monitoring: {
     failureThreshold: number; debounceSeconds: number; restoreSuccesses: number; staleAfterMinutes: number; correlationWindowMinutes: number;
     ackDeadlineMinutes: number; escalationStepMinutes: number; quietHours: { enabled: boolean; start: string; end: string };
-    notifyCustomerOnResolution: boolean; voiceEscalation: boolean; alertTemplate: string; whatsappCostInr: number;
+    notifyCustomerOnResolution: boolean; voiceEscalation: boolean; alertTemplate: string; whatsappCostInr: number; retentionDays: number; liveDemo: { enabled: boolean; since: string | null };
     plans: Array<{ code: string; name: string; pricePerCameraInr: number; features: string[] }>;
   };
   textile: { quoteReminderDays: number; feedbackAfterHours: number; notifyOrderStatus: boolean; maxDiscountPct: number };

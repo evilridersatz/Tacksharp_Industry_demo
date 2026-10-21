@@ -231,7 +231,8 @@ export class HospitalService {
     } else if (q.status && APPOINTMENT_STATUS_LABEL[q.status]) where.status = q.status;
     if (q.doctorId) where.doctorId = q.doctorId;
     if (q.q?.trim()) where.OR = [{ reference: { contains: q.q.trim() } }, { patientName: { contains: q.q.trim() } }, { patientPhone: { contains: q.q.replace(/\D/g, '') || '§' } }];
-    const rows = await this.prisma.appointment.findMany({ where, include: { doctor: true, department: true, customer: true }, orderBy: { startAt: 'asc' }, take: Math.min(q.take ?? 200, 500) });
+    const rows = await this.prisma.appointment.findMany({ where, include: { doctor: true, department: true, customer: true }, // A day / upcoming: in clinic order. "All": the most recent first, so a long history never hides today's visits.
+      orderBy: { startAt: q.status === 'upcoming' || isDay(q.day) ? 'asc' : 'desc' }, take: Math.min(q.take ?? 200, 500) });
     return rows.map((a) => this.view(a));
   }
 

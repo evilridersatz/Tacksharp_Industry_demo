@@ -70,6 +70,7 @@ const dayOnly = (d: string) => new Date(`${d}T00:00:00.000Z`);
 const addDays = (d: string, k: number) => new Date(dayOnly(d).getTime() + k * DAY).toISOString().slice(0, 10);
 const istAt = (d: string, hhmm: string) => new Date(dayOnly(d).getTime() + (Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))) * 60_000 - IST);
 const TODAY = istDay(NOW);
+const LIVE_DEFAULT = { enabled: process.env.DEMO_LIVE_DEFAULT !== 'off', since: new Date(NOW).toISOString() };
 
 /** Deterministic random numbers per workspace: the same run produces the same rows. */
 function rng(seed: number) {
@@ -109,7 +110,7 @@ async function reset(orgId: string) {
   if (!exists) return;
   if (!exists.isDemo) throw new Error(`${orgId} is not a demo workspace`);
   const where = { organizationId: orgId };
-  for (const model of ['incidentTimelineEvent', 'notificationAttempt', 'downtimeIncident', 'healthEvent', 'agentHeartbeat', 'monitoringAgent', 'cameraDevice', 'recorderDevice', 'siteTechnician', 'serviceContract', 'siteUptimeSnapshot', 'monitoringSite', 'monitoringCustomer', 'agentSession', 'reservation', 'roomRate', 'room', 'roomType', 'insuranceCase', 'appointment', 'doctor', 'department', 'payment', 'invoice', 'feedback', 'salesOrder', 'quotation', 'orderFollowUp', 'orderEvent', 'offerClaim', 'order', 'siteVisit', 'call', 'inventoryMovement', 'stockMovement', 'inventoryBalance', 'menuItem', 'menuCategory', 'outlet', 'campaignRecipient', 'marketingCampaign', 'workTask', 'auditEvent', 'followUp', 'message', 'conversation', 'lead', 'qualityInspection', 'textileProduct', 'property']) {
+  for (const model of ['incidentTimelineEvent', 'notificationAttempt', 'downtimeIncident', 'healthEvent', 'agentHeartbeat', 'monitoringAgent', 'cameraDevice', 'recorderDevice', 'siteTechnician', 'serviceContract', 'siteUptimeSnapshot', 'monitoringSite', 'monitoringCustomer', 'agentSession', 'reservation', 'roomRate', 'room', 'roomType', 'insuranceCase', 'appointment', 'doctor', 'department', 'payment', 'invoice', 'feedback', 'salesOrder', 'quotation', 'orderFollowUp', 'orderEvent', 'offerClaim', 'offerCampaign', 'marketingSegment', 'order', 'siteVisit', 'call', 'inventoryMovement', 'stockMovement', 'inventoryBalance', 'menuItem', 'menuCategory', 'outlet', 'campaignRecipient', 'marketingCampaign', 'workTask', 'auditEvent', 'followUp', 'message', 'conversation', 'lead', 'qualityInspection', 'textileProduct', 'property']) {
     await (prisma as unknown as Record<string, { deleteMany: (a: unknown) => Promise<unknown> }>)[model].deleteMany({ where });
   }
   await prisma.customer.deleteMany({ where });
@@ -120,7 +121,9 @@ async function org(key: Key, extra: Record<string, unknown> = {}) {
   await prisma.organization.upsert({ where: { id: o.id }, create: { id: o.id, name: o.name, vertical: o.vertical, isDemo: true }, update: { name: o.name, vertical: o.vertical, isDemo: true } });
   const settings = {
     industry: o.industry, textile: { quoteReminderDays: 2, feedbackAfterHours: 24, notifyOrderStatus: true, maxDiscountPct: 10 }, agents: { paused: [] },
-    finance: { paymentTermsDays: 15, dispatchPaymentRule: 'none', autoDraftInvoice: true }, roi: { costPerLeadInr: 400, voiceCostPerMinuteInr: 0, whatsappCostPerMessageInr: 0.8 }, ...extra,
+    finance: { paymentTermsDays: 15, dispatchPaymentRule: 'none', autoDraftInvoice: true }, roi: { costPerLeadInr: 400, voiceCostPerMinuteInr: 0, whatsappCostPerMessageInr: 0.8 },
+    // Live demo activity on by default (DEMO_LIVE_DEFAULT=off seeds it paused); runs only where the scheduler runs.
+    demoLive: LIVE_DEFAULT, ...extra,
   };
   await prisma.organizationSettings.upsert({ where: { organizationId: o.id }, create: { organizationId: o.id, data: settings as never }, update: { data: settings as never } });
   return o.id;
@@ -183,6 +186,11 @@ async function audit(orgId: string, key: string, entityType: string, entityId: s
   await put('auditEvent', orgId, sid(orgId, 'audit', key), { organizationId: orgId, actor, entityType, entityId, action, data: data as never, createdAt: at });
 }
 
+/** Saved audience segments (rules are evaluated live by the marketing service). */
+async function segments(orgId: string, list: Array<[string, string, Record<string, unknown>]>) {
+  for (const [i, [name, description, rules]] of list.entries()) await put('marketingSegment', orgId, sid(orgId, 'seg', i), { organizationId: orgId, name, description, rules: rules as never, createdBy: 'seed:demo' });
+}
+
 async function campaign(r: R, orgId: string, name: string, list: Array<{ id: string }>, leads: Array<{ id: string; customerId: string }>) {
   const c = await put('marketingCampaign', orgId, sid(orgId, 'camp', 0), { organizationId: orgId, name, status: 'completed', templateName: 'demo_offer', templateLanguage: 'en', startedAt: r.ago(20, 10), completedAt: r.ago(10, 5), simulated: true, createdBy: 'seed:demo' });
   for (const [i, cu] of list.slice(0, 20).entries()) {
@@ -230,10 +238,19 @@ async function salesWorkspace(key: 'textile' | 'retail') {
     const order = await put('salesOrder', orgId, sid(orgId, 'so', i), { organizationId: orgId, customerId: lead.customerId, leadId: lead.id, quotationId: q.id, number: `DEMO-SO-${String(on++).padStart(4, '0')}`, status, paymentStatus: status === 'delivered' ? 'paid' : r.pick(['unpaid', 'partial']), total: dec(total), createdAt: new Date(created.getTime() + DAY), deliveredAt: status === 'delivered' ? new Date(created.getTime() + 5 * DAY) : null, courier: ['dispatched', 'delivered'].includes(status) ? 'ST Courier' : null, trackingRef: ['dispatched', 'delivered'].includes(status) ? `DEMO${r.int(100000, 999999)}` : null });
     for (const [k, it] of items.entries()) await put('salesOrderItem', orgId, `${order.id}_i${k}`, { orderId: order.id, ...it });
     await audit(orgId, `so_${i}`, 'order', order.id, `status:${status}`, new Date(created.getTime() + 2 * DAY), { to: status });
-    if (status === 'delivered') await put('feedback', orgId, sid(orgId, 'fb', i), { organizationId: orgId, customerId: lead.customerId, orderId: order.id, status: r.pick(['received', 'received', 'resolved']), rating: r.int(2, 5), comment: r.pick(['Good quality', 'Delivered on time', 'Colour slightly different', 'Excellent finish']) });
+    if (status === 'delivered') {
+      // Same random draws, in the same order, as before (keeps every other seeded row stable); low ratings need action.
+      const st = r.pick(['received', 'received', 'resolved']);
+      const rating = r.int(2, 5);
+      const comment = r.pick(['Good quality', 'Delivered on time', 'Colour slightly different', 'Excellent finish']);
+      await put('feedback', orgId, sid(orgId, 'fb', i), { organizationId: orgId, customerId: lead.customerId, orderId: order.id, status: rating <= 3 ? 'needs_action' : st, rating, comment: rating <= 3 ? 'Colour slightly different from the photo' : comment, receivedAt: new Date(Math.min(NOW - 3_600_000, created.getTime() + 6 * DAY)) });
+    }
   }
   await followUps(r, orgId, leads, key === 'textile' ? [{ source: 'quote', message: 'quote:reminder:demo' }, { source: 'order', message: 'order:status:demo:dispatched' }, { source: 'feedback', message: 'feedback:request:demo' }] : [{ source: 'order', message: 'order:status:demo:dispatched' }, { source: 'feedback', message: 'feedback:request:demo' }]);
   await campaign(r, orgId, key === 'textile' ? 'Demo · Diwali silk collection (simulated)' : 'Demo · Festive gadget sale (simulated)', list, leads);
+  await segments(orgId, key === 'textile'
+    ? [['Saree buyers', 'Customers tagged saree_buyer', { tags: ['saree_buyer'] }], ['Wholesale accounts', 'Bulk / wholesale buyers', { tags: ['wholesale'] }], ['Tamil-speaking customers', 'Messages in Tamil', { language: 'tamil' }], ['Quotation sent, no order', 'Leads waiting on a quotation decision', { leadStatuses: ['quotation_sent'] }]]
+    : [['Gadget shoppers', 'Customers tagged gadgets', { tags: ['gadgets'] }], ['Home & kitchen', 'Customers tagged home', { tags: ['home'] }], ['Repeat customers', 'Bought more than once', { leadStatuses: ['repeat_customer'] }], ['Active this week', 'Messaged us in the last 7 days', { activeWithinDays: 7 }]]);
   await conversation(orgId, 'c1', list[0], 'active', key === 'textile'
     ? [['user', 'Hi, I need 200 cotton shirts in three sizes for our school staff. Can you share a quotation?'], ['assistant', 'Thank you! Noted: Cotton Formal Shirt, 200 pieces, sizes S / M / L. Approved price ₹650 per piece. I have created a quotation request; our sales team will send the quotation shortly.'], ['user', 'Can you do it in light blue?'], ['assistant', 'Light blue is available in Linen Casual Shirt (₹890). I have added your colour preference to the request for the salesperson.']]
     : [['user', 'Do you have the 65W charger in stock?'], ['assistant', 'Thanks for asking! Our team will check and reply here shortly.'], ['user', 'ok']], 30);
@@ -302,6 +319,13 @@ async function grWorkspace() {
     }
   }
   await followUps(r, orgId, leads, [{ source: 'sequence', message: 'missed_call' }]);
+  // ₹50 website offer: claims in every state (sent on WhatsApp, chatting, ordered, failed, expired). Simulated sends only.
+  const offer = await put('offerCampaign', orgId, sid(orgId, 'offer', 0), { organizationId: orgId, name: '₹50 off your first WhatsApp order (demo)', code: 'DEMO50', amount: dec(50), minOrderValue: dec(300), validDays: 7, active: true });
+  const claimStates = ['claimed', 'claimed', 'claimed', 'started', 'started', 'sent', 'sent', 'sent', 'send_failed', 'expired', 'pending_send', 'claimed'];
+  for (const [k, st] of claimStates.entries()) {
+    const cu = list[(k + 5) % list.length];
+    await put('offerClaim', orgId, sid(orgId, 'claim', k), { organizationId: orgId, campaignId: offer.id, customerId: cu.id, phone: cu.phone, source: k % 3 ? 'website' : 'manual', websiteOrderRef: `DEMO-WEB-${1001 + k}`, status: st, sendError: st === 'send_failed' ? 'Demo: number not on WhatsApp (simulated)' : null, orderId: st === 'claimed' ? sid(orgId, 'order', 10 + k) : null, amount: dec(50), expiresAt: new Date(st === 'expired' ? NOW - DAY : NOW + 5 * DAY), createdAt: r.ago(6) });
+  }
   await conversation(orgId, 'c1', list[0], 'closed', [['user', 'Rendu kg broiler curry cut venum'], ['assistant', '2 kg Broiler Chicken (Curry cut) — ₹440. Eppo pickup pannuveenga?'], ['user', '6 mani ku'], ['assistant', 'Seri. Payment cash-ah UPI-ah?'], ['user', 'UPI'], ['assistant', 'Order confirm pannalama? 2 kg Broiler Chicken (Curry cut), pickup 6:00 PM, total ₹440 — YES nu reply pannunga.'], ['user', 'yes'], ['assistant', '✅ Order DEMO-GR-0001 confirm aagiduchu. 6:00 PM ku ready-a irukkum.']], 50);
   await conversation(orgId, 'c2', list[1], 'human_handoff', [['user', 'ennaku staff kitta pesanum'], ['assistant', 'Seri, engal staff seekiram inga reply pannuvaanga.']], 3);
   await conversation(orgId, 'c3', list[2], 'active', [['user', 'நாட்டு கோழி இருக்கா?'], ['assistant', 'Country Chicken இருக்கு — ₹450 / kg (Curry cut, Biryani cut, Whole). எவ்வளவு வேணும்?']], 1);
@@ -690,6 +714,7 @@ async function agencyWorkspace() {
   const leads = await leadsFor(r, orgId, list, { sources: ['meta', 'google', 'website', 'referral', 'linkedin'], statuses: ['new', 'contacted', 'contacted', 'qualified', 'qualified', 'won', 'lost'], extra: (i) => ({ campaign: r.pick(['Diwali Boutique Promo', 'Clinic Lead Gen', 'Restaurant Footfall', null]), notes: ['Wants Instagram + Meta lead ads for a boutique', 'Clinic: needs a WhatsApp booking flow', 'Restaurant: weekend footfall campaign', 'Monthly SEO + Google Ads retainer', 'Landing page and lead-form setup', 'Festive offer campaign for a jewellery store'][i % 6] }) });
   await followUps(r, orgId, leads, [{ source: 'manual', message: 'proposal_followup' }, { source: 'sequence', message: 'reminder' }]);
   await campaign(r, orgId, 'Demo · Client re-engagement (simulated)', list, leads);
+  await segments(orgId, [['Clinics', 'Clinic clients and prospects', { tags: ['clinic'] }], ['Restaurants', 'Restaurant clients', { tags: ['restaurant'] }], ['Qualified leads', 'Ready for a proposal', { leadStatuses: ['qualified'] }], ['Meta ad leads', 'Came from Meta lead ads', { leadSources: ['meta'] }]]);
   await conversation(orgId, 'c1', list[0], 'human_handoff', [['user', 'We need Meta ads for our clinic, what are your packages?'], ['assistant', 'Thank you for contacting Demo · BrightLeaf Marketing. A member of our team will reply to you here shortly.']], 30);
   return orgId;
 }
@@ -706,6 +731,7 @@ async function cctvWorkspace() {
     monitoring: {
       failureThreshold: 3, debounceSeconds: 180, restoreSuccesses: 3, staleAfterMinutes: 10, correlationWindowMinutes: 30, ackDeadlineMinutes: 15, escalationStepMinutes: 30,
       quietHours: { enabled: true, start: '22:00', end: '07:00' }, notifyCustomerOnResolution: true, voiceEscalation: false, alertTemplate: '', whatsappCostInr: 0.12,
+      liveDemo: LIVE_DEFAULT,
     },
   });
   const ago = (min: number) => new Date(NOW - min * 60_000);
@@ -993,6 +1019,27 @@ async function main() {
     }
     for (const id of ids) await prisma.organizationMembership.upsert({ where: { userId_organizationId: { userId: u.id, organizationId: id } }, create: { userId: u.id, organizationId: id, role: 'admin' }, update: {} });
     console.log(`${e}: can now switch into the demo workspaces.`);
+  }
+  // Live-demo history: the same activity feed the dashboards show live, replayed over the last N days (default 30)
+  // in 45-minute steps, so 7- and 30-day charts are level with today. Earlier feed rows are replaced, never added to.
+  const historyDays = Math.max(0, Math.min(60, Number(process.env.DEMO_SEED_HISTORY_DAYS ?? 30)));
+  if (historyDays) {
+    const { SettingsService } = await import('../src/settings/settings.service.js');
+    const { FinanceService } = await import('../src/finance/finance.service.js');
+    const { FinanceEvents } = await import('../src/finance/finance-events.js');
+    const { ApprovalsService } = await import('../src/governance/approvals.service.js');
+    const { WorkTasksService } = await import('../src/governance/work-tasks.service.js');
+    const { DemoActivityService } = await import('../src/demo-live/demo-activity.service.js');
+    const db = prisma as never;
+    const settingsSvc = new SettingsService(db);
+    const activity = new DemoActivityService(db, settingsSvc, new FinanceService(db, new ApprovalsService(db), new WorkTasksService(db), settingsSvc, new FinanceEvents()));
+    console.log(`Replaying ${historyDays} days of live-demo activity (all workspaces in parallel)…`);
+    await Promise.all(Object.entries(created).filter(([key]) => key !== 'cctv').map(async ([, id]) => {
+      const started = Date.now();
+      await activity.prune(id, new Date(Date.now() + 40 * DAY)); // drop earlier feed rows
+      const sum = await activity.simulate(id, new Date(NOW - historyDays * DAY), new Date(Date.now() - 60_000), 60);
+      console.log(`  ${id.padEnd(24)} live-demo history ${historyDays} d: ${sum?.chats ?? 0} chats, ${sum?.calls ?? 0} calls, ${sum?.records.length ?? 0} records (${Math.round((Date.now() - started) / 1000)} s)`);
+    }));
   }
   console.log('Synthetic records written (upserts by stable id) per workspace:');
   for (const [k, id] of Object.entries(created)) console.log(`  ${id.padEnd(24)} ${Object.entries(counts[id] ?? {}).map(([m, c]) => `${m}=${c}`).join(' ')}`);

@@ -125,21 +125,11 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // the same job id. The claim in the database still guarantees one reply.
     this.sweeper = setInterval(() => void this.requeueStuckInbound().catch((e) => log.warn('whatsapp.requeue_failed', { error: describeError(e) })), 60_000);
     this.sweeper.unref();
-    // VisionOps: stale agents → UNKNOWN + agent incident, escalations, due notifications (DRY_RUN-gated). One sweep at a time.
-    if (this.monitoring) {
-      let running = false;
-      this.monitoringSweeper = setInterval(() => {
-        if (running) return;
-        running = true;
-        void this.monitoring!.sweep(undefined).catch((e) => log.warn('visionops.sweep_failed', { error: describeError(e) })).finally(() => { running = false; });
-      }, 60_000);
-      this.monitoringSweeper.unref();
-    }
+    // VisionOps periodic work (sweep, cloud checks, retention, live demo feed) runs in VisionOpsScheduler.
     log.info('workers.started', { queues: [WHATSAPP_QUEUE, FOLLOW_UP_QUEUE, ORDER_FOLLOW_UP_QUEUE, AGENT_QUEUE, MARKETING_QUEUE] });
   }
 
   private sweeper?: NodeJS.Timeout;
-  private monitoringSweeper?: NodeJS.Timeout;
 
   async requeueStuckInbound() {
     for (const row of await this.inbound.stuck()) {
@@ -162,7 +152,6 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
   /** Graceful shutdown: stop taking new jobs, let active ones finish, then close Redis. */
   async onApplicationShutdown(signal?: string) {
     if (this.sweeper) clearInterval(this.sweeper);
-    if (this.monitoringSweeper) clearInterval(this.monitoringSweeper);
     log.info('workers.stopping', { signal });
     await Promise.all(this.workers.map((w) => w.close()));
     await Promise.allSettled([followUpQueue.close(), whatsappQueue.close(), orderFollowUpQueue.close(), agentQueue.close(), marketingQueue.close()]);

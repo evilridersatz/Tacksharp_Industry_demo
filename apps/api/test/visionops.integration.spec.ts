@@ -239,6 +239,19 @@ describe.skipIf(!enabled)('VisionOps CCTV monitoring (integration)', () => {
     expect(await openFor(s2.cams[1].id)).toHaveLength(1);
   });
 
+  it('NVR and its cameras fail together: ONE recorder incident and ONE alert, no per-camera incidents (no alert storm)', async () => {
+    const s = await makeSite('Storm', { cameras: 5 });
+    for (const m of [0, 1, 2, 3]) {
+      // Cameras reported before the recorder in each batch (older observedAt): they must still wait for it.
+      await send(s, [...s.cams.map((c: any) => ev(c.code, false, new Date(min(m).getTime() - 2000))), ev(s.nvr.code, false, min(m))]);
+    }
+    const incs = await prisma.downtimeIncident.findMany({ where: { organizationId: VO, siteId: s.site.id } });
+    expect(incs.map((i: any) => i.category)).toEqual(['recorder_unreachable']);
+    expect(incs[0]).toMatchObject({ affectedCount: 5, severity: 'critical' });
+    expect(await prisma.notificationAttempt.count({ where: { organizationId: VO, incident: { siteId: s.site.id }, purpose: 'alert' } })).toBe(1);
+    expect(await prisma.cameraDevice.count({ where: { siteId: s.site.id, recorderId: s.nvr.id, status: 'offline' } })).toBe(5);
+  });
+
   it('the same fault inside the correlation window reopens the incident instead of opening a new one', async () => {
     const s = await makeSite('Reopen');
     const code = s.cams[1].code;

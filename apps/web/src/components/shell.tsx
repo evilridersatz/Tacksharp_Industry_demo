@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, Check, ChevronsUpDown, FlaskConical, Loader2, LogOut, Menu, Search, X } from 'lucide-react';
+import { Bell, Check, ChevronsUpDown, FlaskConical, Loader2, LogOut, Menu, Pause, Play, Search, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
@@ -300,12 +300,63 @@ function Drawer({ open, onClose, children }: { open: boolean; onClose: () => voi
   );
 }
 
+type DemoLive = { available: boolean; enabled: boolean; since: string | null; lastActivityAt: string | null; scheduler: { on: boolean; reason: string } };
+
+function agoShort(iso: string | null) {
+  if (!iso) return null;
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
+}
+
+/** Demo notice + the live demo switch: simulated customers, calls and records arrive every minute while it is on. */
 function DemoBanner({ def }: { def: IndustryDef }) {
+  const { data: live, reload } = useApi<DemoLive>('/demo/live', 15_000);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function toggle(enabled: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post('/demo/live', { enabled });
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const age = live?.lastActivityAt ? (Date.now() - Date.parse(live.lastActivityAt)) / 1000 : Infinity;
+  const flowing = Boolean(live?.enabled) && age < 180;
   return (
-    <div role="note" className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[12px] border px-4 py-2.5 text-[12.5px]" style={{ borderColor: `${def.accent}40`, background: def.accentSoft, color: '#1e293b' }}>
+    <div role="note" className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[12px] border px-4 py-2.5 text-[12.5px]" style={{ borderColor: `${def.accent}40`, background: def.accentSoft, color: '#1e293b' }}>
       <FlaskConical className="size-4 shrink-0" style={{ color: def.accent }} aria-hidden />
       <b>Demo workspace</b>
-      <span className="text-body">Sample {def.short.toLowerCase()} data. Nothing here is sent to real customers, charged or called.</span>
+      <span className="min-w-0 flex-1 text-body">Sample {def.short.toLowerCase()} data. Nothing here is sent to real customers, charged or called.</span>
+      {live?.available && (
+        <span className="flex flex-wrap items-center gap-2">
+          {live.enabled ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2 py-0.5 text-[11.5px] font-semibold text-emerald-700" aria-live="polite">
+              <span className="relative flex size-2" aria-hidden>
+                {flowing && <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:hidden" />}
+                <span className={cx('relative inline-flex size-2 rounded-full', flowing ? 'bg-emerald-500' : 'bg-amber-500')} />
+              </span>
+              {flowing ? `Live demo · activity ${agoShort(live.lastActivityAt)}` : live.scheduler.on ? 'Live demo · starting…' : 'Live demo on · scheduler off on this server'}
+            </span>
+          ) : (
+            <span className="rounded-full bg-white/70 px-2 py-0.5 text-[11.5px] font-semibold text-muted">Live demo paused</span>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => toggle(!live.enabled)}
+            className="inline-flex min-h-8 items-center gap-1 rounded-[8px] border border-black/10 bg-white px-2.5 text-[12px] font-semibold text-ink hover:bg-white/80 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : live.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            {live.enabled ? 'Pause live demo' : 'Start live demo'}
+          </button>
+        </span>
+      )}
+      {err && <span role="alert" className="w-full text-[12px] text-rose-700">{err}</span>}
     </div>
   );
 }

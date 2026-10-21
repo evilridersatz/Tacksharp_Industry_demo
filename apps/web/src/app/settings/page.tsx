@@ -271,6 +271,7 @@ export default function SettingsPage() {
               <Row label="Voice escalation" hint="Off by default; never calls in DRY_RUN or demo; needs provider verification"><Toggle label="Voice escalation" checked={d.monitoring.voiceEscalation} onChange={(v) => set('monitoring', { voiceEscalation: v })} /></Row>
               <Row label="WhatsApp alert template" hint="Approved template (one variable) for alerts outside the 24-hour window"><Text label="Alert template" value={d.monitoring.alertTemplate} onChange={(v) => set('monitoring', { alertTemplate: v })} placeholder="camera_alert" /></Row>
               <Row label="WhatsApp cost per message" hint="For per-tenant cost tracking; enter your Meta rate"><Num label="WhatsApp cost" value={d.monitoring.whatsappCostInr} onChange={(v) => set('monitoring', { whatsappCostInr: v })} suffix="₹ per message" max={100} step={0.01} /></Row>
+              <Row label="Keep raw health checks" hint="Older checks and heartbeats are deleted hourly; incidents, timelines and uptime history are kept"><Num label="Retention" value={d.monitoring.retentionDays ?? 90} onChange={(v) => set('monitoring', { retentionDays: v })} suffix="days" min={2} max={730} /></Row>
             </div>
           </Card>}
 

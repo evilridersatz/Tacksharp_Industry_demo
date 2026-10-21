@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Param, Patch, Post, Query, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Param, Patch, Post, Query, UnauthorizedException } from '@nestjs/common';
 import { CurrentUser, Org, Public } from '../auth/decorators.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
@@ -8,6 +8,8 @@ import { MonitoringService } from './monitoring.service.js';
 import { IncidentsService } from './incidents.service.js';
 import { MonitoringEngine, type EventIn } from './engine.service.js';
 import { parseAgentToken, secretMatches } from './agent-auth.js';
+import { VisionOpsScheduler } from './scheduler.service.js';
+import { SettingsService } from '../settings/settings.service.js';
 
 const int = (v: unknown) => (v === undefined || v === '' ? undefined : Number(v));
 const date = (v: unknown) => {
@@ -20,7 +22,7 @@ const filters = (q: Record<string, string | undefined>) => ({ customerId: q.cust
 /** VisionOps dashboard API (logged-in users of the workspace; every query is scoped to their organization). */
 @Controller('monitoring')
 export class MonitoringController {
-  constructor(private readonly svc: MonitoringService, private readonly incidents: IncidentsService, private readonly engine: MonitoringEngine, private readonly prisma: PrismaService) {}
+  constructor(private readonly svc: MonitoringService, private readonly incidents: IncidentsService, private readonly engine: MonitoringEngine, private readonly prisma: PrismaService, private readonly scheduler: VisionOpsScheduler, private readonly settings: SettingsService) {}
 
   private view(u: SessionClaims) { requirePermission(u, PERMISSIONS.monitoringView); }
   private operate(u: SessionClaims) { requirePermission(u, PERMISSIONS.monitoringOperate); }
@@ -160,9 +162,42 @@ export class MonitoringController {
   @Post('agents/:id/revoke')
   revoke(@Org() org: string, @CurrentUser() u: SessionClaims, @Param('id') id: string) { this.manage(u); return this.svc.revokeAgent(org, id); }
 
-  /** Run the stale-telemetry sweep, escalations and due notifications now (staging keeps workers off). */
+  /** Run this workspace's minute now: live demo feed (if on), cloud checks, stale-telemetry sweep, escalations, due notifications. */
   @Post('run-checks')
-  runChecks(@Org() org: string, @CurrentUser() u: SessionClaims) { this.operate(u); return this.engine.sweep(org); }
+  runChecks(@Org() org: string, @CurrentUser() u: SessionClaims) { this.operate(u); return this.scheduler.runOrg(org); }
+
+  /** Is data flowing? When the last check / heartbeat arrived, whether the scheduler runs here, and the demo feed state. */
+  @Get('live')
+  async live(@Org() org: string, @CurrentUser() u: SessionClaims) {
+    this.view(u);
+    const [o, s, agents, sites] = await Promise.all([
+      this.prisma.organization.findUnique({ where: { id: org }, select: { isDemo: true } }),
+      this.settings.get(org),
+      this.prisma.monitoringAgent.aggregate({ where: { organizationId: org, status: { not: 'revoked' } }, _max: { lastHeartbeatAt: true, lastEventAt: true } }),
+      this.prisma.monitoringSite.aggregate({ where: { organizationId: org, NOT: { code: { startsWith: 'LAB-' } } }, _max: { lastHealthyCheckAt: true } }),
+    ]);
+    const times = [agents._max.lastHeartbeatAt, agents._max.lastEventAt, sites._max.lastHealthyCheckAt].filter((d): d is Date => Boolean(d)).map((d) => d.getTime());
+    return {
+      lastDataAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
+      scheduler: { on: this.scheduler.state.on, reason: this.scheduler.state.reason, lastTickAt: this.scheduler.lastTick?.at ?? null },
+      liveDemo: { available: Boolean(o?.isDemo) && process.env.VISIONOPS_DEMO_FEED !== 'off', enabled: Boolean(o?.isDemo && s.monitoring.liveDemo?.enabled), since: s.monitoring.liveDemo?.since ?? null },
+    };
+  }
+
+  /** Demo workspaces only: switch the simulated live feed on or off (real workspaces get data from their agents). */
+  @Post('live-demo')
+  async liveDemo(@Org() org: string, @CurrentUser() u: SessionClaims, @Body() b: { enabled?: unknown }) {
+    this.manage(u);
+    const o = await this.prisma.organization.findUnique({ where: { id: org }, select: { isDemo: true } });
+    if (!o?.isDemo) throw new BadRequestException('The live demo feed is only available in demo workspaces. Real workspaces receive data from their site agents and cloud checks.');
+    if (process.env.VISIONOPS_DEMO_FEED === 'off') throw new BadRequestException('The live demo feed is disabled on this server (VISIONOPS_DEMO_FEED=off).');
+    const enabled = b?.enabled === true;
+    const now = new Date();
+    await this.settings.update(org, { monitoring: { liveDemo: { enabled, since: enabled ? now.toISOString() : null } } } as never);
+    log.info('visionops.live_demo', { org, enabled, by: u.sub });
+    const tick = enabled ? await this.scheduler.runOrg(org, now) : null;
+    return { enabled, since: enabled ? now.toISOString() : null, scheduler: this.scheduler.state, firstTick: tick?.feed[org] ?? null };
+  }
 }
 
 /**

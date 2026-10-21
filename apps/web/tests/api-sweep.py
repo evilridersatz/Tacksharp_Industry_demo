@@ -87,8 +87,9 @@ for w in sorted(demos, key=lambda x: x['industry']):
         i = call('GET', '/hospital/insurance')[1]; ids['insurance'] = i[0]['id'] if i else 'none'
     if ind == 'cctv':
         ids['site'] = call('GET', '/monitoring/sites')[1][0]['id']
-        ids['camera'] = call('GET', '/monitoring/cameras?status=offline')[1]['rows'][0]['id']
-        ids['incident'] = call('GET', '/monitoring/incidents?status=active')[1]['rows'][0]['id']
+        # The live demo may have no camera offline right now: fall back to any camera.
+        ids['camera'] = (call('GET', '/monitoring/cameras?status=offline')[1]['rows'] or call('GET', '/monitoring/cameras')[1]['rows'])[0]['id']
+        ids['incident'] = (call('GET', '/monitoring/incidents?status=active')[1]['rows'] or call('GET', '/monitoring/incidents')[1]['rows'])[0]['id']
     rows = []
     for path in COMMON + PER.get(ind, []):
         p = path.format(**ids)
@@ -102,16 +103,26 @@ for w in sorted(demos, key=lambda x: x['industry']):
     empty = [k for k, e in ents.items() if e['total'] == 0 and k not in ('agent_tasks', 'order_followups', 'offer_claims', 'calls', 'invoices', 'work_tasks', 'feedback', 'campaign_recipients', 'campaigns', 'products', 'properties', 'site_visits')]
     check(f'{ind}: every core entity has demo records', not empty, f'empty: {empty}' if empty else f"{sum(e['total'] for e in ents.values())} records across {len(ents)} entities")
     # Counts shown by list APIs match the database (where the API lists everything).
-    def match(entity, path, key=None):
+    def match(entity, path, key=None, cap=None):
         if entity in ents:
             body = call('GET', path)[1]
             n = len(body) if isinstance(body, list) else len(body.get(key, [])) if key else size(body)
-            check(f'{ind}: {path} lists all {entity} ({ents[entity]["total"]})', n == ents[entity]['total'], f'API {n} vs DB {ents[entity]["total"]}')
-    if ind == 'food': match('orders', '/food/orders')
-    if ind == 'hotel': match('reservations', '/hotel/reservations'); match('room_types', '/hotel/room-types')
-    if ind == 'hospital': match('appointments', '/hospital/appointments'); match('insurance_cases', '/hospital/insurance')
-    if ind == 'manufacturing': match('inspections', '/quality/inspections')
-    if ind in ('real_estate', 'agency', 'textile', 'retail'): match('leads', '/leads')
+            want = min(ents[entity]['total'], cap) if cap else ents[entity]['total']
+            label = f'lists the {cap} newest' if cap and ents[entity]['total'] > cap else 'lists all'
+            check(f'{ind}: {path} {label} {entity} ({ents[entity]["total"]} in DB)', n == want, f'API {n} vs expected {want}')
+    if ind == 'food': match('orders', '/food/orders', cap=100)  # the kitchen list shows the 100 newest (live demo keeps adding)
+    if ind == 'hotel': match('reservations', '/hotel/reservations', cap=150); match('room_types', '/hotel/room-types')
+    if ind == 'hospital': match('appointments', '/hospital/appointments', cap=200); match('insurance_cases', '/hospital/insurance')
+    if ind == 'manufacturing': match('inspections', '/quality/inspections', cap=200)
+    # With a long history the "All" lists must still show the newest records first (not the oldest page).
+    if ind == 'hotel':
+        lst = call('GET', '/hotel/reservations')[1]
+        newest = max(r['checkIn'] for r in lst) if lst else None
+        check('hotel: "All" reservations start with the latest stays', bool(lst) and lst[0]['checkIn'] == newest, f"first {lst[0]['checkIn'] if lst else None} vs newest {newest}")
+    if ind == 'hospital':
+        lst = call('GET', '/hospital/appointments')[1]
+        check('hospital: "All" appointments start with the latest visits', bool(lst) and lst[0]['startAt'] == max(r['startAt'] for r in lst))
+    if ind in ('real_estate', 'agency', 'textile', 'retail'): match('leads', '/leads', cap=500)  # newest 500 first
     if ind == 'cctv':
         inc = call('GET', '/monitoring/incidents?status=all&pageSize=5')[1]
         check(f"cctv: /monitoring/incidents lists all incidents ({ents['mon_incidents']['total']})", inc['total'] == ents['mon_incidents']['total'], f"API {inc['total']} vs DB {ents['mon_incidents']['total']}")

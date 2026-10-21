@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Socket } from 'node:net';
+import { Socket, isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { log } from '../common/logger.js';
@@ -171,6 +172,13 @@ export class MonitoringEngine {
       dev.lastCheckAt = at;
       await this.incidents.recordFailure(org, key!, at, e.detail);
       if (!isConfirmed || row.status === 'maintenance') return 'failure_pending';
+      // Its recorder is failing too but not confirmed yet: the recorder is the likely cause. Wait for it rather than
+      // opening (and alerting) one incident per camera that would be merged a minute later. A confirmed (offline)
+      // recorder folds the camera into its incident below; a recorder that recovers lets the camera raise its own.
+      if (dev.type === 'camera' && dev.recorderId) {
+        const rec = await this.prisma.recorderDevice.findUnique({ where: { id: dev.recorderId }, select: { status: true, consecutiveFailures: true } });
+        if (rec && rec.status !== 'offline' && rec.status !== 'maintenance' && rec.consecutiveFailures > 0) return 'waiting_for_recorder';
+      }
       const affected = dev.type === 'recorder' ? (await this.prisma.cameraDevice.findMany({ where: { organizationId: org, recorderId: dev.id }, select: { code: true } })).map((c) => c.code) : undefined;
       const r = await this.incidents.raise({ org, siteId: site.id, deviceType: dev.type, deviceId: dev.id, deviceCode: dev.code, category: category!, at, since: failingSince, critical: dev.critical, affected, detail: scrub(e.detail) ?? undefined, isDemo: dev.isDemo });
       return r.outcome;
@@ -226,15 +234,15 @@ export class MonitoringEngine {
    *  - recording proof older than 2 h → "not confirmed" (shown, no incident);
    *  - escalations and due notifications.
    */
-  async sweep(org: string | undefined, now = new Date(), opts: { agentIds?: string[] } = {}) {
+  async sweep(org: string | undefined, now = new Date(), opts: { agentIds?: string[]; includeDemoAgents?: boolean } = {}) {
     const orgs = org ? [org] : (await this.prisma.monitoringSite.findMany({ select: { organizationId: true }, distinct: ['organizationId'] })).map((o) => o.organizationId);
     const summary = { agentsOffline: 0, sitesUnknown: 0, recordingNotConfirmed: 0, escalated: 0, delivered: 0 };
     for (const o of orgs) {
       const cfg = (await this.settings.get(o)).monitoring;
       const cutoff = new Date(now.getTime() - cfg.staleAfterMinutes * 60_000);
       // Seeded demo agents are a static snapshot (no process sends their heartbeats): never aged by the sweep unless a
-      // scenario names them. Agents registered for real (isDemo = false) are always checked.
-      const silent = await this.prisma.monitoringAgent.findMany({ where: { organizationId: o, status: 'online', lastHeartbeatAt: { lt: cutoff }, ...(opts.agentIds ? { id: { in: opts.agentIds } } : { isDemo: false }) }, include: { site: true } });
+      // scenario names them or the live demo feed is sending them heartbeats. Real agents (isDemo = false) are always checked.
+      const silent = await this.prisma.monitoringAgent.findMany({ where: { organizationId: o, status: 'online', lastHeartbeatAt: { lt: cutoff }, ...(opts.agentIds ? { id: { in: opts.agentIds } } : opts.includeDemoAgents ? {} : { isDemo: false }) }, include: { site: true } });
       for (const a of silent) {
         await this.prisma.monitoringAgent.update({ where: { id: a.id }, data: { status: 'offline' } });
         await this.prisma.monitoringSite.update({ where: { id: a.siteId }, data: { internetStatus: a.hasBackupLink ? 'unknown' : 'suspected_outage' } });
@@ -288,7 +296,12 @@ export class MonitoringEngine {
     for (const d of [...recs, ...cams]) {
       const target = parseTarget(d.networkAddress);
       if (!target) { skipped.push(`${d.code}: no host:port configured`); continue; }
-      if (isPrivate(target.host) && process.env.MONITORING_ALLOW_PRIVATE_TARGETS !== 'true') { skipped.push(`${d.code}: private / local address refused for cloud checks (use a local agent)`); continue; }
+      if (process.env.MONITORING_ALLOW_PRIVATE_TARGETS !== 'true') {
+        // A hostname is resolved first: one that points at a private / loopback address is refused like the literal IP.
+        const addrs = isIP(target.host) ? [target.host] : await lookup(target.host, { all: true }).then((r) => r.map((a) => a.address)).catch(() => [] as string[]);
+        if (!addrs.length) { skipped.push(`${d.code}: ${target.host} does not resolve`); continue; }
+        if (isPrivate(target.host) || addrs.some(isPrivate)) { skipped.push(`${d.code}: private / local address refused for cloud checks (use a local agent)`); continue; }
+      }
       const r = await probe(target.host, target.port);
       events.push({ eventId: `cloud-${d.code}-${now.getTime()}`, device: d.code, check: 'reachability', ok: r.ok, observedAt: now.toISOString(), latencyMs: r.ms, detail: r.error });
     }
@@ -309,6 +322,12 @@ function parseTarget(addr: string | null): { host: string; port: number } | unde
 
 function isPrivate(host: string) {
   if (/^(localhost|.*\.local)$/i.test(host)) return true;
+  if (host.includes(':')) {
+    const h = host.toLowerCase();
+    const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPrivate(mapped[1]);
+    return h === '::' || h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('ff');
+  }
   const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
   const [a, b] = [Number(m[1]), Number(m[2])];

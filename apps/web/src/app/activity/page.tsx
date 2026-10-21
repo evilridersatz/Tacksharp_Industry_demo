@@ -32,6 +32,7 @@ const INBOUND: Record<string, { label: string; tone: 'brand' | 'amber' | 'rose' 
   reply_unknown: { label: 'Reply outcome unknown', tone: 'amber' },
   failed: { label: 'Failed', tone: 'rose' },
   skipped: { label: 'Skipped', tone: 'slate' },
+  simulated: { label: 'Simulated (demo, not sent)', tone: 'sky' },
 };
 
 export default function ActivityPage() {
@@ -120,7 +121,7 @@ export default function ActivityPage() {
                       <td className="py-1.5 pr-2">
                         <Badge tone={st.tone}>{st.label}</Badge>
                         {m.attempts > 1 && <span className="ml-1 text-faint">{m.attempts} attempts</span>}
-                        {m.lastError && m.status !== 'replied' && <p className="mt-0.5 max-w-[260px] truncate text-rose" title={m.lastError}>{m.lastError}</p>}
+                        {m.lastError && !['replied', 'simulated'].includes(m.status) && <p className="mt-0.5 max-w-[260px] truncate text-rose" title={m.lastError}>{m.lastError}</p>}
                       </td>
                       <td className="py-1.5 text-right">
                         {m.conversationId && (

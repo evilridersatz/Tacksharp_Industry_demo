@@ -95,6 +95,8 @@ with sync_playwright() as p:
         return pg.evaluate("""async ([url, body]) => { const r = await fetch(url, { method: body ? 'POST' : 'GET', credentials: 'include', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; }""", [API + path, body])
     home = api('/auth/me')['body']['organizationId']
     spaces = api('/auth/workspaces')['body']
+    refused = api('/monitoring/live-demo', {'enabled': True})
+    check('live demo feed refused in a real (non-demo) workspace', refused['status'] == 400 and 'demo workspaces' in json.dumps(refused['body']), json.dumps(refused)[:160])
     demos = {w['industry']: w for w in spaces if w['isDemo'] and w['organizationId'].startswith('org_demo_')}
     check(f'owner can open all {len(MENU)} demo workspaces', set(demos) == set(MENU), ', '.join(sorted(demos)))
 
@@ -128,6 +130,7 @@ with sync_playwright() as p:
         check(f'{ind}: menu has its own items', not missing, f'missing {missing}')
         check(f'{ind}: menu hides other industries\' items', not present, f'shown {present}')
         check(f'{ind}: demo banner shown', pg.get_by_role('note').filter(has_text='Demo workspace').count() > 0)
+        check(f'{ind}: demo banner has the live demo switch', pg.get_by_role('note').filter(has_text='Demo workspace').get_by_role('button', name=re.compile('(Start|Pause) live demo')).count() == 1)
         if ind in KPI:
             yes, no = KPI[ind]
             pg.wait_for_selector('section[aria-label="Key figures"] p', timeout=15000); pg.wait_for_timeout(800)
@@ -141,6 +144,10 @@ with sync_playwright() as p:
             ov = api('/monitoring/overview?days=30')['body']['kpis']
             check('cctv: status board shows live counts from the API', all(x in board for x in ['CAMERAS', 'ONLINE', 'OFFLINE', 'UNKNOWN', 'NOT ACKNOWLEDGED']) and str(ov['cameras']) in board and str(ov['offline']) in board, board[:160].replace(chr(10), ' '))
             check('cctv: one health tile per (non-lab) site', pg.get_by_role('list', name='Sites').get_by_role('listitem').count() == int(sql(f"SELECT COUNT(*) FROM MonitoringSite WHERE organizationId='{w['organizationId']}' AND code NOT LIKE 'LAB-%'")))
+            lv = api('/monitoring/live')['body']
+            check('cctv: live status endpoint reports data age and the demo feed', lv['liveDemo']['available'] is True and 'lastDataAt' in lv and 'scheduler' in lv)
+            check('cctv: status board shows a live-state badge and "Last data"', any(x in board for x in ['LIVE', 'DELAYED', 'NO LIVE DATA']) and 'Last data' in board)
+            check('cctv: demo workspace offers Start / Stop live demo', pg.get_by_role('button', name=re.compile('^(Start|Stop) live demo$')).count() == 1)
             check('cctv: charts and "Needs attention" render', pg.get_by_text('Camera availability').count() > 0 and pg.get_by_text('Needs attention').count() > 0 and pg.get_by_text('Incidents by root cause').count() > 0)
         pg.screenshot(path=os.path.join(SHOTS, f'overview-{ind}.png'), full_page=True)
 
@@ -185,7 +192,10 @@ with sync_playwright() as p:
         if ind in ('real_estate', 'agency', 'textile', 'retail', 'food', 'hotel', 'hospital'):
             leads = api('/leads')['body']
             db = int(sql(f"SELECT COUNT(*) FROM Lead WHERE organizationId='{w['organizationId']}'"))
-            check(f'{ind}: leads shown = this workspace\'s leads only', len(leads) == db, f'{len(leads)} vs {db}')
+            ids = [l['id'] for l in leads]
+            mine = int(sql(f"SELECT COUNT(*) FROM Lead WHERE organizationId='{w['organizationId']}' AND id IN ({','.join(repr(i) for i in ids) or "''"})")) if ids else 0
+            # The list shows the newest 500; every one of them must be this workspace's.
+            check(f'{ind}: leads shown = this workspace\'s leads only', mine == len(ids) and len(ids) == min(db, 500), f'{len(ids)} shown, {mine} of this workspace, {db} in DB')
 
     # ---------------------------------------------------------------- manufacturing playground + quality page
     w = demos['manufacturing']; pg.goto(WEB + '/'); pg.wait_for_timeout(1200); switch_to(w)
@@ -207,7 +217,8 @@ with sync_playwright() as p:
     dlg.get_by_role('button', name='Save inspection').click(); pg.wait_for_timeout(500)
     check('quality: rejected > inspected is refused in the form', dlg.get_by_role('alert').count() == 1)
     dlg.get_by_label('Units rejected').fill('3'); dlg.get_by_role('button', name='Save inspection').click(); pg.wait_for_timeout(1500)
-    check('quality: inspection recorded in this workspace', int(sql(f"SELECT COUNT(*) FROM QualityInspection WHERE organizationId='{w['organizationId']}'")) == before + 1)
+    # By batch code, not a count: the live demo adds inspections at the same time.
+    check('quality: inspection recorded in this workspace', int(sql(f"SELECT COUNT(*) FROM QualityInspection WHERE organizationId='{w['organizationId']}' AND batchCode='{batch}'")) == 1)
     sql(f"DELETE FROM QualityInspection WHERE organizationId='{w['organizationId']}' AND batchCode='{batch}'")  # leave the demo data as seeded
 
     # ---------------------------------------------------------------- responsive

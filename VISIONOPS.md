@@ -177,6 +177,25 @@ Uptime counts camera-minutes. A recorder or network outage counts every affected
 8. Recovery, then recurrence (reopen)
 9. Unacknowledged escalation
 
+## Live data
+
+**Production (real customers).** Data arrives only from real sources, in real time:
+- **Local site agent** (`apps/monitoring-agent`, one per site): register it under *Technicians & agents* (the token is shown once), put the token and the site's camera / NVR addresses in its local `agent.config.json`, run it as a service. It sends a heartbeat and its checks every minute over HTTPS to `/monitoring/agent/*`; during an internet outage it keeps checking and queues locally, then replays in order.
+- **Cloud checks** for cloud-mode sites: devices with `monitoringMethod = cloud_tcp` and a public `host:port` are probed every minute by the scheduler. Private / loopback targets are refused, including hostnames that resolve to them.
+- The dashboard shows **Live / Delayed / No live data** from the newest heartbeat or check, refreshes every 10 s while data flows, and guides an empty workspace to agent setup.
+
+**VisionOps scheduler** (every minute: live demo feed → cloud checks → sweep for silent agents, escalations and due alerts → hourly retention). It runs wherever `RUN_WORKERS` is on (the old home of the sweep). `VISIONOPS_SCHEDULER=true` turns it on in an API that keeps `RUN_WORKERS=false` (staging); `VISIONOPS_SCHEDULER=false` turns it off. With several API processes a Redis lock lets one of them run each minute. Alerts stay behind the existing gate: `DRY_RUN=true` simulates everything, and demo incidents are never sent whatever `DRY_RUN` says.
+
+**Retention.** Raw health checks older than *Settings → Keep raw health checks* (default 90 days; demo workspaces 3 days) and heartbeats older than 30 days are deleted hourly in batches. Incidents, timelines, notifications and uptime history are kept.
+
+**Live demo feed (demo workspaces only).** *Start live demo* on the Operations center plays the demo's site agents:
+- **Each minute:** heartbeats plus camera, NVR, storage, stream, recording and internet checks, all sent through the same engine a real agent's calls reach.
+- **New faults:** one appears now and then (camera, NVR, storage, stream, recording, internet with 4G backup, or an agent power cut with a local queue and replay).
+- **Technician side:** a simulated technician answers on WhatsApp through the real technician assistant: `ACK`, then `reached site`, then `fixed <cause>`. One incident in five is acknowledged late, so escalation shows.
+- **Repairs:** an incident resolves only after fresh successful checks. A supervisor closes it 20 minutes later (simulated).
+
+Demo pace: acknowledgement in 1–4 minutes, repairs in 7–20 minutes. The feed refuses non-demo workspaces and non-demo devices, and only `POST /monitoring/live-demo` can switch it (a settings save cannot). `VISIONOPS_DEMO_FEED=off` disables it on a server.
+
 ## Deploy to staging
 
 These steps were not run from here: the staging hosts are not reachable from the build workspace.
@@ -192,10 +211,11 @@ These steps were not run from here: the staging hosts are not reachable from the
 6. Restart only the verified staging processes:
    - Check them first with `pm2 describe <name>`: the API is on port 3103, the web on port 3102.
    - Then run `pm2 restart <staging-api> <staging-web>`. Never use `pm2 restart all`.
-   - Keep `DRY_RUN=true` and `RUN_WORKERS=false`.
+   - Keep `DRY_RUN=true` and `RUN_WORKERS=false`. Add `VISIONOPS_SCHEDULER=true` to the staging API's environment so monitoring and the live demo run every minute (alerts stay simulated).
 7. Smoke test:
    - `https://platform-api.tacksharp.in/health`.
    - Log in, switch to "Demo · SecureEye CCTV Services", and check the Operations center, Incidents, Sites, Cameras and Reports.
+   - Press **Start live demo**: within a minute the board shows **Live** and "Last data … s ago"; within a few minutes incidents move (acknowledged → in progress → restoration check → resolved).
    - Run the scenario runner.
    - Check that GR Chicken and the other workspaces are unchanged.
 
@@ -206,7 +226,7 @@ These steps were not run from here: the staging hosts are not reachable from the
 
 ## Tests
 
-- **API:** `test/visionops.integration.spec.ts` (16 tests) and `test/visionops-agent.integration.spec.ts` (4 tests). Together they cover:
+- **API:** `test/visionops.integration.spec.ts` (17 tests), `test/visionops-agent.integration.spec.ts` (4 tests) and `test/visionops-live.integration.spec.ts` (8 tests: demo feed refuses real workspaces; ticks through the real engine; injected camera fault → ACK → fixed → verified, all simulated even with DRY_RUN=false; agent power cut → UNKNOWN + queue replay; 4G internet outage; feed off; retention; cloud-check DNS guard and scheduler switches). Together they cover:
   - the vertical slice, debounce, deduplication, folding and merging, reopen;
   - a silent agent followed by replay, the 4G internet outage, escalation timing, quiet hours;
   - capabilities, validation and scrubbing, agent auth and token rotation, tenant isolation;

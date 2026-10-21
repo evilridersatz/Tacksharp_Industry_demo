@@ -291,7 +291,8 @@ export class HotelService {
     if (isDay(q.from)) where.checkOut = { gt: dateOnly(q.from) };
     if (isDay(q.to)) where.checkIn = { lt: dateOnly(q.to) };
     if (q.q?.trim()) where.OR = [{ reference: { contains: q.q.trim() } }, { guestName: { contains: q.q.trim() } }, { guestPhone: { contains: q.q.replace(/\D/g, '') || '§' } }];
-    const rows = await this.prisma.reservation.findMany({ where, include: { roomType: true, room: true, customer: true }, orderBy: { checkIn: 'asc' }, take: Math.min(q.take ?? 150, 500) });
+    const rows = await this.prisma.reservation.findMany({ where, include: { roomType: true, room: true, customer: true }, // Upcoming / a date range: in stay order. "All": the most recent first, so a long history never hides today's stays.
+      orderBy: { checkIn: q.status === 'upcoming' || isDay(q.from) || isDay(q.to) ? 'asc' : 'desc' }, take: Math.min(q.take ?? 150, 500) });
     return rows.map((r) => this.view(r));
   }
 

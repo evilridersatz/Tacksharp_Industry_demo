@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { AlertTriangle, ArrowRight, Cctv, HardDrive, RadioTower, RefreshCw, ServerCog, Siren, Timer, WifiOff } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Cctv, HardDrive, Pause, Play, RadioTower, RefreshCw, ServerCog, Siren, Timer, WifiOff } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from './shell';
 import { Button, Card, CardHeader, ErrorBanner, Segmented, Skeleton, cx } from './ui';
@@ -18,15 +18,30 @@ type Overview = {
   notes: string[];
 };
 
+type Live = { lastDataAt: string | null; scheduler: { on: boolean; reason: string; lastTickAt: string | null }; liveDemo: { available: boolean; enabled: boolean; since: string | null } };
+
+/** "12 s ago" for fresh data, else the usual minutes / hours. */
+function secondsAgo(iso: string | null) {
+  if (!iso) return 'never';
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  return s < 60 ? `${s} s ago` : ago(iso);
+}
+
 const lbl = (d: string) => d.slice(5).split('-').reverse().join('/');
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
 /** Tacksharp VisionOps operations center: everything on one screen, from authorised database queries only. */
 export function VisionOpsOverview() {
   const [days, setDays] = useState<'7' | '30' | '90'>('30');
-  const { data, error, reload } = useApi<Overview>(`/monitoring/overview?days=${days}`, 30_000);
-  const { data: sites } = useApi<SiteRow[]>('/monitoring/sites', 30_000);
-  const { data: active, reload: reloadActive } = useApi<{ rows: IncidentRow[] }>('/monitoring/incidents?status=active&pageSize=50&lab=exclude', 20_000);
+  const { data: live, reload: reloadLive } = useApi<Live>('/monitoring/live', 10_000);
+  const ageSec = live?.lastDataAt ? (Date.now() - Date.parse(live.lastDataAt)) / 1000 : Infinity;
+  const fresh = ageSec < 180;
+  const delayed = !fresh && ageSec < 900;
+  const every = fresh ? 10_000 : 30_000; // refresh faster while data is flowing
+  const { data, error, reload } = useApi<Overview>(`/monitoring/overview?days=${days}`, every);
+  const { data: sites, reload: reloadSites } = useApi<SiteRow[]>('/monitoring/sites', every);
+  const { data: active, reload: reloadActive } = useApi<{ rows: IncidentRow[] }>('/monitoring/incidents?status=active&pageSize=50&lab=exclude', every);
+  const [feedBusy, setFeedBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -36,11 +51,27 @@ export function VisionOpsOverview() {
     try {
       const r = await api.post<{ agentsOffline: number; escalated: number; delivered: number }>('/monitoring/run-checks', {});
       setMsg(`Checks run: ${r.agentsOffline} agent(s) newly silent, ${r.escalated} escalation(s), ${r.delivered} message(s) processed (simulated under DRY_RUN).`);
-      await Promise.all([reload(), reloadActive()]);
+      await Promise.all([reload(), reloadActive(), reloadSites(), reloadLive()]);
     } catch (e) {
       setMsg(errorText(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function toggleFeed(enabled: boolean) {
+    setFeedBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.post<{ enabled: boolean; scheduler: { on: boolean } }>('/monitoring/live-demo', { enabled });
+      setMsg(r.enabled
+        ? `Live demo started: simulated site agents now send heartbeats and health checks every minute through the real monitoring pipeline. Faults, technician replies and verified repairs happen on their own. Alerts stay simulated.${r.scheduler.on ? '' : ' Note: the monitoring scheduler is off on this server (VISIONOPS_SCHEDULER), so the feed only advances when you press "Run checks now".'}`
+        : 'Live demo stopped. The dashboard keeps the data it has; demo agents will not be aged while the feed is off.');
+      await Promise.all([reload(), reloadActive(), reloadSites(), reloadLive()]);
+    } catch (e) {
+      setMsg(errorText(e));
+    } finally {
+      setFeedBusy(false);
     }
   }
 
@@ -49,18 +80,45 @@ export function VisionOpsOverview() {
 
   return (
     <>
-      <PageHeader title="Operations center" actions={<Button busy={busy} onClick={runChecks}><RefreshCw className="size-4" /> Run checks now</Button>} />
+      <PageHeader
+        title="Operations center"
+        actions={
+          <>
+            {live?.liveDemo.available && (
+              live.liveDemo.enabled
+                ? <Button busy={feedBusy} onClick={() => toggleFeed(false)}><Pause className="size-4" /> Stop live demo</Button>
+                : <Button busy={feedBusy} variant="primary" onClick={() => toggleFeed(true)}><Play className="size-4" /> Start live demo</Button>
+            )}
+            <Button busy={busy} onClick={runChecks}><RefreshCw className="size-4" /> Run checks now</Button>
+          </>
+        }
+      />
       {msg && <p role="status" className="mb-3 rounded-[10px] bg-slate-100 px-3 py-2 text-[12.5px] text-body">{msg}</p>}
+      {live && !live.liveDemo.available && !fresh && (
+        <Card className="mb-3 flex flex-wrap items-center justify-between gap-3 border-amber-200 bg-amber-50/60 px-4 py-3">
+          <p className="text-[12.5px] text-body">
+            {live.lastDataAt
+              ? <><b>No data for {secondsAgo(live.lastDataAt).replace(' ago', '')}.</b> Silent agents are flagged as unknown, never offline. Check the site agents{live.scheduler.on ? '' : '; the monitoring scheduler is also off on this server (VISIONOPS_SCHEDULER)'}.</>
+              : <><b>No monitoring data yet.</b> Register a site agent (or add cloud-checked devices with a public host:port) to start receiving live camera status.</>}
+          </p>
+          <Link href="/visionops/team" className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand">Set up agents <ArrowRight className="size-3.5" /></Link>
+        </Card>
+      )}
       {error && !data ? <ErrorBanner message={error} onRetry={reload} /> : !data || !k ? <Skeleton className="h-[420px] rounded-[18px]" /> : (
         <>
           {/* Status board */}
           <section aria-label="Live status" className="mb-4 overflow-hidden rounded-[18px] bg-[#0b1730] text-white shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-3">
               <div className="flex items-center gap-2.5">
-                <span className="relative flex size-2.5"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60 motion-reduce:hidden" /><span className="relative inline-flex size-2.5 rounded-full bg-emerald-400" /></span>
+                <span className="relative flex size-2.5" aria-hidden>
+                  {fresh && <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60 motion-reduce:hidden" />}
+                  <span className={cx('relative inline-flex size-2.5 rounded-full', fresh ? 'bg-emerald-400' : delayed ? 'bg-amber-400' : 'bg-slate-500')} />
+                </span>
+                <span className={cx('rounded-full px-2 py-0.5 text-[10.5px] font-bold tracking-wider uppercase', fresh ? 'bg-emerald-400/15 text-emerald-300' : delayed ? 'bg-amber-400/15 text-amber-200' : 'bg-white/10 text-white/60')}>{fresh ? 'Live' : delayed ? 'Delayed' : 'No live data'}</span>
+                {live?.liveDemo.enabled && <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10.5px] font-bold tracking-wider text-sky-200 uppercase">Demo feed · simulated agents</span>}
                 <p className="text-[13px] font-semibold tracking-wide">Centralized CCTV monitoring · {k.sites} sites · {k.customers} customers</p>
               </div>
-              <p className="text-[11.5px] text-white/60">Updated {ago(data.generatedAt)} · status from health checks, never from AI</p>
+              <p className="text-[11.5px] text-white/60" aria-live="polite">Last data {secondsAgo(live?.lastDataAt ?? null)} · status from health checks, never from AI</p>
             </div>
             <div className="grid grid-cols-2 gap-px bg-white/10 sm:grid-cols-3 lg:grid-cols-6">
               {[

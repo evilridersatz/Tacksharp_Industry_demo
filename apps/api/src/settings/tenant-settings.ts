@@ -47,6 +47,8 @@ export type TenantSettings = {
     faqs: Array<{ q: string; a: string }>;
   };
   /** CCTV camera health & downtime monitoring (Tacksharp VisionOps). Status is decided by code from health checks. */
+  /** Demo workspaces only: simulated live activity (chats, calls, follow-ups, orders, bookings) every minute. Never real customers. */
+  demoLive: { enabled: boolean; since: string | null };
   monitoring: {
     /** Consecutive failed checks before a fault is confirmed (and one incident opened). */
     failureThreshold: number;
@@ -74,6 +76,10 @@ export type TenantSettings = {
     whatsappCostInr: number;
     /** Sellable plans; prices are configurable and subject to cost validation. */
     plans: Array<{ code: string; name: string; pricePerCameraInr: number; features: string[] }>;
+    /** Raw health checks and heartbeats older than this are deleted (incidents, timelines and uptime are kept). */
+    retentionDays: number;
+    /** Demo workspaces only: a simulated site agent sends live checks through the real pipeline. Never real devices. */
+    liveDemo: { enabled: boolean; since: string | null };
   };
   textile: {
     /** Days after a quotation is sent before the customer gets one reminder (0 = no reminder). */
@@ -165,10 +171,11 @@ export const DEFAULT_SETTINGS: TenantSettings = {
     cancellationPolicy: 'Free cancellation up to 24 hours before check-in; after that the first night is charged.', maxNights: 30, faqs: [],
   },
   hospital: { emergencyNumber: '108', bookingWindowDays: 14, reminderHoursBefore: 24, faqs: [] },
+  demoLive: { enabled: false, since: null },
   monitoring: {
     failureThreshold: 3, debounceSeconds: 180, restoreSuccesses: 3, staleAfterMinutes: 10, correlationWindowMinutes: 30,
     ackDeadlineMinutes: 15, escalationStepMinutes: 30, quietHours: { enabled: true, start: '22:00', end: '07:00' },
-    notifyCustomerOnResolution: true, voiceEscalation: false, alertTemplate: '', whatsappCostInr: 0,
+    notifyCustomerOnResolution: true, voiceEscalation: false, alertTemplate: '', whatsappCostInr: 0, retentionDays: 90, liveDemo: { enabled: false, since: null },
     plans: [
       { code: 'basic', name: 'Basic monitoring', pricePerCameraInr: 30, features: ['Health checks', 'Offline alerts', 'Camera status dashboard', 'Basic uptime report', 'Incident history'] },
       { code: 'pro', name: 'Service desk', pricePerCameraInr: 45, features: ['Everything in Basic', 'WhatsApp follow-ups & acknowledgment', 'Escalation workflow', 'Multi-site analytics', 'Local agent management'] },
@@ -288,6 +295,7 @@ export function sanitizeSettings(input: unknown, base: TenantSettings = DEFAULT_
       faqs: faqs(hp.faqs, bp.faqs),
     },
     monitoring: sanitizeMonitoring(obj(i.monitoring), base.monitoring ?? DEFAULT_SETTINGS.monitoring),
+    demoLive: sanitizeLiveDemo(obj(i.demoLive), base.demoLive ?? { enabled: false, since: null }),
     textile: {
       quoteReminderDays: num(tx.quoteReminderDays, base.textile.quoteReminderDays, 0, 30),
       feedbackAfterHours: num(tx.feedbackAfterHours, base.textile.feedbackAfterHours, 0, 24 * 14),
@@ -369,7 +377,14 @@ function sanitizeMonitoring(m: Record<string, unknown>, b: TenantSettings['monit
     alertTemplate: /^[a-z0-9_]*$/.test(str(m.alertTemplate, b.alertTemplate, 100)) ? str(m.alertTemplate, b.alertTemplate, 100) : b.alertTemplate,
     whatsappCostInr: num(m.whatsappCostInr, b.whatsappCostInr, 0, 100, false),
     plans: plans.length ? plans : b.plans,
+    retentionDays: num(m.retentionDays, b.retentionDays ?? 90, 2, 730),
+    liveDemo: sanitizeLiveDemo(obj(m.liveDemo), b.liveDemo ?? { enabled: false, since: null }),
   };
+}
+
+function sanitizeLiveDemo(l: Record<string, unknown>, b: { enabled: boolean; since: string | null }) {
+  const since = typeof l.since === 'string' && !Number.isNaN(Date.parse(l.since)) ? new Date(l.since).toISOString() : l.since === null ? null : b.since;
+  return { enabled: bool(l.enabled, b.enabled), since };
 }
 
 /** The tenant's calling window, never wider than the deployment's legal window from .env. */
