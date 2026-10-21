@@ -8,6 +8,8 @@ const withTimeout = <T>(p: Promise<T>, ms: number) =>
   Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
 
 /** GET /health — API, database, Redis and queue backlog. No secrets, no customer data. */
+const STARTED_AT = new Date().toISOString();
+
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
@@ -48,6 +50,8 @@ export class HealthController {
     res.status(ok ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
     return {
       status: ok ? 'ok' : 'degraded',
+      // Which build is running (set RELEASE_ID=<git short sha> at deploy) and since when: proves what is live.
+      release: { id: process.env.RELEASE_ID ?? null, startedAt: STARTED_AT, dryRun: process.env.DRY_RUN !== 'false' },
       api: { ok: true, uptimeSec: Math.round(process.uptime()) },
       database,
       redis,

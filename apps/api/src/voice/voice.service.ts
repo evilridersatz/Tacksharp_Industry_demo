@@ -356,6 +356,14 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     });
     if (live) return { started: false, reason: 'call_already_in_progress' };
 
+    // DRY_RUN (default) means no call is placed for ANY business type, and a demo (synthetic) customer is never
+    // dialled. Production sets DRY_RUN=false deliberately.
+    if (process.env.DRY_RUN !== 'false') {
+      log.info('voice.call_not_live', { customerId: customer.id, reason: 'DRY_RUN is on' });
+      return { started: false, reason: 'not_live: DRY_RUN is on (no call placed)' };
+    }
+    if (customer.isDemo) return { started: false, reason: 'not_live: demo customer (synthetic number)' };
+
     // Leads are the real-estate pipeline; a restaurant call belongs to the customer only.
     const lead =
       vertical === 'restaurant'

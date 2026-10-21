@@ -58,8 +58,11 @@ export class IncidentsService {
   }
 
   private async nextNumber(org: string, tx: Prisma.TransactionClient) {
-    const count = await tx.downtimeIncident.count({ where: { organizationId: org } });
-    return `INC-${1001 + count}`;
+    // Highest number in use + 1, not a row count: incidents can be removed (scenario resets, retention), and a count would
+    // then hand out a number that already exists and every retry would collide.
+    const rows = await tx.downtimeIncident.findMany({ where: { organizationId: org, number: { startsWith: 'INC-' } }, select: { number: true } });
+    const max = rows.reduce((m, r) => Math.max(m, Number(r.number.slice(4)) || 0), 1000);
+    return `INC-${max + 1}`;
   }
 
   /** A host incident (recorder / network / agent) at the site that this device's fault belongs to, if any. */

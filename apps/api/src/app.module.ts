@@ -24,6 +24,7 @@ import { AgentsModule } from './agents/agents.module.js';
 import { MarketingModule } from './marketing/marketing.module.js';
 import { VerticalsModule } from './verticals/verticals.module.js';
 import { VisionOpsModule } from './visionops/visionops.module.js';
+import { CustomersModule } from './customers/customers.module.js';
 import { IndustryModule } from './industry/industry.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -57,6 +58,7 @@ import { PrivacyController } from './privacy.controller.js';
     IndustryModule,
     VerticalsModule,
     VisionOpsModule,
+    CustomersModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

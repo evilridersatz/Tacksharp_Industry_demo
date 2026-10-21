@@ -62,7 +62,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/feedback', label: 'Customer feedback', icon: Star },
       ] },
       { section: 'Engagement', items: [
-        { href: '/marketing?tab=audience', label: 'Customer database', icon: Users },
+        { href: '/contacts', label: 'Customers', icon: Users },
         { href: '/marketing', label: 'WhatsApp campaigns', icon: Megaphone },
         { href: '/conversations', label: 'Conversations', icon: MessageSquare },
         { href: '/calls', label: 'AI voice calls', icon: Phone, badge: 'live' },
@@ -106,7 +106,8 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/', label: 'Restaurant overview', icon: LayoutDashboard },
         { href: '/food/orders', label: 'Orders & kitchen', icon: ShoppingBag },
         { href: '/conversations', label: 'WhatsApp conversations', icon: MessageSquare },
-        { href: '/leads', label: 'Customers', icon: Users },
+        { href: '/contacts', label: 'Customers', icon: Users },
+        { href: '/leads', label: 'Enquiries', icon: Columns3 },
       ] },
       { section: 'Menu', items: [
         { href: '/food/menu', label: 'Menu & availability', icon: UtensilsCrossed },
@@ -131,6 +132,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/hotel/rooms', label: 'Rooms & rates', icon: DoorOpen },
       ] },
       { section: 'Guests', items: [
+        { href: '/contacts', label: 'Guests', icon: Users },
         { href: '/conversations', label: 'Guest conversations', icon: MessageSquare },
         { href: '/leads', label: 'Booking enquiries', icon: Columns3 },
         { href: '/follow-ups', label: 'Guest follow-ups', icon: ListChecks },
@@ -154,6 +156,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/hospital/patients', label: 'Patients', icon: UserRound },
       ] },
       { section: 'Patient care', items: [
+        { href: '/contacts', label: 'Patient contacts', icon: Users },
         { href: '/hospital/insurance', label: 'Insurance & claims', icon: ShieldCheck },
         { href: '/conversations', label: 'Patient conversations', icon: MessageSquare },
         { href: '/leads', label: 'Campaign leads', icon: Columns3 },
@@ -197,6 +200,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
       { section: 'Main', items: [
         { href: '/', label: 'Real estate overview', icon: LayoutDashboard },
         { href: '/leads', label: 'Leads & CRM', icon: Columns3 },
+        { href: '/contacts', label: 'Buyers & contacts', icon: Users },
         { href: '/conversations', label: 'WhatsApp conversations', icon: MessageSquare },
         { href: '/calls', label: 'AI voice calls', icon: Phone, badge: 'live' },
         { href: '/site-visits', label: 'Site visits', icon: CalendarCheck },
@@ -225,7 +229,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/leads', label: 'Product enquiries', icon: Columns3 },
       ] },
       { section: 'Customers', items: [
-        { href: '/marketing?tab=audience', label: 'Customers', icon: Users },
+        { href: '/contacts', label: 'Customers', icon: Users },
         { href: '/conversations', label: 'Conversations', icon: MessageSquare },
         { href: '/marketing', label: 'Offers & campaigns', icon: Megaphone },
         { href: '/follow-ups', label: 'Follow-ups', icon: ListChecks },
@@ -246,7 +250,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/quality', label: 'Inspections & defects', icon: ClipboardCheck },
         { href: '/operations?tab=tasks', label: 'Corrective actions', icon: Wrench },
       ] },
-      { section: 'Customers', items: [{ href: '/conversations', label: 'Customer complaints', icon: MessageSquare }, { href: '/handoffs', label: 'Escalations', icon: Headset, badge: 'handoff' }] },
+      { section: 'Customers', items: [{ href: '/contacts', label: 'Customer contacts', icon: Users }, { href: '/conversations', label: 'Customer complaints', icon: MessageSquare }, { href: '/handoffs', label: 'Escalations', icon: Headset, badge: 'handoff' }] },
       { section: 'AI & reports', items: [{ href: '/agents', label: 'AI operations agents', icon: Bot }, { href: '/analytics', label: 'Quality analytics', icon: LineChart }] },
       SETUP,
     ],
@@ -261,13 +265,14 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
       { section: 'Main', items: [
         { href: '/', label: 'Business overview', icon: LayoutDashboard },
         { href: '/leads', label: 'Lead management', icon: Columns3 },
+        { href: '/contacts', label: 'Clients & contacts', icon: Users },
         { href: '/conversations', label: 'Customer engagement', icon: MessageSquare },
         { href: '/follow-ups', label: 'Follow-up automation', icon: ListChecks },
         { href: '/handoffs', label: 'Team handoffs', icon: Headset, badge: 'handoff' },
       ] },
       { section: 'Campaigns', items: [
         { href: '/marketing', label: 'Campaign management', icon: Megaphone },
-        { href: '/marketing?tab=audience', label: 'Contacts & segments', icon: Users },
+        { href: '/marketing?tab=audience', label: 'Audience & segments', icon: Users },
         { href: '/marketing?tab=performance', label: 'ROI reporting', icon: TrendingUp },
       ] },
       { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/analytics', label: 'Conversion analytics', icon: BarChart3 }] },

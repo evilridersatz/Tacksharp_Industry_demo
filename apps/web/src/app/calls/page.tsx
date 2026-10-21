@@ -157,10 +157,12 @@ function CallPanel({ detail, onCalled }: { detail: { call: Call; transcript: Mes
   const outcomeKey = call.outcome ?? call.status;
 
   async function callBack() {
+    // A real call to a real person: ask first. The server still checks consent, calling hours and the live gate.
+    if (!window.confirm('Call this customer back now? If this workspace is live, a real phone call is placed.')) return;
     setBusy(true);
     setNote(null);
     try {
-      const r = await api.post<{ started: boolean; reason?: string }>('/voice/call', { leadId: call.leadId, customerId: call.customerId });
+      const r = await api.post<{ started: boolean; reason?: string }>('/voice/call', { leadId: call.leadId, customerId: call.customerId, confirm: true });
       setNote(r.started ? 'Calling now…' : `Not started: ${r.reason}`);
       onCalled();
     } catch (e) {

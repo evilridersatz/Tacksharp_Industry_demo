@@ -106,8 +106,12 @@ with sync_playwright() as p:
         pg.wait_for_url(WEB + '/', timeout=15000); pg.wait_for_timeout(2500)
 
     # Product families: one login, two groups in the switcher; VisionOps workspaces only under VisionOps.
-    pg.goto(WEB + '/'); pg.wait_for_timeout(1500)
-    pg.get_by_role('button', name='Switch workspace').first.click(); pg.wait_for_timeout(1200)
+    pg.goto(WEB + '/'); pg.wait_for_load_state('networkidle')
+    for _ in range(3):  # a click before hydration is a no-op: retry until the list opens
+        pg.get_by_role('button', name='Switch workspace').first.click()
+        try: pg.get_by_role('listbox').first.wait_for(timeout=3000); break
+        except Exception: pass
+    pg.wait_for_timeout(600)
     agents_box, vo_box = pg.get_by_role('listbox', name='Tacksharp AI Agents'), pg.get_by_role('listbox', name='Tacksharp VisionOps')
     check('switcher groups workspaces into Tacksharp AI Agents and Tacksharp VisionOps', agents_box.count() == 1 and vo_box.count() == 1)
     if vo_box.count() and agents_box.count():

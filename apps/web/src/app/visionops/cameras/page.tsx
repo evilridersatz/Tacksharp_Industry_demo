@@ -92,8 +92,8 @@ function Cameras() {
             ]}
             card={(r) => (
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0"><p className="font-semibold text-ink">{r.code} · {r.name}</p><p className="truncate text-[12px] text-muted">{r.site.name} · seen {ago(r.lastSeenAt)}{r.incident ? ` · ${r.incident.number}` : ''}</p></div>
-                <Pill status={r.status} />
+                <div className="min-w-0 flex-1"><p className="font-semibold break-words text-ink [overflow-wrap:anywhere]">{r.code} · {r.name}</p><p className="truncate text-[12px] text-muted">{r.site.name} · seen {ago(r.lastSeenAt)}{r.incident ? ` · ${r.incident.number}` : ''}</p></div>
+                <span className="shrink-0"><Pill status={r.status} /></span>
               </div>
             )}
           />

@@ -300,6 +300,27 @@ function Drawer({ open, onClose, children }: { open: boolean; onClose: () => voi
   );
 }
 
+/**
+ * A real (non-demo) workspace with no customers yet: say so plainly on the overview and offer the real next steps
+ * (add a customer, import a consented list, connect WhatsApp). Never shown in demo workspaces.
+ */
+function LiveSetupCard({ industry }: { industry: string }) {
+  const pathname = usePathname();
+  const skip = pathname !== '/' || industry === 'cctv' || industry === 'restaurant';
+  const { data } = useApi<{ total: number }>(skip ? null : '/customers?pageSize=5', 60_000);
+  if (skip || !data || data.total > 0) return null;
+  return (
+    <div role="note" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-[13px]">
+      <p className="text-body"><b>Live workspace — no customers yet.</b> Figures below stay at zero until real customers message you or you add them. Nothing here is sample data.</p>
+      <span className="flex flex-wrap gap-2">
+        <Link href="/contacts" className="inline-flex min-h-9 items-center rounded-[8px] bg-emerald-600 px-3 font-semibold text-white hover:bg-emerald-700">Add a customer</Link>
+        <Link href="/marketing?tab=audience" className="inline-flex min-h-9 items-center rounded-[8px] border border-black/10 bg-white px-3 font-semibold text-ink">Import a list</Link>
+        <Link href="/settings" className="inline-flex min-h-9 items-center rounded-[8px] border border-black/10 bg-white px-3 font-semibold text-ink">Connect WhatsApp</Link>
+      </span>
+    </div>
+  );
+}
+
 type DemoLive = { available: boolean; enabled: boolean; since: string | null; lastActivityAt: string | null; scheduler: { on: boolean; reason: string } };
 
 function agoShort(iso: string | null) {
@@ -412,6 +433,7 @@ function Shell({ children }: { children: ReactNode }) {
 
       <main className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">
         {workspace?.isDemo && def && <DemoBanner def={def} />}
+        {workspace && !workspace.isDemo && def && <LiveSetupCard industry={workspace.industry} />}
         {children}
       </main>
     </div>
@@ -430,7 +452,10 @@ export function PageHeader({ title, crumb, actions }: { title: string; crumb?: s
   return (
     <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
-        <p className="text-[12px] text-muted">{workspace ? def.short : 'Platform'} / {crumb ?? title}</p>
+        <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+          {workspace ? def.short : 'Platform'} / {crumb ?? title}
+          {workspace && <span className={cx('rounded-full px-1.5 py-px text-[10.5px] font-bold tracking-wide uppercase', workspace.isDemo ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{workspace.isDemo ? 'Demo data' : 'Live workspace'}</span>}
+        </p>
         <h1 className="mt-0.5 text-[22px] font-bold tracking-[-0.01em] text-ink sm:text-[26px]">{title}</h1>
       </div>
       <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto">

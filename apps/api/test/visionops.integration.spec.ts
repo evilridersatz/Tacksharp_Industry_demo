@@ -430,6 +430,20 @@ describe.skipIf(!enabled)('VisionOps CCTV monitoring (integration)', () => {
     expect(await openFor(cam.id)).toHaveLength(1);
   });
 
+  it('incident numbers stay unique after incidents are removed (scenario reset / retention), instead of colliding', async () => {
+    // One incident per site (no folding). Remove the first six, keep six newer ones: a row-count based number would now
+    // point at six numbers still in use and every retry would collide ("Could not allocate an incident number").
+    const sites: Array<Awaited<ReturnType<typeof makeSite>>> = [];
+    for (let i = 0; i < 13; i++) sites.push(await makeSite(`Numbering ${i}`, { cameras: 1 }));
+    const raise = (s: (typeof sites)[number]) => incidents.raise({ org: VO, siteId: s.site.id, deviceType: 'camera', deviceId: s.cams[0].id, deviceCode: s.cams[0].code, category: 'camera_unreachable', at: min(5) });
+    for (const s of sites.slice(0, 12)) await raise(s);
+    await prisma.downtimeIncident.deleteMany({ where: { organizationId: VO, siteId: { in: sites.slice(0, 6).map((s) => s.site.id) } } }); // what a scenario reset does
+    const next = await raise(sites[12]);
+    expect(next.outcome).toBe('created');
+    const numbers = (await prisma.downtimeIncident.findMany({ where: { organizationId: VO }, select: { number: true } })).map((r: { number: string }) => r.number);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
   it('uptime: camera-minutes down from incidents; unknown minutes excluded from the percentage', async () => {
     const s = await makeSite('Uptime', { cameras: 1 }); // 2 cameras incl. the standalone one
     const day0 = new Date('2026-10-10T18:30:00Z'); // 11 Oct 00:00 IST

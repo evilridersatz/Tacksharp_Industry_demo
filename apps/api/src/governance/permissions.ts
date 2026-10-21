@@ -6,23 +6,28 @@ import { ForbiddenException } from '@nestjs/common';
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: ['*'],
-  manager: ['sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
-  sales: ['sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
-  operations: ['operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
+  manager: ['customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
+  sales: ['customers.view', 'customers.manage', 'sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
+  operations: ['customers.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
   // Hotel front desk: reservations, check-in / check-out, room status.
-  front_desk: ['bookings.*', 'agents.view', 'agents.run'],
+  front_desk: ['customers.view', 'customers.manage', 'bookings.*', 'agents.view', 'agents.run'],
   // Hospital reception: appointments and patient enquiries; insurance desk: insurance cases (decisions recorded from the insurer).
-  reception: ['clinic.*', 'insurance.view', 'agents.view', 'agents.run'],
-  insurance: ['insurance.*', 'clinic.view', 'agents.view'],
+  reception: ['customers.view', 'customers.manage', 'clinic.*', 'insurance.view', 'agents.view', 'agents.run'],
+  insurance: ['customers.view', 'insurance.*', 'clinic.view', 'agents.view'],
   // VisionOps field technician / NOC operator: sees devices and incidents, acknowledges and works them.
   technician: ['monitoring.view', 'monitoring.operate', 'agents.view'],
-  finance: ['finance.*', 'agents.view', 'agents.run'],
+  finance: ['customers.view', 'finance.*', 'agents.view', 'agents.run'],
   // Marketing staff draft, import, segment and approve content; sending to customers needs marketing.approve_campaign
   // (admin / manager), so every campaign passes through the approval queue.
-  marketing: ['marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
+  marketing: ['customers.view', 'customers.manage', 'marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
 };
 
 export const PERMISSIONS = {
+  customersView: 'customers.view',
+  /** Add / edit customers and record consent. */
+  customersManage: 'customers.manage',
+  /** Send a WhatsApp test or place a test call (still consent- and live-gated): admin / manager only. */
+  customersContact: 'customers.contact',
   approveDiscount: 'sales.approve_discount',
   adjustStock: 'operations.adjust_stock',
   receiveStock: 'operations.receive_stock',

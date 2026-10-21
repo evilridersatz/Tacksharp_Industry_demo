@@ -96,10 +96,12 @@ export default function LeadPage() {
   }
 
   async function callNow() {
+    // A real call to a real person: ask first. The server still checks consent, calling hours and the live gate.
+    if (!window.confirm(`Call ${displayName(c)} now? If this workspace is live, a real phone call is placed.`)) return;
     setCalling(true);
     setNotice(null);
     try {
-      const r = await api.post<{ started: boolean; reason?: string }>('/voice/call', { leadId: lead.id });
+      const r = await api.post<{ started: boolean; reason?: string }>('/voice/call', { leadId: lead.id, confirm: true });
       setNotice(
         r.started
           ? { tone: 'ok', text: `Calling ${displayName(c)} now. The call appears below when it ends.` }

@@ -8,6 +8,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The response body (for example per-field validation errors). */
+    readonly body?: unknown,
   ) {
     super(message);
   }
@@ -31,7 +33,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   }
   if (!response.ok) {
-    throw new ApiError(body?.message ?? `Request failed (${response.status})`, response.status);
+    throw new ApiError(body?.message ?? `Request failed (${response.status})`, response.status, body);
   }
   return body as T;
 }

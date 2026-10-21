@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -22,6 +23,7 @@ import { HANGUP, response } from './plivo-xml.js';
 import { Org, Public } from '../auth/decorators.js';
 import { latencyStats } from '../common/latency.js';
 import { checkPlivoSignature } from './plivo-signature.js';
+import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 
 @Controller('voice')
 export class VoiceController {
@@ -41,19 +43,26 @@ export class VoiceController {
    * curl -X POST localhost:3000/voice/call -H 'content-type: application/json' -d '{"leadId":"..."}'
    */
   @Post('call')
-  async startCall(@Org() organizationId: string, @Body() body: { leadId?: string; customerId?: string; ignoreCallWindow?: boolean }) {
+  async startCall(@Org() organizationId: string, @Body() body: { leadId?: string; customerId?: string; ignoreCallWindow?: boolean; confirm?: boolean }) {
+    // A person pressed "Call now": it must be confirmed in the dashboard, the customer must have agreed to calls, and
+    // the number must pass the live gate (DRY_RUN, approved test recipients, never a demo number). Calling hours
+    // apply unless the caller explicitly overrides them.
+    if (body?.confirm !== true) throw new BadRequestException('Confirm the call first (confirm: true).');
     // Both ids are checked against the logged-in organization.
     const lead = body.leadId ? await this.prisma.lead.findFirst({ where: { id: body.leadId, organizationId } }) : null;
     const customer = await this.prisma.customer.findFirst({
       where: { id: lead?.customerId ?? body.customerId ?? '', organizationId },
     });
     if (!customer || (body.leadId && !lead)) throw new NotFoundException('Lead or customer not found');
+    if (!customer.callingConsent) return { started: false, reason: 'no_calling_consent: record the customer\'s consent to be called first' };
+    const gate = liveGate(followUpConfig(), customer);
+    if (!gate.live) return { started: false, reason: `not_live: ${gate.reason}` };
     const customerId = customer.id;
     return this.voice.startOutboundCall({
       organizationId,
       customerId,
       leadId: body.leadId,
-      ignoreCallWindow: body.ignoreCallWindow ?? true,
+      ignoreCallWindow: body.ignoreCallWindow === true,
     });
   }
 
