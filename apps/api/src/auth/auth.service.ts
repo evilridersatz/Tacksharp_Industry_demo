@@ -17,13 +17,13 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
     // Same error and similar timing whether the email exists or not.
     const ok = user ? await verifyPassword(password, user.passwordHash) : await verifyPassword(password, DUMMY_HASH);
-    if (!user || !ok) {
-      log.warn('auth.login_failed', { email: maskEmail(email) });
+    if (!user || !ok || user.disabledAt) {
+      log.warn('auth.login_failed', { email: maskEmail(email), ...(user?.disabledAt && ok ? { reason: 'disabled' } : {}) });
       throw new UnauthorizedException('Wrong email or password.');
     }
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     const exp = Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400;
-    const token = signSession({ sub: user.id, org: user.organizationId, role: user.role, exp }, config.auth.secret);
+    const token = signSession({ sub: user.id, org: user.organizationId, role: user.role, exp, iat: Date.now() }, config.auth.secret);
     log.info('auth.login', { userId: user.id, organizationId: user.organizationId });
     return { token, maxAgeSec: SESSION_DAYS * 86400, user: publicUser(user) };
   }
@@ -65,7 +65,7 @@ export class AuthService {
     if (!target) throw new ForbiddenException('You do not have access to that workspace.');
     const exp = Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400;
     const home = (await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } }))?.organizationId;
-    const token = signSession({ sub: userId, org: target.organizationId, role: target.role, exp, ...(target.organizationId !== home ? { ws: true } : {}) }, config.auth.secret);
+    const token = signSession({ sub: userId, org: target.organizationId, role: target.role, exp, iat: Date.now(), ...(target.organizationId !== home ? { ws: true } : {}) }, config.auth.secret);
     log.info('auth.workspace_switched', { userId, organizationId: target.organizationId });
     return { token, maxAgeSec: SESSION_DAYS * 86400, workspace: target };
   }

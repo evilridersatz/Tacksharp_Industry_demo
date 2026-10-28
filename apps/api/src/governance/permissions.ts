@@ -20,6 +20,8 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
   // Marketing staff draft, import, segment and approve content; sending to customers needs marketing.approve_campaign
   // (admin / manager), so every campaign passes through the approval queue.
   marketing: ['customers.view', 'customers.manage', 'marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
+  // Read-only demo / stakeholder access: views the workspace; every write is refused by the auth guard.
+  viewer: ['customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
 };
 
 export const PERMISSIONS = {
@@ -28,6 +30,8 @@ export const PERMISSIONS = {
   customersManage: 'customers.manage',
   /** Send a WhatsApp test or place a test call (still consent- and live-gated): admin / manager only. */
   customersContact: 'customers.contact',
+  /** Invite people, change roles, remove access, issue password-reset links (workspace admin only). */
+  usersManage: 'users.manage',
   approveDiscount: 'sales.approve_discount',
   adjustStock: 'operations.adjust_stock',
   receiveStock: 'operations.receive_stock',

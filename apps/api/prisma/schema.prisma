@@ -20,6 +20,7 @@ model Organization {
   users        User[]
   Conversation Conversation[]
   demoSessions DemoSession[]
+  invitations  UserInvitation[]
   followUps    FollowUp[]
   leads        Lead[]
   Message      Message[]
@@ -361,6 +362,10 @@ model User {
   passwordHash   String
   role           String       @default("admin")
   lastLoginAt    DateTime?
+  /// Set when an admin removes the user from their home workspace: login and every existing session are refused.
+  disabledAt     DateTime?
+  /// Sessions issued before this moment are refused (password reset, removal, role change).
+  sessionsRevokedAt DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -2200,4 +2205,26 @@ model DemoSession {
 
   @@index([phone, status])
   @@index([organizationId, createdAt])
+}
+
+/// A single-use, expiring access link created by a workspace admin: "invite" (join this workspace with a role) or
+/// "reset" (set a new password). Only a SHA-256 hash of the token is stored; the link is shown once to the admin.
+model UserInvitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// invite | reset
+  kind           String       @default("invite")
+  email          String
+  role           String
+  tokenHash      String       @unique
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdBy      String
+  userId         String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([email])
 }

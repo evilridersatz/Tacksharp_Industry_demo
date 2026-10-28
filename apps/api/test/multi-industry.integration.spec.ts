@@ -35,7 +35,7 @@ const phone = () => `9195${String(Date.now()).slice(-6)}${String(n++).padStart(2
 
 describe.skipIf(!enabled)('Multi-industry platform (integration)', () => {
   let prisma: any, auth: any, settings: any, settingsCtl: any, quality: any, industry: any, orchestrator: any, engine: any, workTasks: any;
-  let AuthGuard: any, verifySession: any, config: any;
+  let AuthGuard: any, invalidateAccess: any, verifySession: any, config: any;
   const sentWhatsApp = vi.fn();
 
   const ctx = (token: string) => ({
@@ -65,7 +65,7 @@ describe.skipIf(!enabled)('Multi-industry platform (integration)', () => {
     process.env.DRY_RUN = 'true';
     const { PrismaService } = await import('../src/prisma/prisma.service.js');
     const { AuthService } = await import('../src/auth/auth.service.js');
-    ({ AuthGuard } = await import('../src/auth/auth.guard.js'));
+    ({ AuthGuard, invalidateAccess } = await import('../src/auth/auth.guard.js'));
     ({ verifySession } = await import('../src/auth/token.js'));
     ({ config } = await import('../src/common/config.js'));
     const { SettingsService } = await import('../src/settings/settings.service.js');
@@ -158,9 +158,13 @@ describe.skipIf(!enabled)('Multi-industry platform (integration)', () => {
     const token = (await auth.switchWorkspace(USER, RETAIL)).token;
     expect(await new AuthGuard(reflector, prisma).canActivate(ctx(token))).toBe(true);
     await prisma.organizationMembership.delete({ where: { userId_organizationId: { userId: USER, organizationId: RETAIL } } });
+    // Access checks are cached process-wide (as with the single production guard); removal through the team API
+    // clears the cache at once, an out-of-band database edit applies within seconds.
+    invalidateAccess(USER);
     await expect(new AuthGuard(reflector, prisma).canActivate(ctx(token))).rejects.toThrow(/removed/i);
     await expect(auth.me(USER, verifySession(token, config.auth.secret))).rejects.toThrow();
     await prisma.organizationMembership.create({ data: { userId: USER, organizationId: RETAIL, role: 'admin' } });
+    invalidateAccess(USER);
   });
 
   // ------------------------------------------------------------------ industry lock

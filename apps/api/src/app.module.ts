@@ -31,6 +31,7 @@ import { AppService } from './app.service.js';
 import { PrivacyController } from './privacy.controller.js';
 
 import { DemoSessionsModule } from './demo-sessions/demo-sessions.module.js';
+import { TeamModule } from './team/team.module.js';
 @Module({
   imports: [
     PrismaModule,
@@ -61,6 +62,7 @@ import { DemoSessionsModule } from './demo-sessions/demo-sessions.module.js';
     VisionOpsModule,
     CustomersModule,
     DemoSessionsModule,
+    TeamModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

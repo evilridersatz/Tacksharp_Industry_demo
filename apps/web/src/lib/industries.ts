@@ -38,6 +38,7 @@ export type IndustryDef = {
 const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/demo-data', label: 'Data & APIs', icon: Database },
   { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
+  { href: '/team', label: 'Team & access', icon: UserCog },
 ];
 const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
 

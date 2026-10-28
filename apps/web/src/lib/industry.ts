@@ -14,6 +14,8 @@ export type Workspace = {
   canChangeIndustry: boolean;
   settableIndustries: IndustryId[];
   integrations: { whatsapp: boolean; voice: boolean; ai: boolean; dryRun: boolean };
+  /** Your role in this workspace (from the server). viewer = read-only. */
+  role?: string | null;
 };
 
 /**

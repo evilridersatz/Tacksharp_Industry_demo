@@ -29,8 +29,9 @@ export class IndustryController {
   }
 
   @Get('workspace')
-  workspace(@Org() org: string) {
-    return this.industry.workspace(org);
+  async workspace(@Org() org: string, @CurrentUser() u?: SessionClaims) {
+    // The role is the one the auth guard resolved from the database for this request (not the token's copy).
+    return { ...(await this.industry.workspace(org)), role: u?.role ?? null };
   }
 
   @Get('dashboard')

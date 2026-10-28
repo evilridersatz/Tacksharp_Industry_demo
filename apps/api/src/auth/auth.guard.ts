@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
@@ -8,7 +8,29 @@ import { readCookie, verifySession } from './token.js';
 
 export const SESSION_COOKIE = 'ts_session';
 
-/** Global guard: every route needs a valid session unless marked @Public(). */
+/** Read-only roles may only read, sign out and switch to another workspace they belong to. */
+const READ_ONLY_ROLES = new Set(['viewer']);
+const READ_ONLY_ALLOWED = new Set(['/auth/logout', '/auth/workspace']);
+const CACHE_MS = 15_000;
+
+type UserState = { exists: boolean; disabledAt: Date | null; revokedAt: Date | null; homeOrg: string | null; role: string | null };
+
+// Shared by every guard instance in the process, so team changes (remove / role / reset) apply at once.
+const users = new Map<string, { at: number; v: UserState }>();
+const memberships = new Map<string, { at: number; role: string | null }>();
+
+/** Forget cached access for a user (called after removal, role change or password reset). */
+export function invalidateAccess(userId: string) {
+  users.delete(userId);
+  for (const k of [...memberships.keys()]) if (k.startsWith(`${userId}|`)) memberships.delete(k);
+}
+
+/**
+ * Global guard: every route needs a valid session unless marked @Public(). With a database it also re-checks, on
+ * every request (cached briefly), that the user still exists, is not disabled, that the session was issued after
+ * any revocation, and that the workspace membership still exists. The role is taken from the database, not from the
+ * (up to 7-day) session token, so a role change or removal applies within seconds.
+ */
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
@@ -16,16 +38,22 @@ export class AuthGuard implements CanActivate {
     @Optional() private readonly prisma?: PrismaService,
   ) {}
 
-  /** Membership checks for switched sessions, cached briefly (a removed membership stops working within a minute). */
-  private readonly memberships = new Map<string, { at: number; ok: boolean }>();
+  private async userState(userId: string): Promise<UserState> {
+    const hit = users.get(userId);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.v;
+    const u = await this.prisma!.user.findUnique({ where: { id: userId }, select: { disabledAt: true, sessionsRevokedAt: true, organizationId: true, role: true } });
+    const v: UserState = u ? { exists: true, disabledAt: u.disabledAt, revokedAt: u.sessionsRevokedAt, homeOrg: u.organizationId, role: u.role } : { exists: false, disabledAt: null, revokedAt: null, homeOrg: null, role: null };
+    users.set(userId, { at: Date.now(), v });
+    return v;
+  }
 
-  private async memberOk(userId: string, organizationId: string) {
+  private async membershipRole(userId: string, organizationId: string) {
     const key = `${userId}|${organizationId}`;
-    const hit = this.memberships.get(key);
-    if (hit && Date.now() - hit.at < 60_000) return hit.ok;
-    const ok = Boolean(await this.prisma!.organizationMembership.findUnique({ where: { userId_organizationId: { userId, organizationId } }, select: { id: true } }));
-    this.memberships.set(key, { at: Date.now(), ok });
-    return ok;
+    const hit = memberships.get(key);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.role;
+    const m = await this.prisma!.organizationMembership.findUnique({ where: { userId_organizationId: { userId, organizationId } }, select: { role: true } });
+    memberships.set(key, { at: Date.now(), role: m?.role ?? null });
+    return m?.role ?? null;
   }
 
   canActivate(context: ExecutionContext): boolean | Promise<boolean> {
@@ -38,12 +66,27 @@ export class AuthGuard implements CanActivate {
     const claims = verifySession(token, config.auth.secret);
     if (!claims) throw new UnauthorizedException('Please log in.');
     req.auth = claims;
-    // A workspace-switch session is valid only while the membership exists.
-    if (claims.ws && this.prisma) {
-      return this.memberOk(claims.sub, claims.org).then((ok) => {
-        if (!ok) throw new UnauthorizedException('Your access to this workspace was removed. Please log in again.');
-        return true;
-      });
+    if (!this.prisma) return this.readOnly(req, claims.role);
+    return this.check(req, claims);
+  }
+
+  private async check(req: Request & AuthedRequest, claims: NonNullable<AuthedRequest['auth']>) {
+    const u = await this.userState(claims.sub);
+    if (!u.exists || u.disabledAt) throw new UnauthorizedException('Your account no longer has access. Please contact your workspace admin.');
+    if (u.revokedAt && (claims.iat ?? 0) < u.revokedAt.getTime()) throw new UnauthorizedException('Your session has ended. Please log in again.');
+    let role: string | null;
+    if (claims.org === u.homeOrg && !claims.ws) role = u.role;
+    else {
+      role = await this.membershipRole(claims.sub, claims.org);
+      if (!role) throw new UnauthorizedException('Your access to this workspace was removed. Please log in again.');
+    }
+    req.auth = { ...claims, role: role ?? claims.role };
+    return this.readOnly(req, req.auth.role);
+  }
+
+  private readOnly(req: Request, role: string | undefined) {
+    if (role && READ_ONLY_ROLES.has(role) && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !READ_ONLY_ALLOWED.has(req.path)) {
+      throw new ForbiddenException('Your access to this workspace is read-only.');
     }
     return true;
   }

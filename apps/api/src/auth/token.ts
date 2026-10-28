@@ -5,6 +5,8 @@ export type SessionClaims = {
   org: string; // organization id
   role: string;
   exp: number; // unix seconds
+  /** Issued at (unix MILLISECONDS): sessions issued before the user's sessionsRevokedAt are refused. */
+  iat?: number;
   /** Set when the user switched into another workspace (membership): the guard re-checks the membership. */
   ws?: boolean;
 };

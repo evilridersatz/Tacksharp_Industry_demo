@@ -29,7 +29,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
-  if (response.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+  if (response.status === 401 && !path.startsWith('/auth/') && !path.startsWith('/team/links/') && typeof window !== 'undefined' && !['/login', '/invite'].includes(window.location.pathname)) {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   }
   if (!response.ok) {
@@ -42,6 +42,7 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
 };
 

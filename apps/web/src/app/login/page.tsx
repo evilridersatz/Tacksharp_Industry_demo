@@ -169,7 +169,7 @@ function Login() {
           {caps && <p className="mt-1 text-[12px] text-[#b45309]">Caps Lock is on.</p>}
           {forgot && (
             <p role="note" className="mt-2 rounded-[10px] bg-slate-50 px-3 py-2 text-[12.5px] text-body">
-              Self-service password reset is not available yet. Ask your workspace admin to set a new password for you.
+              Ask your workspace admin for a password-reset link (Team & access). The link works once and expires within a few hours.
             </p>
           )}
 

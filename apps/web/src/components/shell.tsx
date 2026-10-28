@@ -261,7 +261,7 @@ function UserCard() {
   );
 }
 
-const BARE_ROUTES = ['/login', '/onboarding'];
+const BARE_ROUTES = ['/login', '/onboarding', '/invite'];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -455,6 +455,7 @@ export function PageHeader({ title, crumb, actions }: { title: string; crumb?: s
         <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
           {workspace ? def.short : 'Platform'} / {crumb ?? title}
           {workspace && <span className={cx('rounded-full px-1.5 py-px text-[10.5px] font-bold tracking-wide uppercase', workspace.isDemo ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{workspace.isDemo ? 'Demo data' : 'Live workspace'}</span>}
+          {workspace?.role === 'viewer' && <span className="rounded-full bg-slate-200 px-1.5 py-px text-[10.5px] font-bold tracking-wide text-slate-700 uppercase" title="You can look around; changes are disabled for your account.">Read-only</span>}
         </p>
         <h1 className="mt-0.5 text-[22px] font-bold tracking-[-0.01em] text-ink sm:text-[26px]">{title}</h1>
       </div>
