@@ -1,5 +1,5 @@
 import { Public } from '../auth/decorators.js';
-import { Body, Controller, Get, Headers, HttpCode, Post, Query, Req, type RawBodyRequest } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Headers, HttpCode, Post, Query, Req, type RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { WhatsAppService } from './whatsapp.service.js';
 import { config } from '../common/config.js';
@@ -19,7 +19,8 @@ export class WhatsAppController {
     if (mode === 'subscribe' && token && config.whatsapp.verifyToken && token === config.whatsapp.verifyToken) {
       return challenge;
     }
-    return { success: false, message: 'Webhook verification failed' };
+    // Meta treats anything but the echoed challenge as a failure; 403 makes the refusal explicit (and testable).
+    throw new ForbiddenException('Webhook verification failed');
   }
 
   @Public()

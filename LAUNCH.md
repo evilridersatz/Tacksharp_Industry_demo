@@ -44,6 +44,10 @@ Security details:
 
 ## Deploy (staging first)
 
+> **Use `DEPLOY.md`.** It has the full, step-labelled procedure: discovery, backup and restore drill,
+> migrations, process switch, smoke script (`apps/api/scripts/smoke-deploy.sh`), rollback and production. The
+> summary below is kept for reference.
+
 ```bash
 # On the AWS host. Record the current state first.
 pm2 ls; pm2 describe <staging-api> | grep -E "exec cwd|script|status"; pm2 describe <staging-web> | grep -E "exec cwd|script|status"
