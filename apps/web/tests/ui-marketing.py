@@ -106,7 +106,9 @@ with sync_playwright() as p:
     rs = sql(f"SELECT GROUP_CONCAT(status ORDER BY status) FROM CampaignRecipient WHERE campaignId='{cid}'")
     check('worker processed recipients as SIMULATED (DRY_RUN)', rs == 'simulated,simulated', rs)
     check('approval recorded as executed', sql(f"SELECT status FROM Approval WHERE entityId='{cid}' ORDER BY createdAt DESC LIMIT 1") == 'executed')
-    pg.reload(); pg.wait_for_timeout(2500)
+    pg.reload()
+    try: pg.get_by_text('Results (simulated)').wait_for(timeout=15000)  # the report loads after the campaign itself
+    except Exception: pass
     check('results card says simulated', pg.get_by_text('Results (simulated)').count() > 0)
     pg.screenshot(path=os.path.join(SHOTS, 'marketing-campaign.png'))
 
