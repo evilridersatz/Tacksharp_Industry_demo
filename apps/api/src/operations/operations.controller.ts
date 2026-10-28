@@ -116,9 +116,11 @@ export class OperationsController {
     const orders = await this.prisma.salesOrder.findMany({
       where: { organizationId: org, status: { in: OPEN_ORDERS } },
       include: { customer: { select: { name: true, phone: true } } },
-      orderBy: { createdAt: 'asc' },
+      // The newest 100 open orders (so a just-confirmed order is never hidden behind a backlog), shown oldest first.
+      orderBy: { createdAt: 'desc' },
       take: 100,
     });
+    orders.reverse();
     const now = new Date();
     return Promise.all(
       orders.map(async (o) => {
