@@ -30,6 +30,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { PrivacyController } from './privacy.controller.js';
 
+import { DemoSessionsModule } from './demo-sessions/demo-sessions.module.js';
 @Module({
   imports: [
     PrismaModule,
@@ -59,6 +60,7 @@ import { PrivacyController } from './privacy.controller.js';
     VerticalsModule,
     VisionOpsModule,
     CustomersModule,
+    DemoSessionsModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

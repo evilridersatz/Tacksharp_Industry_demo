@@ -6,8 +6,9 @@ import { RestaurantModule } from '../restaurant/restaurant.module.js';
 import { ConversationsModule } from '../conversations/conversations.module.js';
 import { MarketingModule } from '../marketing/marketing.module.js';
 
+import { DemoSessionsModule } from '../demo-sessions/demo-sessions.module.js';
 @Module({
-  imports: [FollowUpsModule, RestaurantModule, ConversationsModule, MarketingModule],
+  imports: [FollowUpsModule, RestaurantModule, ConversationsModule, MarketingModule, DemoSessionsModule],
   controllers: [WhatsAppController],
   providers: [WhatsAppService],
 })

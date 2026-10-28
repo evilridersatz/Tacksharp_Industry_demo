@@ -35,6 +35,12 @@ export class AiService {
     return (VERTICAL_INDUSTRIES as string[]).includes(industry) ? (industry as VerticalIndustry) : null;
   }
 
+  /** The business's industry from Settings (null when settings are unavailable). Used for call wording. */
+  async industry(organizationId: string): Promise<string | null> {
+    if (!this.settings) return null;
+    return (await this.settings.get(organizationId).catch(() => null))?.industry ?? null;
+  }
+
   /** Routes the turn to the tenant's product: real-estate lead follow-up (default) or restaurant ordering. */
   async generateResponse(input: GenerateResponseInput): Promise<GenerateResponseResult> {
     const organizationId = input.organizationId ?? config.defaultOrganizationId;

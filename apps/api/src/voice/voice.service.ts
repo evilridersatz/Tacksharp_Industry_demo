@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import plivo from 'plivo';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiService } from '../ai/ai.service.js';
@@ -17,6 +17,7 @@ import { HANGUP, escapeXml, recordXml, response, sayXml, streamXml } from './pli
 import { buildCallSummary } from './call-summary.js';
 import { recordTurn } from '../common/latency.js';
 import { KeyedMutex } from '../common/keyed-mutex.js';
+import { DemoSessionsService } from '../demo-sessions/demo-sessions.service.js';
 import { TenancyService, type Vertical } from '../tenancy/tenancy.service.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 import { spoken } from '../restaurant/replies.js';
@@ -33,6 +34,8 @@ import {
   inboundCallReason,
   outboundOpening,
   outboundOpeningEnglish,
+  industryOpening,
+  industryCallReason,
 } from './voice.prompts.js';
 
 const MAX_TURNS = 24;
@@ -172,6 +175,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     private readonly followUps: FollowUpsService,
     private readonly sarvam: SarvamService,
     private readonly tenancy: TenancyService,
+    @Optional() private readonly demoSessions?: DemoSessionsService,
   ) {
     // A call whose hang-up webhook never arrives must not stay in memory forever.
     this.sweeper = setInterval(() => {
@@ -294,7 +298,16 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** The opening line for a call WE placed: a restaurant never mentions property, a real-estate lead its enquiry. */
-  private outboundOpeningFor(vertical: Vertical, customer: Parameters<typeof outboundOpening>[0] & { language?: string | null }, orgName: string) {
+  /** Industry from Settings for call wording (tests may pass an AI stub without it). */
+  private async industryOf(organizationId: string): Promise<string | null> {
+    return typeof this.ai.industry === 'function' ? this.ai.industry(organizationId).catch(() => null) : null;
+  }
+
+  private outboundOpeningFor(vertical: Vertical, customer: Parameters<typeof outboundOpening>[0] & { language?: string | null }, orgName: string, industry?: string | null) {
+    if (vertical !== 'restaurant') {
+      const other = industryOpening(industry, customer, orgName);
+      if (other) return other;
+    }
     if (vertical === 'restaurant') return spoken.outboundOpening(customer.language === 'english' ? 'en' : 'ta', { name: firstName(customer.name) || undefined, business: orgName });
     return outboundOpening(customer, orgName, config.voice.agentName);
   }
@@ -393,7 +406,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     // Prepare the opening line before dialing (TTS ~1s) so there is no silence on answer.
     const organization = await this.prisma.organization.findUnique({ where: { id: organizationId } });
     const orgName = organization?.name ?? config.defaultOrganizationName;
-    const openingText = this.outboundOpeningFor(vertical, customer, orgName);
+    const openingText = this.outboundOpeningFor(vertical, customer, orgName, await this.industryOf(organizationId));
     const openingUrl = await this.sarvam.textToSpeechUrl(openingText);
     this.trackAudio(call.id, openingUrl);
     this.openingAudio.set(call.id, { url: openingUrl, text: openingText });
@@ -449,14 +462,15 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const alreadyAnswered = Boolean(call.answeredAt);
     const orgName = await this.orgName(call.organizationId);
     const vertical = await this.tenancy.vertical(call.organizationId);
+    const industry = await this.industryOf(call.organizationId);
 
     let opening = this.openingAudio.get(call.id);
     if (!opening) {
-      const text = this.outboundOpeningFor(vertical, call.customer, orgName);
+      const text = this.outboundOpeningFor(vertical, call.customer, orgName, industry);
       opening = { text, url: await this.sarvam.textToSpeechUrl(text) };
     }
 
-    const reason = vertical === 'restaurant' ? 'Restaurant call: help the customer order or answer questions about their order.' : callReason(call.customer, call.lead?.source);
+    const reason = vertical === 'restaurant' ? 'Restaurant call: help the customer order or answer questions about their order.' : industryCallReason(industry, orgName) ?? callReason(call.customer, call.lead?.source);
     const rt = this.newRuntime(call, call.customer.phone!, 'outbound', reason, call.lead?.id, vertical);
     rt.providerCallId = params.CallUUID;
     const markAnswered = this.prisma.call.update({
@@ -495,7 +509,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const xml =
       config.voice.mode === 'stream' && opening.url
         ? response(streamXml(call.id))
-        : response(sayXml(opening.url, vertical === 'restaurant' ? spoken.outboundOpening('en', { business: orgName }) : outboundOpeningEnglish(call.customer, orgName)) + '\n' + recordXml(call.id));
+        : response(sayXml(opening.url, vertical === 'restaurant' ? spoken.outboundOpening('en', { business: orgName }) : industryOpening(industry, call.customer, orgName) ?? outboundOpeningEnglish(call.customer, orgName)) + '\n' + recordXml(call.id));
     this.answerXml.set(call.id, xml);
     return xml;
   }
@@ -523,11 +537,19 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
 
     // Which business was called decides the organization. A number we do not know is never given to the default organization.
     const dialed = normalizePhone(params.To) ?? params.To;
-    const organizationId = await this.tenancy.resolve('plivo_number', dialed);
-    if (!organizationId) {
+    const owner = await this.tenancy.resolve('plivo_number', dialed);
+    if (!owner) {
       log.warn('voice.inbound_unknown_number', { providerCallId: params.CallUUID });
       return response('<Speak voice="WOMAN" language="en-US">Sorry, this number is not in service. Goodbye.</Speak>\n' + HANGUP);
     }
+    // Shared demo number: an approved tester bound to an industry workspace reaches that workspace's agent. The call
+    // record is created there, so every later webhook (turn / hangup by callId) keeps this industry.
+    const routed = this.demoSessions ? await this.demoSessions.routeInbound('voice', owner, phone) : null;
+    if (routed && 'unrouted' in routed) {
+      log.warn('voice.inbound_unrouted_shared_number', { providerCallId: params.CallUUID });
+      return response('<Speak voice="WOMAN" language="en-US">This is the Tacksharp demo line. Please ask your presenter to start a demo session, then call again. Goodbye.</Speak>\n' + HANGUP);
+    }
+    const organizationId = routed ? routed.organizationId : owner;
 
     // Unknown callers become new customers (+ leads for real estate); they are never rejected.
     const vertical = await this.tenancy.vertical(organizationId);
@@ -940,7 +962,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     if (!call?.customer.phone || call.endedAt) return undefined;
     const direction = call.direction === 'inbound' ? 'inbound' : 'outbound';
     const vertical = await this.tenancy.vertical(call.organizationId);
-    const reason = direction === 'inbound' ? inboundCallReason(call.customer, call.lead?.status) : callReason(call.customer, call.lead?.source);
+    const reason = direction === 'inbound' ? inboundCallReason(call.customer, call.lead?.status) : industryCallReason(await this.industryOf(call.organizationId), await this.orgName(call.organizationId)) ?? callReason(call.customer, call.lead?.source);
     const rt = this.newRuntime(call, call.customer.phone, direction, reason, call.leadId ?? undefined, vertical);
     if (vertical === 'restaurant') rt.keyterms = await this.ai.restaurantKeyterms(call.organizationId).catch(() => undefined);
     rt.providerCallId = call.providerCallId ?? undefined;

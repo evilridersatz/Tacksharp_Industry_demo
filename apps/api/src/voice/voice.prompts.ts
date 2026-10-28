@@ -65,6 +65,32 @@ export function outboundOpening(c: CustomerLike, orgName: string, agentName: str
   return `Hi${name ? ` ${name}` : ''}, ${who} ${requirementTamil(c)} enquiry பண்ணிருந்தீங்க. பேசலாமா?`;
 }
 
+/** What a non-real-estate business calls about (industry from Settings). real_estate / unknown → null (property wording). */
+const INDUSTRY_PURPOSE: Record<string, string> = {
+  textile: 'your fabric and saree enquiry',
+  retail: 'your product enquiry',
+  manufacturing: 'your enquiry with us',
+  agency: 'your enquiry with us',
+  food: 'your food order',
+  hotel: 'your room booking enquiry',
+  hospital: 'your appointment',
+  cctv: 'your CCTV service',
+};
+
+/** Outbound opening for industries other than real estate: never mentions property. */
+export function industryOpening(industry: string | null | undefined, c: CustomerLike, orgName: string): string | null {
+  const purpose = industry ? INDUSTRY_PURPOSE[industry] : undefined;
+  if (!purpose) return null;
+  const name = firstName(c.name);
+  return `Hello${name ? ` ${name}` : ''}, this is the AI assistant from ${orgName}, calling about ${purpose}. Is this a good time to talk?`;
+}
+
+/** Reason given to the agent for an outbound call in a non-real-estate industry. */
+export function industryCallReason(industry: string | null | undefined, orgName: string): string | null {
+  const purpose = industry ? INDUSTRY_PURPOSE[industry] : undefined;
+  return purpose ? `Follow-up call from ${orgName} about ${purpose.replace(/^your /, "the customer's ")}. Help with that; never talk about property.` : null;
+}
+
 export function outboundOpeningEnglish(c: CustomerLike, orgName: string) {
   const name = firstName(c.name);
   return `Hello${name ? ` ${name}` : ''}, this is ${orgName} calling about your property enquiry. Is this a good time to talk?`;

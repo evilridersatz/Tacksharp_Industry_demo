@@ -19,6 +19,7 @@ model Organization {
   customers    Customer[]
   users        User[]
   Conversation Conversation[]
+  demoSessions DemoSession[]
   followUps    FollowUp[]
   leads        Lead[]
   Message      Message[]
@@ -2169,4 +2170,34 @@ model SiteUptimeSnapshot {
 
   @@unique([siteId, day])
   @@index([organizationId, day])
+}
+
+/// A live demonstration on the SHARED WhatsApp / Plivo numbers. One approved test phone is bound to one industry
+/// workspace while the session is active, so its inbound messages and calls reach that workspace's AI agent instead of
+/// the number's owner. The binding is explicit (created by an admin), immutable for the session, and expires.
+model DemoSession {
+  id                  String       @id @default(cuid())
+  /// The industry workspace that answers this tester.
+  organizationId      String
+  /// Industry of that workspace when the session started (kept even if Settings change later).
+  industry            String
+  /// The organization that owns the shared number(s); routing applies only to messages / calls reaching it.
+  hubOrganizationId   String
+  /// Normalized test phone (must be an approved test recipient).
+  phone               String
+  /// whatsapp | voice | whatsapp,voice
+  channels            String
+  customerId          String
+  /// active | ended
+  status              String       @default("active")
+  endedReason         String?
+  createdBy           String
+  expiresAt           DateTime
+  lastActivityAt      DateTime?
+  createdAt           DateTime     @default(now())
+  endedAt             DateTime?
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([phone, status])
+  @@index([organizationId, createdAt])
 }

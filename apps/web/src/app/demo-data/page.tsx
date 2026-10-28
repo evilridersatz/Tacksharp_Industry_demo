@@ -5,6 +5,7 @@ import { ChevronDown, Database, ExternalLink } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { API_URL } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveDemoSession } from '@/components/live-demo-session';
 import { Card, ErrorBanner, Skeleton, cx } from '@/components/ui';
 import { Pill, Stat } from '@/components/vertical-ui';
 
@@ -17,6 +18,7 @@ export default function DemoDataPage() {
   return (
     <>
       <PageHeader title="Data & APIs" crumb="Setup" />
+      <LiveDemoSession />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data ? <Skeleton className="h-96" /> : (
         <>

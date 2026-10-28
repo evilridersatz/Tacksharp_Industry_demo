@@ -7,8 +7,9 @@ import { VoiceController } from './voice.controller.js';
 import { VoiceService } from './voice.service.js';
 import { VoiceStreamService } from './stream/voice-stream.service.js';
 
+import { DemoSessionsModule } from '../demo-sessions/demo-sessions.module.js';
 @Module({
-  imports: [AiModule, ConversationsModule, LeadsModule, FollowUpsModule],
+  imports: [AiModule, ConversationsModule, LeadsModule, FollowUpsModule, DemoSessionsModule],
   controllers: [VoiceController],
   providers: [VoiceService, VoiceStreamService],
   exports: [VoiceService],
