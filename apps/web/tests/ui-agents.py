@@ -11,7 +11,7 @@ TEST FIXTURES (test database only, clearly not product behaviour):
 Nothing here sends a message or places a call.
 """
 from playwright.sync_api import sync_playwright
-import base64, hashlib, json, os, re, subprocess, time, urllib.error, urllib.request
+import atexit, base64, hashlib, json, os, re, subprocess, time, urllib.error, urllib.request
 
 WEB, API = 'http://localhost:3001', 'http://localhost:3000'
 results = []
@@ -48,6 +48,12 @@ with sync_playwright() as p:
     pg, api, errs = session('owner@tacksharp.test', 'correct-horse-battery')
     org = api('/auth/me')['organizationId']
     api('/settings', {'industry': 'textile', 'textile': {'maxDiscountPct': 10}, 'agents': {'paused': []}}, 'PUT')
+    # Put the workspace back to real estate even if a check below times out (other suites expect it).
+    _ck = '; '.join(f"{c['name']}={c['value']}" for c in pg.context.cookies(API))
+    def _restore():
+        try: urllib.request.urlopen(urllib.request.Request(API + '/settings', data=json.dumps({'industry': 'real_estate'}).encode(), method='PUT', headers={'cookie': _ck, 'content-type': 'application/json'}))
+        except Exception: pass
+    atexit.register(_restore)
     pg.reload(); pg.wait_for_timeout(1500)
     check('Menu shows AI agents + Inventory & stock', pg.get_by_role('link', name='AI agents', exact=True).is_visible() and pg.get_by_role('link', name='Inventory & stock').is_visible())
 
