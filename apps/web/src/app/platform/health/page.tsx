@@ -13,7 +13,15 @@ type Health = {
   queues: Record<string, Record<string, number> | { error: string }>;
   storage: { ok: boolean; freeGb?: number; totalGb?: number; error?: string };
   providersLastHour: Array<{ provider: string; ok: boolean; count: number; avgLatencyMs: number | null }>;
+  responseTimes?: Record<'voice' | 'whatsapp', { turns: number } & Record<string, { p50: number | null; p95: number | null; count: number } | number | string | object>>;
 };
+
+type Stat = { p50: number | null; p95: number | null; count: number };
+const STAGES: Record<'voice' | 'whatsapp', Array<[string, string]>> = {
+  whatsapp: [['providerDelay', 'Meta → our webhook'], ['queueWait', 'Waiting in our queue'], ['ai', 'Deciding the reply (AI / rules)'], ['send', 'Sending to Meta'], ['total', 'Our total (pick-up → sent)']],
+  voice: [['download', 'Recording download'], ['stt', 'Speech to text'], ['ai', 'Deciding the reply'], ['postAiDb', 'Saving'], ['tts', 'Text to speech'], ['total', 'Our total per turn']],
+};
+const sec = (ms: number | null) => (ms === null ? '—' : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
 
 /** Operational status (live checks), separate from configuration. Read-only: no restarts, migrations or shells here. */
 export default function PlatformHealth() {
@@ -48,6 +56,22 @@ export default function PlatformHealth() {
               </table>
             </div>
           </Card>
+          {h.responseTimes && (
+            <Card className="overflow-hidden">
+              <CardHeader title="Response times" subtitle="p50 / p95 per stage for the recent replies handled by this API process (resets on restart). Use it to see where a slow reply spends its time." />
+              <div className="grid gap-4 px-5 pb-5 md:grid-cols-2">
+                {(['whatsapp', 'voice'] as const).map((ch) => (
+                  <div key={ch}>
+                    <h3 className="text-[13px] font-semibold text-ink">{ch === 'whatsapp' ? 'WhatsApp replies' : 'Voice call turns'} <span className="font-normal text-muted">({h.responseTimes![ch].turns} recorded)</span></h3>
+                    <table className="mt-2 w-full text-[12.5px]">
+                      <thead className="text-left text-muted"><tr><th className="py-1">Stage</th><th className="py-1 text-right">p50</th><th className="py-1 text-right">p95</th></tr></thead>
+                      <tbody>{STAGES[ch].map(([k, l]) => { const st = h.responseTimes![ch][k] as Stat | undefined; return <tr key={k} className="border-t border-line"><td className="py-1">{l}</td><td className="py-1 text-right tabular">{sec(st?.p50 ?? null)}</td><td className="py-1 text-right tabular">{sec(st?.p95 ?? null)}</td></tr>; })}</tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
           <Card>
             <CardHeader title="Providers in the last hour" subtitle="From requests this platform actually made (tests, model turns, calls)." />
             <ul className="grid gap-1.5 px-5 pb-4 text-[13px]">

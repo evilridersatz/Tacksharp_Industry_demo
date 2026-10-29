@@ -20,6 +20,10 @@ export type TurnTimings = {
   firstToolCallMs?: number;
   /** ms spent sending the reply (WhatsApp Cloud API call). */
   sendMs?: number;
+  /** WhatsApp: time between our webhook receiving the message and a worker starting on it (queue wait). */
+  queueWaitMs?: number;
+  /** WhatsApp: the customer's send time (Meta timestamp, 1 s resolution) to our webhook receiving it. */
+  providerDelayMs?: number;
   /** Which path produced the reply: deterministic rules (no model) or the language model. */
   path?: 'rules' | 'llm';
 };
@@ -56,6 +60,8 @@ export function latencyStats(channel: LatencyChannel = 'voice') {
     channel,
     turns: samples.length,
     send: stage('sendMs'),
+    queueWait: stage('queueWaitMs'),
+    providerDelay: stage('providerDelayMs'),
     /** Total latency split by whether the reply came from rules (no model request) or the model. */
     byPath: { rules: total('rules'), llm: total('llm') },
     download: stage('downloadMs'),

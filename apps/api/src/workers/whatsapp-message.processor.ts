@@ -62,8 +62,14 @@ export class WhatsAppMessageProcessor {
     let conversationId = row.conversationId ?? undefined;
     let result: Awaited<ReturnType<AiService['generateResponse']>> | undefined;
     let aiMs = 0;
+    // Where time goes BEFORE we start: Meta -> our webhook (message timestamp has 1 s resolution), and our queue wait.
+    const receivedAt = row.receivedAt?.getTime();
+    const queueWaitMs = receivedAt ? Math.max(0, startedAt - receivedAt) : undefined;
+    const metaDelayMs = receivedAt && Number(data.timestamp) > 0 ? Math.max(0, receivedAt - Number(data.timestamp) * 1000) : undefined;
     try {
       if (!reply) {
+        // Perceived latency: the customer sees "read" and "typing…" at once instead of silence while the reply is made.
+        void Promise.resolve().then(() => this.sender.markReadWithTyping?.(data.messageId)).catch(() => undefined); // best effort (blocked in DRY_RUN)
         // Retry after a failed send never gets here: the stored reply is re-sent and the AI is not run again.
         let text = data.text?.trim();
         let viaVoiceNote = false;
@@ -125,7 +131,7 @@ export class WhatsAppMessageProcessor {
     // Everything below is bookkeeping: a failure here must never make the job retry (and resend the reply).
     if (result) {
       try {
-        this.afterReply(data, result, aiMs, sendMs, startedAt);
+        this.afterReply(data, result, aiMs, sendMs, startedAt, queueWaitMs, metaDelayMs);
         await this.leads.advanceLeadStatus({ organizationId: data.organizationId, leadId: result.leadId, status: 'contacted' });
       } catch (error) {
         log.warn('whatsapp.post_send_bookkeeping_failed', { messageId: data.messageId, error: describeError(error) });
@@ -194,12 +200,16 @@ export class WhatsAppMessageProcessor {
     }
   }
 
-  private afterReply(data: WhatsAppMessageJobData, result: Awaited<ReturnType<AiService['generateResponse']>>, aiMs: number, sendMs: number, startedAt: number) {
+  private afterReply(data: WhatsAppMessageJobData, result: Awaited<ReturnType<AiService['generateResponse']>>, aiMs: number, sendMs: number, startedAt: number, queueWaitMs?: number, metaDelayMs?: number) {
+    const totalMs = Date.now() - startedAt;
+    log.info('whatsapp.latency', { messageId: data.messageId, metaDelayMs, queueWaitMs, aiMs, sendMs, totalMs, path: result.path, aiRequests: result.aiUsage?.requests ?? 0 });
     recordTurn(
       {
         aiMs,
         sendMs,
-        totalMs: Date.now() - startedAt,
+        queueWaitMs,
+        providerDelayMs: metaDelayMs,
+        totalMs,
         aiRequests: result.aiUsage?.requests ?? 0,
         toolMs: result.aiUsage?.toolMs,
         pureAiMs: result.aiUsage?.pureAiMs,

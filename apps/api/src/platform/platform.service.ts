@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS, sanitizeSettings } from '../settings/tenant-settings.
 import { INDUSTRY_LABEL, SETTABLE_INDUSTRIES, effectiveIndustry } from '../industry/industries.js';
 import { PROVIDERS } from '../integrations/providers.js';
 import { webhookFailures } from '../common/webhook-failures.js';
+import { latencyByChannel } from '../common/latency.js';
 import { agentQueue, followUpQueue, marketingQueue, orderFollowUpQueue, queueRedis, whatsappQueue } from '../queues/queues.js';
 import { log } from '../common/logger.js';
 
@@ -285,6 +286,8 @@ export class PlatformService {
       redis,
       queues,
       storage: await this.storage(),
+      // Per-stage response times (p50 / p95) for the last 500 voice turns and WhatsApp replies of THIS API process.
+      responseTimes: latencyByChannel(),
       providersLastHour: providerHealth.map((p) => ({ provider: p.provider, ok: p.ok, count: p._count._all, avgLatencyMs: p._avg.latencyMs === null ? null : Math.round(p._avg.latencyMs) })),
     };
   }

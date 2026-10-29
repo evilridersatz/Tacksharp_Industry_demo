@@ -78,7 +78,7 @@ export class WhatsAppSenderService {
     return Boolean(this.templateFor(step));
   }
 
-  private async post(body: Record<string, unknown>) {
+  private async post(body: Record<string, unknown>, opts: { status?: boolean } = {}) {
     if (process.env.DRY_RUN !== 'false') {
       throw new WhatsAppPermanentError('DRY_RUN is on: WhatsApp provider request blocked', 0);
     }
@@ -95,7 +95,7 @@ export class WhatsAppSenderService {
           Authorization: `Bearer ${acct.token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', ...body }),
+        body: JSON.stringify(opts.status ? { messaging_product: 'whatsapp', ...body } : { messaging_product: 'whatsapp', recipient_type: 'individual', ...body }),
         signal: AbortSignal.timeout(config.whatsapp.sendTimeoutMs),
       });
     } catch (error) {
@@ -146,6 +146,15 @@ export class WhatsAppSenderService {
     });
     log.info('whatsapp.sent_template', { to: mask(to), messageId: id, template: templateName, step });
     return id;
+  }
+
+  /**
+   * Mark the customer's message read and show "typing…" while the reply is prepared (Meta shows it for up to 25 s or
+   * until our reply arrives). Purely a perceived-latency improvement: best effort, never retried, never blocks the
+   * reply, and blocked like every provider request while DRY_RUN is on.
+   */
+  async markReadWithTyping(messageId: string) {
+    await this.post({ status: 'read', message_id: messageId, typing_indicator: { type: 'text' } }, { status: true });
   }
 
   /** A specific approved template with exactly these body variables (team alerts). */
