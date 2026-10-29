@@ -63,7 +63,7 @@ Optional settings:
 
 ## Tara's talking video presenter (Simli)
 
-Visitors can press **Talk face to face with Tara**. A Simli presenter (a stock AI presenter, labelled as such) then
+Visitors can press **Video call** in Tara's panel. A Simli presenter (a stock AI presenter, labelled as such) then
 speaks every answer with lip-sync. The voice is still **ours**: our Sarvam Tamil and English voice is streamed to the
 presenter at 16 kHz, so Tamil and Tanglish sound the same as on calls.
 

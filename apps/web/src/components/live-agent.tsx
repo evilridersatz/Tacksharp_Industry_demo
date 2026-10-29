@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Headphones, Loader2, Mic, MicOff, Send, Square, Video, VideoOff, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowUp, Languages, Loader2, MessageSquareText, Mic, MicOff, Phone, Square, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { ApiError, api } from '@/lib/api';
 import { cx } from './ui';
 
@@ -25,7 +25,7 @@ const QUICK: Record<Style, Array<[string, string]>> = {
   ta: [['💬', 'WhatsApp assistant எப்படி வேலை செய்யும்?'], ['📞', 'தமிழ்ல call பண்ணுமா?'], ['💰', 'விலை எவ்வளவு?'], ['🚀', 'எப்படி ஆரம்பிக்கறது?']],
   tanglish: [['💬', 'WhatsApp assistant epdi work aagum?'], ['📞', 'Tamil la call pannuma?'], ['💰', 'Price evlo?'], ['🚀', 'Epdi start panradhu?']],
 };
-const PHASE_LABEL: Record<Phase, string> = { idle: 'AI assistant · online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…' };
+const PHASE_LABEL: Record<Phase, string> = { idle: 'Online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…' };
 const STORE = 'ts-tara-v1';
 
 type SimliLike = { start(): Promise<void>; stop(): Promise<void>; sendAudioData(d: Uint8Array): void; ClearBuffer: () => void; on(ev: string, cb: (...a: unknown[]) => void): void };
@@ -83,47 +83,40 @@ function encodeWav(chunks: Float32Array[], inRate: number): string {
   return btoa(bin);
 }
 
-/** The animated face. `level` (0..1) opens the mouth with the live audio; eyes blink; rings show listening. */
-function Face({ level, phase, size = 96 }: { level: number; phase: Phase; size?: number }) {
-  const mouth = phase === 'speaking' ? 1.5 + level * 9 : phase === 'listening' ? 1.2 : 1;
+/**
+ * Tara's mark: a brand-coloured orb that breathes with the live audio level (no cartoon face). Used in the launcher,
+ * the header, beside her messages and, large, on the voice stage.
+ */
+function Orb({ level = 0, phase = 'idle', size = 40 }: { level?: number; phase?: Phase; size?: number }) {
+  const active = phase === 'speaking' || phase === 'listening';
   return (
     <span className="relative inline-grid shrink-0 place-items-center" style={{ width: size, height: size }} aria-hidden>
-      {phase === 'listening' && <span className="absolute inset-0 rounded-full bg-emerald-400/30 motion-safe:animate-ping" style={{ transform: `scale(${1 + level * 0.25})` }} />}
-      <svg viewBox="0 0 120 120" width={size} height={size} className="relative drop-shadow-sm">
-        <defs>
-          <radialGradient id="tara-bg" cx="35%" cy="30%"><stop offset="0%" stopColor="#3b3f86" /><stop offset="100%" stopColor="#16183d" /></radialGradient>
-          <linearGradient id="tara-skin" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#c98a62" /><stop offset="100%" stopColor="#a8694a" /></linearGradient>
-        </defs>
-        <circle cx="60" cy="60" r="58" fill="url(#tara-bg)" />
-        {/* hair back, neck, shoulders */}
-        <path d="M24 70c0-26 16-44 36-44s36 18 36 44v30H24z" fill="#1f1412" />
-        <rect x="51" y="78" width="18" height="18" rx="6" fill="#a8694a" />
-        <path d="M22 118c4-16 20-24 38-24s34 8 38 24z" fill="#0f9f6e" />
-        {/* face */}
-        <ellipse cx="60" cy="60" rx="24" ry="28" fill="url(#tara-skin)" />
-        {/* hair front */}
-        <path d="M35 56c2-18 14-27 27-27 13 0 24 9 25 26-8-9-20-14-33-13-7 1-13 6-19 14z" fill="#1f1412" />
-        {/* eyes (blink) */}
-        <g className="tara-blink">
-          <ellipse cx="51" cy="60" rx="3.2" ry="3.6" fill="#1b1311" />
-          <ellipse cx="69" cy="60" rx="3.2" ry="3.6" fill="#1b1311" />
-          <circle cx="52" cy="59" r="0.9" fill="#fff" />
-          <circle cx="70" cy="59" r="0.9" fill="#fff" />
-        </g>
-        <path d="M46 53.5q5-2.5 9 0M65 53.5q5-2.5 9 0" stroke="#1b1311" strokeWidth="1.6" fill="none" strokeLinecap="round" />
-        <circle cx="60" cy="48.5" r="1.4" fill="#e11d48" />
-        <path d="M58 64q2 3 4 0" stroke="#8a5238" strokeWidth="1.3" fill="none" strokeLinecap="round" />
-        {/* mouth: follows the voice */}
-        <ellipse cx="60" cy="74" rx={5.5 - Math.min(1.5, level * 2)} ry={mouth} fill="#5a1f22" />
-        {phase !== 'speaking' && <path d="M54.5 73.5q5.5 4 11 0" stroke="#5a1f22" strokeWidth="1.6" fill="none" strokeLinecap="round" />}
-        <circle cx="38" cy="70" r="2" fill="#f2a516" />
-        <circle cx="82" cy="70" r="2" fill="#f2a516" />
-      </svg>
-      {phase === 'thinking' && (
-        <span className="absolute -right-1 -bottom-1 flex gap-0.5 rounded-full bg-white px-1.5 py-1 shadow">
-          {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-[#16183d] motion-safe:animate-bounce" style={{ animationDelay: `${i * 120}ms` }} />)}
-        </span>
-      )}
+      {active && <span className="absolute inset-0 rounded-full bg-[#7c5cf0]/25 motion-safe:animate-ping" />}
+      <span
+        className="relative rounded-full shadow-[inset_0_-6px_14px_rgba(0,0,0,0.25),0_6px_18px_-6px_rgba(124,92,240,0.6)] transition-transform duration-75"
+        style={{
+          width: size, height: size,
+          transform: `scale(${1 + (active ? level * 0.12 : 0)})`,
+          background: 'radial-gradient(circle at 32% 28%, #ffffff 0%, #c9c2ff 14%, #7c5cf0 42%, #3b2f9e 70%, #16183d 100%)',
+        }}
+      />
+      <span className="absolute rounded-full bg-white/70 blur-[1px]" style={{ width: size * 0.18, height: size * 0.1, top: size * 0.2, left: size * 0.28 }} />
+    </span>
+  );
+}
+
+/** A live waveform of the actual audio (speaking or listening); a calm line otherwise. */
+function Waveform({ level, phase }: { level: number; phase: Phase }) {
+  const bars = 28;
+  const active = phase === 'speaking' || phase === 'listening';
+  return (
+    <span className="flex h-10 items-center gap-[3px]" aria-hidden data-level={level.toFixed(2)}>
+      {Array.from({ length: bars }, (_, i) => {
+        const shape = Math.sin((i / (bars - 1)) * Math.PI);
+        const jitter = 0.55 + 0.45 * Math.abs(Math.sin(i * 1.7 + level * 9));
+        const h = active ? Math.max(3, 40 * shape * Math.min(1, level * 1.6) * jitter) : 3;
+        return <span key={i} className={cx('w-[3px] rounded-full transition-[height] duration-75', phase === 'listening' ? 'bg-emerald-400' : 'bg-[#a99bff]')} style={{ height: h }} />;
+      })}
     </span>
   );
 }
@@ -400,82 +393,116 @@ export function LiveAgent() {
   useEffect(() => () => { stopSpeech.current(); rec.current?.stop(false); cancelAnimationFrame(raf.current); void simli.current?.stop().catch(() => undefined); }, []);
 
   const greeting = status?.greeting;
+  const mode: 'chat' | 'voice' | 'video' = video !== 'off' ? 'video' : handsFree ? 'voice' : 'chat';
+  const setMode = (m: 'chat' | 'voice' | 'video') => {
+    if (m === mode) return;
+    if (m !== 'video' && video !== 'off') stopVideo();
+    if (m === 'chat') { setHandsFree(false); rec.current?.stop(false); }
+    if (m === 'voice') { setHandsFree(true); if (phase === 'idle') void startListening(); }
+    if (m === 'video') { setHandsFree(false); void startVideo(); }
+  };
+  const close = () => { stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); stopVideo(); setOpen(false); };
+  const iconBtn = 'grid size-9 place-items-center rounded-[10px] text-[#16183d]/70 hover:bg-[#16183d]/5 hover:text-[#16183d] disabled:opacity-40';
   return (
     <>
       {!open && (
-        <button onClick={() => setOpen(true)} aria-label="Chat or talk with Tara, the Tacksharp AI assistant" className="group fixed right-4 bottom-4 z-[55] flex items-center gap-2 rounded-full bg-[#16183d] py-1.5 pr-4 pl-1.5 text-[14px] font-semibold text-white shadow-[0_12px_30px_-10px_rgba(22,24,61,0.7)] hover:bg-[#262a63] print:hidden">
-          <Face level={0} phase="idle" size={44} />
-          <span className="hidden sm:inline">Ask Tara</span>
-          <span className="sm:hidden">Ask</span>
-          <span className="absolute top-1.5 left-10 size-3 rounded-full bg-emerald-400 ring-2 ring-[#16183d]" aria-hidden />
+        <button onClick={() => setOpen(true)} aria-label="Chat or talk with Tara, the Tacksharp AI assistant" className="group fixed right-4 bottom-4 z-[55] flex items-center gap-3 rounded-full border border-white/10 bg-[#16183d] p-1.5 text-left text-white shadow-[0_18px_40px_-14px_rgba(22,24,61,0.75)] transition-transform hover:-translate-y-0.5 sm:pr-5 print:hidden">
+          <span className="relative">
+            <Orb size={44} />
+            <span className="absolute right-0 bottom-0 size-3 rounded-full bg-emerald-400 ring-2 ring-[#16183d]" />
+          </span>
+          <span className="hidden leading-tight sm:block">
+            <span className="block text-[14px] font-semibold">Talk to Tara</span>
+            <span className="block text-[11.5px] text-white/60">AI assistant · தமிழ் · English</span>
+          </span>
         </button>
       )}
       {open && (
-        <section role="dialog" aria-modal="false" aria-label="Tara, Tacksharp AI assistant" className="fixed inset-0 z-[55] flex flex-col bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[640px] sm:max-h-[calc(100dvh-2rem)] sm:w-[400px] sm:rounded-[22px] sm:shadow-[0_30px_80px_-20px_rgba(22,24,61,0.55)] print:hidden">
-          <header className="flex items-center gap-3 rounded-t-[22px] bg-[#16183d] px-4 py-3 text-white">
-            <Face level={level} phase={phase} size={64} />
-            <div className="min-w-0 flex-1">
-              <p className="text-[16px] font-bold">Tara</p>
-              <p className="text-[12px] text-white/70" aria-live="polite">{PHASE_LABEL[phase]}</p>
+        <section role="dialog" aria-modal="false" aria-label="Tara, Tacksharp AI assistant" className="fixed inset-0 z-[55] flex flex-col overflow-hidden bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[680px] sm:max-h-[calc(100dvh-2rem)] sm:w-[420px] sm:rounded-[20px] sm:border sm:border-black/5 sm:shadow-[0_40px_90px_-30px_rgba(22,24,61,0.6)] print:hidden">
+          <header className="flex items-center gap-3 border-b border-black/5 px-4 py-3">
+            <Orb size={36} level={level} phase={phase} />
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="text-[15px] font-semibold text-[#16183d]">Tara <span className="ml-1 rounded-full bg-[#ebeaf6] px-1.5 py-px align-middle text-[10.5px] font-semibold text-[#16183d]/70">AI</span></p>
+              <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-[#16183d]/60" aria-live="polite">
+                <span className={cx('size-1.5 rounded-full', phase === 'idle' ? 'bg-emerald-500' : phase === 'listening' ? 'bg-rose-500' : 'bg-[#7c5cf0]')} />{PHASE_LABEL[phase]}
+              </p>
             </div>
-            <button onClick={() => { setVoiceOut(!voiceOut); stopSpeech.current(); }} aria-pressed={voiceOut} aria-label={voiceOut ? 'Mute voice replies' : 'Turn on voice replies'} title={voiceOut ? 'Voice replies on' : 'Voice replies off'} className="grid size-10 place-items-center rounded-full hover:bg-white/10" disabled={!status?.voice}>
-              {voiceOut && status?.voice ? <Volume2 className="size-5" /> : <VolumeX className="size-5" />}
+            <button onClick={() => { setVoiceOut(!voiceOut); stopSpeech.current(); }} aria-pressed={voiceOut} aria-label={voiceOut ? 'Mute voice replies' : 'Turn on voice replies'} title={voiceOut ? 'Voice replies on' : 'Voice replies off'} className={iconBtn} disabled={!status?.voice}>
+              {voiceOut && status?.voice ? <Volume2 className="size-[18px]" /> : <VolumeX className="size-[18px]" />}
             </button>
-            {status?.video && (
-              <button onClick={() => (video === 'off' ? void startVideo() : stopVideo())} aria-pressed={video !== 'off'} aria-label={video === 'off' ? 'Start video presenter' : 'Stop video presenter'} title={video === 'off' ? 'Talk face to face' : 'Stop video'} disabled={video === 'connecting'} className="grid size-10 place-items-center rounded-full hover:bg-white/10">
-                {video === 'connecting' ? <Loader2 className="size-5 animate-spin" /> : video === 'live' ? <VideoOff className="size-5" /> : <Video className="size-5" />}
-              </button>
-            )}
-            <button onClick={() => { stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); stopVideo(); setOpen(false); }} aria-label="Close assistant" className="grid size-10 place-items-center rounded-full hover:bg-white/10"><X className="size-5" /></button>
+            <button onClick={close} aria-label="Close assistant" className={iconBtn}><X className="size-[18px]" /></button>
           </header>
-          {status?.video && (
-            <div className={cx('relative bg-[#0b0d26]', video === 'off' ? 'hidden' : 'block')}>
-              <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-[4/3] w-full object-cover" aria-label="Tara, AI video presenter" />
-              <audio ref={videoAudioEl} autoPlay />
-              {video === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting the video presenter…</span></p>}
-              <span className="absolute top-2 left-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] font-semibold text-white">AI presenter · our voice</span>
+
+          {/* Stage: the video presenter, or the voice visual. */}
+          <div className="relative bg-[radial-gradient(120%_100%_at_50%_0%,#262a63_0%,#16183d_60%,#0d0f2b_100%)] px-4 pt-4 pb-3 text-white">
+            {status?.video && (
+              <div className={cx('relative overflow-hidden rounded-[14px] bg-black/40', video === 'off' ? 'hidden' : 'block')}>
+                <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-video w-full object-cover" aria-label="Tara, AI video presenter" />
+                <audio ref={videoAudioEl} autoPlay />
+                {video === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting video…</span></p>}
+                <span className="absolute bottom-2 left-2 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur">AI presenter · our voice</span>
+              </div>
+            )}
+            {video === 'off' && (
+              <div className="flex items-center gap-4">
+                <Orb size={64} level={level} phase={phase} />
+                <div className="min-w-0 flex-1">
+                  <Waveform level={level} phase={phase} />
+                  <p className="mt-1 truncate text-[12px] text-white/60">{phase === 'idle' ? (mode === 'voice' ? 'Voice call on · just start talking' : 'Ask by typing, or switch to a voice call') : PHASE_LABEL[phase]}</p>
+                </div>
+              </div>
+            )}
+            <div className="mt-3 grid grid-flow-col gap-1 rounded-[12px] bg-white/8 p-1" role="group" aria-label="How to talk">
+              {([['chat', 'Chat', MessageSquareText], ...(status?.voice ? [['voice', 'Voice call', Phone]] : []), ...(status?.video ? [['video', 'Video call', Video]] : [])] as Array<[typeof mode, string, typeof Video]>).map(([m, label, Icon]) => (
+                <button key={m} onClick={() => setMode(m)} aria-pressed={mode === m} disabled={m === 'video' && video === 'connecting'} className={cx('inline-flex items-center justify-center gap-1.5 rounded-[9px] px-2 py-1.5 text-[12.5px] font-semibold transition-colors', mode === m ? 'bg-white text-[#16183d]' : 'text-white/75 hover:bg-white/10')}>
+                  {m === 'video' && video === 'connecting' ? <Loader2 className="size-3.5 animate-spin" /> : <Icon className="size-3.5" />}{label}
+                </button>
+              ))}
             </div>
-          )}
-          {status?.video && video === 'off' && (
-            <button onClick={() => void startVideo()} className="mx-3 mt-2 inline-flex items-center justify-center gap-2 rounded-[12px] bg-[#ebeaf6] px-3 py-2 text-[13px] font-semibold text-[#16183d] hover:bg-[#dcdbf0]"><Video className="size-4" /> Talk face to face with Tara</button>
-          )}
-          <div className="flex items-center gap-1 border-b border-black/5 px-3 py-2" role="radiogroup" aria-label="Reply language">
-            {LANGS.map((l) => (
-              <button key={l.id} role="radio" aria-checked={lang === l.id} onClick={() => setLang(l.id)} className={cx('rounded-full px-2.5 py-1 text-[12.5px] font-semibold', lang === l.id ? 'bg-[#16183d] text-white' : 'text-[#16183d]/70 hover:bg-[#ebeaf6]')}>{l.label}</button>
-            ))}
-            <span className="ml-auto text-[11px] text-[#16183d]/50">{status?.chat === 'faq' ? 'Quick answers' : 'AI'}</span>
           </div>
-          <ol ref={listRef} className="flex-1 space-y-2.5 overflow-y-auto bg-[#fbfcfe] px-3 py-3" aria-live="polite" aria-label="Conversation">
-            {greeting && <li className="max-w-[88%] rounded-[16px] rounded-tl-[4px] bg-white px-3 py-2 text-[14px] text-[#16183d] shadow-sm ring-1 ring-black/5">{greeting}</li>}
+
+          <div className="flex items-center gap-1 border-b border-black/5 px-3 py-2" role="radiogroup" aria-label="Reply language">
+            <Languages className="mr-1 size-3.5 text-[#16183d]/40" aria-hidden />
+            {LANGS.map((l) => (
+              <button key={l.id} role="radio" aria-checked={lang === l.id} onClick={() => setLang(l.id)} className={cx('rounded-full px-2.5 py-1 text-[12px] font-semibold', lang === l.id ? 'bg-[#16183d] text-white' : 'text-[#16183d]/65 hover:bg-[#ebeaf6]')}>{l.label}</button>
+            ))}
+          </div>
+
+          <ol ref={listRef} className="flex-1 space-y-3 overflow-y-auto bg-[#f7f8fc] px-3 py-4" aria-live="polite" aria-label="Conversation">
+            {greeting && (
+              <li className="flex items-start gap-2"><Orb size={24} /><p className="max-w-[85%] rounded-[14px] rounded-tl-[4px] bg-white px-3 py-2 text-[14px] leading-relaxed text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5">{greeting}</p></li>
+            )}
             {msgs.map((m, i) => (
-              <li key={i} className={cx('max-w-[88%] rounded-[16px] px-3 py-2 text-[14px] leading-snug whitespace-pre-wrap', m.role === 'user' ? 'ml-auto rounded-tr-[4px] bg-[#16183d] text-white' : 'rounded-tl-[4px] bg-white text-[#16183d] shadow-sm ring-1 ring-black/5')}>
-                {m.voice && <Mic className="mr-1 inline size-3.5 opacity-70" aria-label="spoken" />}{m.content}
+              <li key={i} className={cx('flex items-start gap-2', m.role === 'user' && 'justify-end')}>
+                {m.role === 'assistant' && <Orb size={24} />}
+                <p className={cx('max-w-[85%] rounded-[14px] px-3 py-2 text-[14px] leading-relaxed whitespace-pre-wrap', m.role === 'user' ? 'rounded-tr-[4px] bg-[#16183d] text-white' : 'rounded-tl-[4px] bg-white text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5')}>
+                  {m.voice && <Mic className="mr-1 inline size-3.5 opacity-70" aria-label="spoken" />}{m.content}
+                </p>
               </li>
             ))}
-            {(phase === 'thinking' || phase === 'transcribing') && <li className="inline-flex items-center gap-2 rounded-[16px] bg-white px-3 py-2 text-[13px] text-[#16183d]/60 ring-1 ring-black/5"><Loader2 className="size-4 animate-spin" />{phase === 'transcribing' ? 'Listening back…' : 'Typing…'}</li>}
+            {(phase === 'thinking' || phase === 'transcribing') && (
+              <li className="flex items-center gap-2"><Orb size={24} phase="speaking" level={0.4} /><span className="inline-flex items-center gap-1 rounded-[14px] bg-white px-3 py-2.5 ring-1 ring-black/5" aria-label={phase === 'transcribing' ? 'Listening back' : 'Typing'}>{[0, 1, 2].map((d) => <span key={d} className="size-1.5 rounded-full bg-[#16183d]/40 motion-safe:animate-bounce" style={{ animationDelay: `${d * 140}ms` }} />)}</span></li>
+            )}
           </ol>
           {msgs.length === 0 && (
-            <div className="flex flex-wrap gap-1.5 px-3 pb-2">
-              {QUICK[style].map(([e, q]) => <button key={q} onClick={() => void send(q)} className="rounded-full bg-[#ebeaf6] px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:bg-[#dcdbf0]"><span aria-hidden>{e}</span> {q}</button>)}
+            <div className="flex flex-wrap gap-1.5 border-t border-black/5 px-3 pt-2.5">
+              {QUICK[style].map(([e, q]) => <button key={q} onClick={() => void send(q)} className="rounded-full border border-[#16183d]/12 bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:border-[#16183d]/30 hover:bg-[#f7f8fc]"><span aria-hidden>{e}</span> {q}</button>)}
             </div>
           )}
-          {notice && <p role="status" className="mx-3 mb-2 rounded-[10px] bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">{notice}</p>}
-          <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="flex items-end gap-2 border-t border-black/5 p-3">
-            <label htmlFor="tara-input" className="sr-only">Message Tara</label>
-            <textarea id="tara-input" ref={inputRef} rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={style === 'ta' ? 'உங்க கேள்வியை type பண்ணுங்க…' : style === 'tanglish' ? 'Unga question type pannunga…' : 'Type your question…'} className="max-h-28 min-h-11 flex-1 resize-none rounded-[14px] border border-black/10 px-3 py-2.5 text-[14px] outline-none focus:border-[#16183d]" />
-            {status?.voice && (
-              <button type="button" onClick={() => { if (phase === 'speaking') { stopSpeech.current(); return; } void startListening(); }} aria-label={phase === 'listening' ? 'Stop and send' : phase === 'speaking' ? 'Stop speaking' : 'Speak your question'} className={cx('grid size-11 shrink-0 place-items-center rounded-full', phase === 'listening' ? 'bg-rose-600 text-white' : 'bg-[#ebeaf6] text-[#16183d] hover:bg-[#dcdbf0]')}>
-                {phase === 'listening' ? <Square className="size-4" /> : phase === 'speaking' ? <MicOff className="size-5" /> : <Mic className="size-5" />}
-              </button>
-            )}
-            <button type="submit" aria-label="Send" disabled={!input.trim() || phase === 'thinking'} className="grid size-11 shrink-0 place-items-center rounded-full bg-[#0f9f6e] text-white disabled:opacity-40"><Send className="size-5" /></button>
+          {notice && <p role="status" className="mx-3 mt-2 rounded-[10px] bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 ring-1 ring-amber-200">{notice}</p>}
+          <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="p-3">
+            <div className="flex items-end gap-1.5 rounded-[16px] border border-black/10 bg-white p-1.5 focus-within:border-[#16183d]/40 focus-within:ring-4 focus-within:ring-[#16183d]/5">
+              <label htmlFor="tara-input" className="sr-only">Message Tara</label>
+              <textarea id="tara-input" ref={inputRef} rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={style === 'ta' ? 'உங்க கேள்வியை type பண்ணுங்க…' : style === 'tanglish' ? 'Unga question type pannunga…' : 'Ask about Tacksharp…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
+              {status?.voice && (
+                <button type="button" onClick={() => { if (phase === 'speaking') { stopSpeech.current(); return; } void startListening(); }} aria-label={phase === 'listening' ? 'Stop and send' : phase === 'speaking' ? 'Stop speaking' : 'Speak your question'} className={cx('grid size-10 shrink-0 place-items-center rounded-[12px] transition-colors', phase === 'listening' ? 'bg-rose-600 text-white' : 'text-[#16183d]/70 hover:bg-[#16183d]/5')}>
+                  {phase === 'listening' ? <Square className="size-4" /> : phase === 'speaking' ? <MicOff className="size-[18px]" /> : <Mic className="size-[18px]" />}
+                </button>
+              )}
+              <button type="submit" aria-label="Send" disabled={!input.trim() || phase === 'thinking'} className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-[#16183d] text-white transition-opacity disabled:opacity-30"><ArrowUp className="size-[18px]" /></button>
+            </div>
+            <p className="mt-2 text-center text-[11px] text-[#16183d]/45">AI assistant · please don&apos;t share personal details</p>
           </form>
-          <div className="flex items-center justify-between px-3 pb-3 text-[11.5px] text-[#16183d]/55">
-            {status?.voice ? (
-              <label className="flex items-center gap-1.5 whitespace-nowrap"><input type="checkbox" checked={handsFree} onChange={(e) => { setHandsFree(e.target.checked); if (e.target.checked && phase === 'idle') void startListening(); }} /><Headphones className="size-3.5" aria-hidden /> Talk hands-free</label>
-            ) : <span>Voice is not available right now; typing works.</span>}
-            <span className="text-right">AI assistant · from our website</span>
-          </div>
         </section>
       )}
     </>

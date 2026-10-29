@@ -64,11 +64,11 @@ with sync_playwright() as p:
         for _ in range(20):
             pg.wait_for_timeout(100)
             if pg.get_by_text('Speaking…').count():
-                rys = set(pg.evaluate("() => [...document.querySelectorAll('[role=dialog] header svg ellipse')].map(e => e.getAttribute('ry')).slice(-1)[0]") for _ in range(6))
-                mouth_moved = mouth_moved or len(rys) > 1
+                lv = set(pg.evaluate("() => document.querySelector('[role=dialog] [data-level]')?.getAttribute('data-level')") for _ in range(6))
+                mouth_moved = mouth_moved or len(lv) > 1 or any(x not in (None, '0.00') for x in lv)
         check('chat: Tanglish answer grounded in the website (plans, no invented price)', dlg.get_by_text(re.compile('Pilot, Growth, Enterprise nu')).count() == 1)
         check('voice out: the reply is spoken sentence by sentence in the Tanglish voice', len(tts_requests) >= 1 and tts_requests[0].get('style') == 'tanglish', json.dumps(tts_requests[:1])[:120])
-        check('avatar: shows "Speaking…" and its mouth follows the audio', mouth_moved)
+        check('stage: shows "Speaking…" and the waveform follows the real audio', mouth_moved)
         pg.wait_for_timeout(4000)
         pg.screenshot(path=os.path.join(SHOTS, 'assistant-chat.png'))
 
@@ -76,7 +76,7 @@ with sync_playwright() as p:
         before = len(dlg.locator('li').all())
         dlg.get_by_role('button', name='Speak your question').click()
         pg.wait_for_timeout(800)
-        check('voice in: listening state shown', pg.get_by_text('Listening…').count() == 1 or len(stt_uploads) > 0)
+        check('voice in: listening state shown', pg.get_by_text('Listening…').count() >= 1 or len(stt_uploads) > 0)
         dlg.get_by_role('button', name=re.compile('Stop and send')).click() if dlg.get_by_role('button', name=re.compile('Stop and send')).count() else None
         pg.wait_for_timeout(3500)
         up = stt_uploads[-1] if stt_uploads else b''
@@ -113,13 +113,13 @@ with sync_playwright() as p:
     pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
     pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
     dlg = pg.get_by_role('dialog', name=re.compile('Tara'))
-    check('video: "Talk face to face" offered when the presenter is configured', dlg.get_by_role('button', name=re.compile('Talk face to face')).count() == 1)
-    dlg.get_by_role('button', name=re.compile('Talk face to face')).click()
+    check('video: "Video call" offered when the presenter is configured', dlg.get_by_role('button', name=re.compile('Video call')).count() == 1)
+    dlg.get_by_role('button', name=re.compile('Video call')).click()
     for _ in range(50):
         pg.wait_for_timeout(500)
         if dlg.get_by_role('status').filter(has_text='Chat and voice still work').count(): break
     check('video: session token requested from OUR server (key stays server-side)', len(sessions) == 1)
-    check('video: provider unreachable -> clear message, back to the animated face, chat still works', dlg.get_by_role('status').filter(has_text='Chat and voice still work').count() == 1 and dlg.get_by_role('button', name=re.compile('Talk face to face')).count() == 1)
+    check('video: provider unreachable -> clear message, back to the animated face, chat still works', dlg.get_by_role('status').filter(has_text='Chat and voice still work').count() == 1 and dlg.get_by_role('button', name=re.compile('Video call'), pressed=False).count() == 1)
     ctx.close()
 
     # (b) Stand-in presenter (records what it is sent): our 16 kHz voice is streamed to it for lip-sync.
@@ -140,7 +140,7 @@ with sync_playwright() as p:
     pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
     pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
     dlg = pg.get_by_role('dialog', name=re.compile('Tara'))
-    dlg.get_by_role('button', name=re.compile('Talk face to face')).click(); pg.wait_for_timeout(1200)
+    dlg.get_by_role('button', name=re.compile('Video call')).click(); pg.wait_for_timeout(1200)
     check('video: presenter goes live with the server-issued session', pg.evaluate('window.__TARA_TOKEN__') == 'test-session-token' and dlg.get_by_label('Tara, AI video presenter').is_visible())
     dlg.get_by_role('radio', name='Tanglish').click()
     tts16.clear()
@@ -149,7 +149,7 @@ with sync_playwright() as p:
     sent = pg.evaluate('window.__TARA_SENT__')
     check('video: reply voice requested at 16 kHz for lip-sync', tts16 and all(x == 16000 for x in tts16), str(tts16))
     check('video: PCM streamed to the presenter in ~6000-byte chunks (WAV header stripped)', sum(sent) > 0 and max(sent) <= 6000 and sum(sent) == len(tts16) * (len(base64.b64decode(TTS)) - 44), f'{len(sent)} chunks, {sum(sent)} bytes')
-    check('video: back to idle after the presenter reports silence', pg.get_by_text('AI assistant · online').count() == 1)
+    check('video: back to idle after the presenter reports silence', pg.get_by_role('dialog').get_by_text('Online', exact=True).count() == 1)
     pg.screenshot(path=os.path.join(SHOTS, 'assistant-video.png'))
     dlg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(300)
     check('video: closing ends the presenter session', not pg.get_by_label('Tara, AI video presenter').count())
@@ -160,7 +160,7 @@ with sync_playwright() as p:
     ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page()
     pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1000)
     pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1200)
-    check('video: hidden when not configured on the server', pg.get_by_role('button', name=re.compile('Talk face to face')).count() == 0)
+    check('video: hidden when not configured on the server', pg.get_by_role('button', name=re.compile('Video call')).count() == 0)
     ctx.close()
 
     # Dashboard: the assistant is there for signed-in users too
