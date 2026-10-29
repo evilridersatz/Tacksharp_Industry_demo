@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Headphones, Loader2, Mic, MicOff, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
+import { Headphones, Loader2, Mic, MicOff, Send, Square, Video, VideoOff, Volume2, VolumeX, X } from 'lucide-react';
 import { ApiError, api } from '@/lib/api';
 import { cx } from './ui';
 
@@ -27,6 +27,21 @@ const QUICK: Record<Style, Array<[string, string]>> = {
 };
 const PHASE_LABEL: Record<Phase, string> = { idle: 'AI assistant · online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…' };
 const STORE = 'ts-tara-v1';
+
+type SimliLike = { start(): Promise<void>; stop(): Promise<void>; sendAudioData(d: Uint8Array): void; ClearBuffer: () => void; on(ev: string, cb: (...a: unknown[]) => void): void };
+
+/** PCM16 samples of a WAV file (the "data" chunk), for the video presenter's lip-sync. */
+export function wavPcm(bytes: Uint8Array): Uint8Array {
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let o = 12;
+  while (o + 8 <= bytes.length) {
+    const id = String.fromCharCode(bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]);
+    const size = v.getUint32(o + 4, true);
+    if (id === 'data') return bytes.subarray(o + 8, Math.min(bytes.length, o + 8 + size));
+    o += 8 + size + (size % 2);
+  }
+  return bytes.subarray(44);
+}
 
 const errText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 
@@ -122,7 +137,13 @@ export function LiveAgent() {
   const [level, setLevel] = useState(0);
   const [voiceOut, setVoiceOut] = useState(true);
   const [handsFree, setHandsFree] = useState(false);
-  const [status, setStatus] = useState<{ chat: 'ai' | 'faq'; voice: boolean; greeting: string } | null>(null);
+  const [status, setStatus] = useState<{ chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string } | null>(null);
+  /** Talking video presenter (Simli): off until the visitor starts it (it is billed per minute). */
+  const [video, setVideo] = useState<'off' | 'connecting' | 'live'>('off');
+  const videoEl = useRef<HTMLVideoElement>(null);
+  const videoAudioEl = useRef<HTMLAudioElement>(null);
+  const simli = useRef<SimliLike | null>(null);
+  const silentWaiter = useRef<(() => void) | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
   const analyser = useRef<AnalyserNode | null>(null);
@@ -150,7 +171,7 @@ export function LiveAgent() {
   }, [msgs, lang]);
   useEffect(() => {
     if (!open) return;
-    api.get<{ chat: 'ai' | 'faq'; voice: boolean; greeting: string }>(`/assistant/status?lang=${style}`).then(setStatus).catch(() => setStatus({ chat: 'faq', voice: false, greeting: '' }));
+    api.get<{ chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string }>(`/assistant/status?lang=${style}`).then(setStatus).catch(() => setStatus({ chat: 'faq', voice: false, greeting: '' }));
     setTimeout(() => inputRef.current?.focus(), 50);
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('keydown', onKey);
@@ -184,8 +205,86 @@ export function LiveAgent() {
   }, []);
   const stopMeter = () => { cancelAnimationFrame(raf.current); setLevel(0); };
 
+  /** Start the talking presenter: a short-lived session from our server, then the provider's video stream. */
+  const startVideo = useCallback(async () => {
+    if (simli.current || !videoEl.current || !videoAudioEl.current) return;
+    setVideo('connecting');
+    setNotice(null);
+    try {
+      const { sessionToken } = await api.post<{ sessionToken: string }>('/assistant/video/session');
+      // Browser tests can substitute a stand-in presenter (window.__TARA_SIMLI__); otherwise the real Simli client.
+      const testFactory = (window as unknown as { __TARA_SIMLI__?: (token: string, v: HTMLVideoElement, a: HTMLAudioElement) => SimliLike }).__TARA_SIMLI__;
+      let client: SimliLike;
+      if (testFactory) client = testFactory(sessionToken, videoEl.current, videoAudioEl.current);
+      else {
+        const { SimliClient, LogLevel } = await import('simli-client');
+        client = new SimliClient(sessionToken, videoEl.current, videoAudioEl.current, null, LogLevel.ERROR, 'livekit') as unknown as SimliLike;
+      }
+      client.on('silent', () => { silentWaiter.current?.(); silentWaiter.current = null; });
+      client.on('stop', () => { simli.current = null; setVideo('off'); });
+      client.on('error', (d) => setNotice(`Video presenter: ${String(d)}`));
+      // The SDK retries a failed connection for a long time; the visitor gets an answer within 15 s either way.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([client.start(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer from the video service')), 15_000); })]);
+      } catch (e) {
+        void client.stop().catch(() => undefined);
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+      simli.current = client;
+      setVideo('live');
+    } catch (e) {
+      simli.current = null;
+      setVideo('off');
+      setNotice(`${errText(e)}`.startsWith('The video') ? errText(e) : `The video presenter could not start (${errText(e)}). Chat and voice still work.`);
+    }
+  }, []);
+  const stopVideo = useCallback(() => {
+    const c = simli.current;
+    simli.current = null;
+    setVideo('off');
+    void c?.stop().catch(() => undefined);
+  }, []);
+
+  /** Presenter speaks: our Sarvam voice at 16 kHz is streamed to it; it renders lip-synced video and plays the audio. */
+  const speakVideo = useCallback(async (text: string, st: Style) => {
+    const client = simli.current!;
+    let cancelled = false;
+    stopSpeech.current = () => { cancelled = true; try { client.ClearBuffer(); } catch { /* ended */ } silentWaiter.current?.(); };
+    const parts = sentences(text);
+    const pcmOf = (s: string) => api.post<{ audioBase64: string }>('/assistant/tts', { text: s, style: st, sampleRate: 16000 }).then((r) => {
+      const bin = atob(r.audioBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return wavPcm(bytes);
+    });
+    setPhase('speaking');
+    let totalBytes = 0;
+    try {
+      let next = pcmOf(parts[0]);
+      for (let i = 0; i < parts.length && !cancelled; i++) {
+        const pcm = await next;
+        if (i + 1 < parts.length) next = pcmOf(parts[i + 1]);
+        if (cancelled) break;
+        for (let o = 0; o < pcm.length; o += 6000) client.sendAudioData(pcm.subarray(o, Math.min(pcm.length, o + 6000)));
+        totalBytes += pcm.length;
+      }
+      // Done when the presenter reports silence (or after the audio's length, as a fallback).
+      if (!cancelled) await new Promise<void>((resolve) => { silentWaiter.current = resolve; setTimeout(resolve, (totalBytes / 32000) * 1000 + 2500); });
+    } catch (e) {
+      setNotice(`Voice reply unavailable: ${errText(e)} The text answer is above.`);
+    } finally {
+      silentWaiter.current = null;
+      setPhase('idle');
+    }
+    return !cancelled;
+  }, []);
+
   /** Speak a reply sentence by sentence: the next sentence's audio is fetched while the current one plays. */
   const speak = useCallback(async (text: string, st: Style) => {
+    if (simli.current) return speakVideo(text, st);
     const c = ctx();
     let cancelled = false;
     stopSpeech.current = () => { cancelled = true; try { playing.current?.stop(); } catch { /* already stopped */ } };
@@ -221,7 +320,7 @@ export function LiveAgent() {
       setPhase('idle');
     }
     return !cancelled;
-  }, [meter]);
+  }, [meter, speakVideo]);
 
   const send = useCallback(async (text: string, viaVoice = false) => {
     const message = text.trim();
@@ -298,7 +397,7 @@ export function LiveAgent() {
     rec.current = { stop };
   }, [meter, send]);
 
-  useEffect(() => () => { stopSpeech.current(); rec.current?.stop(false); cancelAnimationFrame(raf.current); }, []);
+  useEffect(() => () => { stopSpeech.current(); rec.current?.stop(false); cancelAnimationFrame(raf.current); void simli.current?.stop().catch(() => undefined); }, []);
 
   const greeting = status?.greeting;
   return (
@@ -322,8 +421,24 @@ export function LiveAgent() {
             <button onClick={() => { setVoiceOut(!voiceOut); stopSpeech.current(); }} aria-pressed={voiceOut} aria-label={voiceOut ? 'Mute voice replies' : 'Turn on voice replies'} title={voiceOut ? 'Voice replies on' : 'Voice replies off'} className="grid size-10 place-items-center rounded-full hover:bg-white/10" disabled={!status?.voice}>
               {voiceOut && status?.voice ? <Volume2 className="size-5" /> : <VolumeX className="size-5" />}
             </button>
-            <button onClick={() => { stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); setOpen(false); }} aria-label="Close assistant" className="grid size-10 place-items-center rounded-full hover:bg-white/10"><X className="size-5" /></button>
+            {status?.video && (
+              <button onClick={() => (video === 'off' ? void startVideo() : stopVideo())} aria-pressed={video !== 'off'} aria-label={video === 'off' ? 'Start video presenter' : 'Stop video presenter'} title={video === 'off' ? 'Talk face to face' : 'Stop video'} disabled={video === 'connecting'} className="grid size-10 place-items-center rounded-full hover:bg-white/10">
+                {video === 'connecting' ? <Loader2 className="size-5 animate-spin" /> : video === 'live' ? <VideoOff className="size-5" /> : <Video className="size-5" />}
+              </button>
+            )}
+            <button onClick={() => { stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); stopVideo(); setOpen(false); }} aria-label="Close assistant" className="grid size-10 place-items-center rounded-full hover:bg-white/10"><X className="size-5" /></button>
           </header>
+          {status?.video && (
+            <div className={cx('relative bg-[#0b0d26]', video === 'off' ? 'hidden' : 'block')}>
+              <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-[4/3] w-full object-cover" aria-label="Tara, AI video presenter" />
+              <audio ref={videoAudioEl} autoPlay />
+              {video === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting the video presenter…</span></p>}
+              <span className="absolute top-2 left-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] font-semibold text-white">AI presenter · our voice</span>
+            </div>
+          )}
+          {status?.video && video === 'off' && (
+            <button onClick={() => void startVideo()} className="mx-3 mt-2 inline-flex items-center justify-center gap-2 rounded-[12px] bg-[#ebeaf6] px-3 py-2 text-[13px] font-semibold text-[#16183d] hover:bg-[#dcdbf0]"><Video className="size-4" /> Talk face to face with Tara</button>
+          )}
           <div className="flex items-center gap-1 border-b border-black/5 px-3 py-2" role="radiogroup" aria-label="Reply language">
             {LANGS.map((l) => (
               <button key={l.id} role="radio" aria-checked={lang === l.id} onClick={() => setLang(l.id)} className={cx('rounded-full px-2.5 py-1 text-[12.5px] font-semibold', lang === l.id ? 'bg-[#16183d] text-white' : 'text-[#16183d]/70 hover:bg-[#ebeaf6]')}>{l.label}</button>

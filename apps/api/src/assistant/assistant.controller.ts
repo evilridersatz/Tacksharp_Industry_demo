@@ -35,7 +35,15 @@ export class AssistantController {
   @Public()
   @Post('tts')
   @HttpCode(200)
-  tts(@Body() body: { text?: unknown; style?: unknown }) {
+  tts(@Body() body: { text?: unknown; style?: unknown; sampleRate?: unknown }) {
     return this.svc.textToSpeech(body ?? {});
+  }
+
+  /** Talking video presenter: a short-lived session token (the provider key stays on the server). */
+  @Public()
+  @Post('video/session')
+  @HttpCode(200)
+  videoSession() {
+    return this.svc.videoSession();
   }
 }

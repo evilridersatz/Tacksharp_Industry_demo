@@ -60,6 +60,8 @@ export class AssistantService {
     return {
       chat: Boolean(process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL) ? 'ai' : 'faq',
       voice: Boolean(config.sarvam.apiKey),
+      // Talking video presenter (Simli): needs its key + a face, and our own voice (Sarvam) to drive the lip-sync.
+      video: Boolean(process.env.SIMLI_API_KEY && process.env.SIMLI_FACE_ID && config.sarvam.apiKey),
       languages: ['ta', 'en', 'tanglish'],
     };
   }
@@ -147,17 +149,54 @@ export class AssistantService {
   }
 
   /**
+   * A short-lived Simli session token for the talking video presenter. The Simli API key never leaves the server;
+   * sessions are capped (length and idle time) because video is billed per minute.
+   */
+  async videoSession() {
+    const apiKey = process.env.SIMLI_API_KEY ?? '';
+    const faceId = process.env.SIMLI_FACE_ID ?? '';
+    if (!apiKey || !faceId) throw new ServiceUnavailableException('The video presenter is not set up. Chat and voice still work.');
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await this.fetchImpl('https://api.simli.ai/compose/token', {
+        method: 'POST',
+        headers: { 'x-simli-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          faceId,
+          handleSilence: true,
+          maxSessionLength: Number(process.env.SIMLI_MAX_SESSION_SECONDS) || 600,
+          maxIdleTime: Number(process.env.SIMLI_MAX_IDLE_SECONDS) || 90,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (e) {
+      log.warn('assistant.video_unreachable', { error: errorMessage(e) });
+      throw new ServiceUnavailableException('The video presenter is not reachable right now. Chat and voice still work.');
+    }
+    const j = (await res.json().catch(() => ({}))) as { session_token?: string; detail?: unknown };
+    if (!res.ok || !j.session_token) {
+      log.warn('assistant.video_refused', { status: res.status, ms: Date.now() - started });
+      throw new ServiceUnavailableException('The video presenter could not start. Chat and voice still work.');
+    }
+    log.info('assistant.video_session', { ms: Date.now() - started });
+    return { sessionToken: j.session_token };
+  }
+
+  /**
    * Text -> natural speech (Sarvam). Tamil and Tanglish use a Tamil voice (it reads mixed English naturally), English
    * an Indian-English voice. Short sentences are synthesised separately by the browser for a fast first word.
    */
-  async textToSpeech(body: { text?: unknown; style?: unknown }) {
+  async textToSpeech(body: { text?: unknown; style?: unknown; sampleRate?: unknown }) {
     if (!config.sarvam.apiKey) throw new ServiceUnavailableException('Voice replies are not available right now.');
     const text = forSpeech(typeof body?.text === 'string' ? body.text : '').slice(0, 500);
     if (!text) throw new BadRequestException('Nothing to say.');
     const style = ['ta', 'en', 'tanglish'].includes(String(body?.style)) ? (body.style as Style) : detectStyle(text);
     const language = style === 'en' && !/[஀-௿]/.test(text) ? 'en-IN' : 'ta-IN';
     const speaker = process.env.ASSISTANT_TTS_SPEAKER || config.sarvam.ttsSpeaker;
-    const key = createHash('sha1').update(`${language}|${speaker}|${config.sarvam.ttsModel}|${text}`).digest('hex');
+    // 16 kHz drives the video presenter's lip-sync (PCM16 16 kHz mono); 22.05 kHz otherwise.
+    const rate = Number(body?.sampleRate) === 16000 ? 16000 : 22050;
+    const key = createHash('sha1').update(`${language}|${speaker}|${config.sarvam.ttsModel}|${rate}|${text}`).digest('hex');
     const hit = this.ttsCache.get(key);
     if (hit) return { audioBase64: hit, cached: true, language };
     const started = Date.now();
@@ -166,7 +205,7 @@ export class AssistantService {
       res = await this.fetchImpl('https://api.sarvam.ai/text-to-speech', {
         method: 'POST',
         headers: { 'api-subscription-key': config.sarvam.apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model: config.sarvam.ttsModel, speaker, language_code: language, pace: Number(process.env.ASSISTANT_TTS_PACE) || 1.05, speech_sample_rate: 22050, output_audio_codec: 'wav' }),
+        body: JSON.stringify({ text, model: config.sarvam.ttsModel, speaker, language_code: language, pace: Number(process.env.ASSISTANT_TTS_PACE) || 1.05, speech_sample_rate: rate, output_audio_codec: 'wav' }),
         signal: AbortSignal.timeout(config.sarvam.ttsTimeoutMs * 2),
       });
     } catch (e) {

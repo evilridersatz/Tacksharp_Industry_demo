@@ -61,6 +61,8 @@ export const config = {
     providerTestsPer10Min: num('RATE_LIMIT_PROVIDER_TESTS', 20),
     /** Website assistant requests (chat + speech) per IP per minute. */
     assistantPerMinute: num('RATE_LIMIT_ASSISTANT_PER_MIN', 40),
+    /** Video presenter sessions per IP per 10 minutes (each is billed per minute by the provider). */
+    assistantVideoPer10Min: num('RATE_LIMIT_ASSISTANT_VIDEO_PER_10MIN', 4),
   },
 
   /**

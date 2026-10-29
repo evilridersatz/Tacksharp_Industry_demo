@@ -20,6 +20,8 @@ export function createRateLimiter(now: () => number = Date.now) {
 
   function rule(path: string): { name: string; limit: number; windowMs: number } {
     // Website assistant (public): each reply may call OpenAI and Sarvam on the platform's account.
+    // Video presenter sessions are billed per minute: a few per visitor per 10 minutes.
+    if (path === '/assistant/video/session') return { name: 'assistant_video', limit: config.rateLimit.assistantVideoPer10Min, windowMs: 10 * 60_000 };
     if (path.startsWith('/assistant/') && path !== '/assistant/status') return { name: 'assistant', limit: config.rateLimit.assistantPerMinute, windowMs: 60_000 };
     if (path === '/auth/signup' || path === '/auth/forgot-password') return { name: 'signup', limit: config.rateLimit.signupPerHour, windowMs: 60 * 60_000 };
     if (/^\/integrations\/[a-z]+\/test/.test(path)) return { name: 'provider_test', limit: config.rateLimit.providerTestsPer10Min, windowMs: 10 * 60_000 };

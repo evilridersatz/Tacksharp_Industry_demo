@@ -95,6 +95,74 @@ with sync_playwright() as p:
         check('no page errors (desktop)', not errs, '; '.join(errs)[:200])
         ctx.close()
 
+    # ---------------------------------------------------------------- video presenter (Simli)
+    sessions = []
+    def vstatus(route):
+        r = route.fetch(); body = r.json(); body['voice'] = True; body['video'] = True
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(body))
+    def vsession(route):
+        sessions.append(1); route.fulfill(status=200, content_type='application/json', body=json.dumps({'sessionToken': 'test-session-token'}))
+    tts16 = []
+    def vtts(route):
+        d = json.loads(route.request.post_data or '{}'); tts16.append(d.get('sampleRate'))
+        route.fulfill(status=200, content_type='application/json', body=json.dumps({'audioBase64': TTS, 'cached': False, 'language': 'ta-IN'}))
+
+    # (a) Real Simli client with no route to Simli: the visitor gets a clear message and chat keeps working.
+    ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page(); errs = []; pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.route('**/assistant/status*', vstatus); pg.route('**/assistant/video/session', vsession); pg.route('**/assistant/tts', vtts)
+    pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
+    pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
+    dlg = pg.get_by_role('dialog', name=re.compile('Tara'))
+    check('video: "Talk face to face" offered when the presenter is configured', dlg.get_by_role('button', name=re.compile('Talk face to face')).count() == 1)
+    dlg.get_by_role('button', name=re.compile('Talk face to face')).click()
+    for _ in range(50):
+        pg.wait_for_timeout(500)
+        if dlg.get_by_role('status').filter(has_text='Chat and voice still work').count(): break
+    check('video: session token requested from OUR server (key stays server-side)', len(sessions) == 1)
+    check('video: provider unreachable -> clear message, back to the animated face, chat still works', dlg.get_by_role('status').filter(has_text='Chat and voice still work').count() == 1 and dlg.get_by_role('button', name=re.compile('Talk face to face')).count() == 1)
+    ctx.close()
+
+    # (b) Stand-in presenter (records what it is sent): our 16 kHz voice is streamed to it for lip-sync.
+    ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page(); errs = []; pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.add_init_script('''
+      window.__TARA_SENT__ = [];
+      window.__TARA_SIMLI__ = (token, video, audio) => {
+        const handlers = {};
+        return {
+          on: (ev, cb) => { handlers[ev] = cb; },
+          start: async () => { window.__TARA_TOKEN__ = token; const c = document.createElement('canvas'); c.width = 64; c.height = 48; const g = c.getContext('2d'); g.fillStyle = '#3b3f86'; g.fillRect(0, 0, 64, 48); video.srcObject = c.captureStream(5); },
+          stop: async () => { handlers.stop && handlers.stop(); },
+          sendAudioData: (d) => { window.__TARA_SENT__.push(d.length); clearTimeout(window.__TARA_T__); window.__TARA_T__ = setTimeout(() => handlers.silent && handlers.silent(), 300); },
+          ClearBuffer: () => { window.__TARA_CLEARED__ = true; },
+        };
+      };''')
+    pg.route('**/assistant/status*', vstatus); pg.route('**/assistant/video/session', vsession); pg.route('**/assistant/tts', vtts)
+    pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
+    pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
+    dlg = pg.get_by_role('dialog', name=re.compile('Tara'))
+    dlg.get_by_role('button', name=re.compile('Talk face to face')).click(); pg.wait_for_timeout(1200)
+    check('video: presenter goes live with the server-issued session', pg.evaluate('window.__TARA_TOKEN__') == 'test-session-token' and dlg.get_by_label('Tara, AI video presenter').is_visible())
+    dlg.get_by_role('radio', name='Tanglish').click()
+    tts16.clear()
+    dlg.get_by_label('Message Tara').fill('Price evlo?'); dlg.get_by_role('button', name='Send').click()
+    pg.wait_for_timeout(4000)
+    sent = pg.evaluate('window.__TARA_SENT__')
+    check('video: reply voice requested at 16 kHz for lip-sync', tts16 and all(x == 16000 for x in tts16), str(tts16))
+    check('video: PCM streamed to the presenter in ~6000-byte chunks (WAV header stripped)', sum(sent) > 0 and max(sent) <= 6000 and sum(sent) == len(tts16) * (len(base64.b64decode(TTS)) - 44), f'{len(sent)} chunks, {sum(sent)} bytes')
+    check('video: back to idle after the presenter reports silence', pg.get_by_text('AI assistant · online').count() == 1)
+    pg.screenshot(path=os.path.join(SHOTS, 'assistant-video.png'))
+    dlg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(300)
+    check('video: closing ends the presenter session', not pg.get_by_label('Tara, AI video presenter').count())
+    check('video: no page errors', not errs, '; '.join(errs)[:200])
+    ctx.close()
+
+    # (c) Without the presenter configured, no video button appears (real status from the API).
+    ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page()
+    pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1000)
+    pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1200)
+    check('video: hidden when not configured on the server', pg.get_by_role('button', name=re.compile('Talk face to face')).count() == 0)
+    ctx.close()
+
     # Dashboard: the assistant is there for signed-in users too
     ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page()
     pg.goto(WEB + '/login'); pg.get_by_label('Email').fill('owner@tacksharp.test'); pg.get_by_label('Password', exact=True).fill('correct-horse-battery')

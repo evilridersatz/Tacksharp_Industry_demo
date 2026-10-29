@@ -60,3 +60,23 @@ Optional settings:
 - `ASSISTANT_TTS_SPEAKER` (default: the call voice)
 - `ASSISTANT_TTS_PACE` (default 1.05)
 - `RATE_LIMIT_ASSISTANT_PER_MIN` (default 40 per visitor IP)
+
+## Tara's talking video presenter (Simli)
+
+Visitors can press **Talk face to face with Tara**. A Simli presenter (a stock AI presenter, labelled as such) then
+speaks every answer with lip-sync. The voice is still **ours**: our Sarvam Tamil and English voice is streamed to the
+presenter at 16 kHz, so Tamil and Tanglish sound the same as on calls.
+
+1. Create a Simli account and choose a stock presenter face. Copy its **face ID** and your **API key**.
+2. Set these on the API server (the key never reaches the browser; the server issues short-lived session tokens):
+   ```
+   SIMLI_API_KEY=<your Simli API key>
+   SIMLI_FACE_ID=<the stock presenter's face id>
+   SIMLI_MAX_SESSION_SECONDS=600
+   SIMLI_MAX_IDLE_SECONDS=90
+   RATE_LIMIT_ASSISTANT_VIDEO_PER_10MIN=4
+   ```
+   - Video is billed per minute, which is why sessions are capped.
+   - Video starts only when the visitor presses the button, and stops when they close Tara.
+3. Video also needs `SARVAM_API_KEY`, because it uses our voice. Without Simli the button is hidden. If Simli cannot
+   connect within 15 s, the visitor sees a message and Tara carries on with the animated face and voice.

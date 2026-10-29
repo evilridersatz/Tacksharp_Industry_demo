@@ -85,3 +85,42 @@ describe('assistant voice (Sarvam mocked)', () => {
     await expect(new AssistantService().textToSpeech({ text: 'hi' })).rejects.toMatchObject({ status: 503 });
   });
 });
+
+describe('video presenter session (Simli mocked)', () => {
+  const env = { key: process.env.SIMLI_API_KEY, face: process.env.SIMLI_FACE_ID };
+  afterEach(() => {
+    if (env.key === undefined) delete process.env.SIMLI_API_KEY; else process.env.SIMLI_API_KEY = env.key;
+    if (env.face === undefined) delete process.env.SIMLI_FACE_ID; else process.env.SIMLI_FACE_ID = env.face;
+  });
+  it('creates a capped session with the server-side key and returns only the token', async () => {
+    process.env.SIMLI_API_KEY = 'simli-secret-key'; process.env.SIMLI_FACE_ID = 'face-123';
+    const s = new AssistantService();
+    let call: { url: string; headers: Record<string, string>; body: any } | undefined;
+    s.fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      call = { url, headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) };
+      return new Response(JSON.stringify({ session_token: 'tok-abc', warnings: [] }), { status: 200 });
+    });
+    const r = await s.videoSession();
+    expect(r).toEqual({ sessionToken: 'tok-abc' });
+    expect(JSON.stringify(r)).not.toContain('simli-secret-key');
+    expect(call!.url).toBe('https://api.simli.ai/compose/token');
+    expect(call!.headers['x-simli-api-key']).toBe('simli-secret-key');
+    expect(call!.body).toMatchObject({ faceId: 'face-123', handleSilence: true, maxSessionLength: 600, maxIdleTime: 90 });
+  });
+  it('is unavailable (503) without a key or face, and when Simli refuses', async () => {
+    delete process.env.SIMLI_API_KEY;
+    await expect(new AssistantService().videoSession()).rejects.toMatchObject({ status: 503 });
+    process.env.SIMLI_API_KEY = 'k'; process.env.SIMLI_FACE_ID = 'f';
+    const s = new AssistantService();
+    s.fetchImpl = vi.fn(async () => new Response(JSON.stringify({ detail: 'bad face' }), { status: 400 }));
+    await expect(s.videoSession()).rejects.toMatchObject({ status: 503 });
+  });
+  it('voice for the presenter is synthesised at 16 kHz', async () => {
+    config.sarvam.apiKey = 'sv-test';
+    const s = new AssistantService();
+    let rate = 0;
+    s.fetchImpl = vi.fn(async (_u: string, init?: RequestInit) => { rate = JSON.parse(String(init?.body)).speech_sample_rate; return new Response(JSON.stringify({ audios: [wav(100)] }), { status: 200 }); });
+    await s.textToSpeech({ text: 'Vanakkam', sampleRate: 16000 });
+    expect(rate).toBe(16000);
+  });
+});
