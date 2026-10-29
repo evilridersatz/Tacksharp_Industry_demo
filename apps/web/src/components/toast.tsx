@@ -33,7 +33,7 @@ export function Toaster() {
     };
   }, []);
   return (
-    <div aria-live="polite" className="pointer-events-none fixed right-4 bottom-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2">
+    <div aria-live="polite" className="pointer-events-none fixed top-4 right-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2">
       {list.map((t) => (
         <div key={t.id} role={t.tone === 'error' ? 'alert' : 'status'} className={cx('pointer-events-auto flex items-start gap-2 rounded-[12px] border px-3.5 py-3 text-[13px] shadow-lg motion-safe:animate-[toast-in_.18s_ease-out]', t.tone === 'ok' ? 'border-emerald-200 bg-white text-ink' : 'border-rose-200 bg-white text-ink')}>
           {t.tone === 'ok' ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden /> : <XCircle className="mt-0.5 size-4 shrink-0 text-rose-600" aria-hidden />}

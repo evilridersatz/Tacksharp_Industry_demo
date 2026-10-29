@@ -34,6 +34,7 @@ import { DemoSessionsModule } from './demo-sessions/demo-sessions.module.js';
 import { TeamModule } from './team/team.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
 import { PlatformModule } from './platform/platform.module.js';
+import { AssistantModule } from './assistant/assistant.module.js';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { PlatformModule } from './platform/platform.module.js';
     DemoSessionsModule,
     TeamModule,
     PlatformModule,
+    AssistantModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

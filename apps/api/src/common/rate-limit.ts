@@ -19,6 +19,8 @@ export function createRateLimiter(now: () => number = Date.now) {
   sweep.unref();
 
   function rule(path: string): { name: string; limit: number; windowMs: number } {
+    // Website assistant (public): each reply may call OpenAI and Sarvam on the platform's account.
+    if (path.startsWith('/assistant/') && path !== '/assistant/status') return { name: 'assistant', limit: config.rateLimit.assistantPerMinute, windowMs: 60_000 };
     if (path === '/auth/signup' || path === '/auth/forgot-password') return { name: 'signup', limit: config.rateLimit.signupPerHour, windowMs: 60 * 60_000 };
     if (/^\/integrations\/[a-z]+\/test/.test(path)) return { name: 'provider_test', limit: config.rateLimit.providerTestsPer10Min, windowMs: 10 * 60_000 };
     if (path.startsWith('/auth/login') || path.startsWith('/team/links/')) return { name: 'login', limit: config.rateLimit.loginPerWindow, windowMs: 5 * 60_000 };

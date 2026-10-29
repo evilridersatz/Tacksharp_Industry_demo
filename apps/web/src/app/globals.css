@@ -67,3 +67,14 @@ body {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: none; }
 }
+
+/* Tara's eyes blink every few seconds (disabled with reduced motion by the rule above). */
+@keyframes tara-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+.tara-blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tara-blink 4.2s infinite;
+}

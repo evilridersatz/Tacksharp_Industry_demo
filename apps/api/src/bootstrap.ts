@@ -10,6 +10,9 @@ export function configureApp(app: NestExpressApplication) {
   app.set('trust proxy', process.env.TRUST_PROXY ?? 'loopback');
   app.disable('x-powered-by');
   app.use(createRateLimiter());
+  // Voice uploads (assistant speech-to-text, Sarvam recognition tests) send up to ~2 MB of base64 WAV. Still bounded;
+  // every route validates its own sizes. (rawBody for webhook signatures is kept by Nest's body parser.)
+  app.useBodyParser('json', { limit: '3mb' });
   app.enableCors({
     origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3001').split(','),
     credentials: true,

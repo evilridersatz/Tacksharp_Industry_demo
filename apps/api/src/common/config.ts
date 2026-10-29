@@ -59,6 +59,8 @@ export const config = {
     signupPerHour: num('RATE_LIMIT_SIGNUP_PER_HOUR', 5),
     /** Provider connection tests / test calls per IP per 10 minutes (each may cost money at the provider). */
     providerTestsPer10Min: num('RATE_LIMIT_PROVIDER_TESTS', 20),
+    /** Website assistant requests (chat + speech) per IP per minute. */
+    assistantPerMinute: num('RATE_LIMIT_ASSISTANT_PER_MIN', 40),
   },
 
   /**

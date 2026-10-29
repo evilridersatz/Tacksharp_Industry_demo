@@ -1,6 +1,7 @@
 'use client';
 
 import { Toaster } from './toast';
+import { LiveAgent } from './live-agent';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -276,8 +277,10 @@ export const isPublicRoute = (p: string) => PUBLIC_ROUTES.some((r) => p === r ||
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster /></>;
-  return <><Shell>{children}</Shell><Toaster /></>;
+  // Tara (the AI assistant) is on the website and in the dashboard; not on the one-time invitation page.
+  const agent = pathname === '/invite' ? null : <LiveAgent />;
+  if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster />{agent}</>;
+  return <><Shell>{children}</Shell><Toaster />{agent}</>;
 }
 
 /** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */
