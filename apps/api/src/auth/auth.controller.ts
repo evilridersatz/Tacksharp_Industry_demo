@@ -26,6 +26,31 @@ export class AuthController {
     return { user: result.user, token: result.token };
   }
 
+  /** Self-service registration: creates the organization + its first admin (pending review) and signs them in. */
+  @Public()
+  @Post('signup')
+  @HttpCode(201)
+  async signup(@Body() body: Record<string, unknown>, @Res({ passthrough: true }) res: Response) {
+    const r = await this.auth.signup(body);
+    res.cookie(SESSION_COOKIE, r.token, { httpOnly: true, sameSite: 'lax', secure: config.isProduction, path: '/', maxAge: r.maxAgeSec * 1000 });
+    return { user: r.user, organization: r.organization };
+  }
+
+  /** Records a reset request for the admins (no email provider); same answer whether or not the email exists. */
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(200)
+  forgotPassword(@Body() body: { email?: unknown }) {
+    return this.auth.forgotPassword(body?.email);
+  }
+
+  /** Whether public registration is open (the signup page asks before showing the form). */
+  @Public()
+  @Get('signup-status')
+  signupStatus() {
+    return { enabled: config.signup.enabled, emailVerification: 'not_configured', activation: 'platform_review' };
+  }
+
   @Public()
   @Post('logout')
   @HttpCode(200)

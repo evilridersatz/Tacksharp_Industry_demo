@@ -30,7 +30,9 @@
     "seed:industry-demos": "tsx scripts/seed-industry-demos.ts",
     "check:config": "tsx scripts/check-config.ts",
     "verify:restaurant": "tsx scripts/verify-restaurant.ts",
-    "test:restaurant": "vitest run src/restaurant src/voice src/whatsapp src/common test/restaurant.integration.spec.ts test/restaurant-followups.integration.spec.ts test/restaurant-voice.integration.spec.ts test/restaurant-inventory.integration.spec.ts test/mvp-inventory-conversation.integration.spec.ts test/whatsapp-inbound.integration.spec.ts src/workers"
+    "test:restaurant": "vitest run src/restaurant src/voice src/whatsapp src/common test/restaurant.integration.spec.ts test/restaurant-followups.integration.spec.ts test/restaurant-voice.integration.spec.ts test/restaurant-inventory.integration.spec.ts test/mvp-inventory-conversation.integration.spec.ts test/whatsapp-inbound.integration.spec.ts src/workers",
+    "platform:admin": "tsx scripts/platform-admin.ts",
+    "credentials:rotate": "tsx scripts/rotate-credentials.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sns": "^3.1149.0",

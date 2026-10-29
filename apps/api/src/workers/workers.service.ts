@@ -1,4 +1,5 @@
 import { Injectable, Optional, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
+import { runInProviderScope } from '../integrations/provider-scope.js';
 import { UnrecoverableError, Worker } from 'bullmq';
 import { config } from '../common/config.js';
 import { errorMessage, log } from '../common/logger.js';
@@ -59,7 +60,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
 
     const whatsappWorker = new Worker<WhatsAppMessageJobData>(
       WHATSAPP_QUEUE,
-      (job) => this.whatsapp.process(job),
+      (job) => runInProviderScope(job.data.organizationId, () => this.whatsapp.process(job)),
       // Rate limit: never more than 20 reply jobs a second towards Meta, even when a backlog drains after an outage.
       // lockDuration > the longest AI turn (45 s): BullMQ must not think a working job "stalled" and hand it to a
       // second worker (one of the duplicate-reply causes). The database claim is the final guard either way.
@@ -68,7 +69,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
 
     const followUpWorker = new Worker<FollowUpJobData>(
       FOLLOW_UP_QUEUE,
-      (job) => this.followUps.process(job.data.followUpId),
+      (job) => runInProviderScope(undefined, () => this.followUps.process(job.data.followUpId)),
       { connection: createRedisConnection('worker-followup'), concurrency: 5 },
     );
 
@@ -93,7 +94,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // itself marks the row failed after its max attempts and never sends a message twice.
     const orderFollowUpWorker = new Worker<OrderFollowUpJobData>(
       ORDER_FOLLOW_UP_QUEUE,
-      (job) => this.orderFollowUps.process(job.data.followUpId),
+      (job) => runInProviderScope(undefined, () => this.orderFollowUps.process(job.data.followUpId)),
       { connection: createRedisConnection('worker-order-followup'), concurrency: 5, limiter: { max: 10, duration: 1000 } },
     );
     orderFollowUpWorker.on('failed', (job, error) => log.warn('worker.order_followup_retry', { jobId: job?.id, attempts: job?.attemptsMade, dependency: dependencyOf(error), error: describeError(error) }));
@@ -101,7 +102,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // AI agent tasks: the task row decides (status / attempts / retry time); a job only triggers a run.
     const agentWorker = new Worker<AgentTaskJobData>(
       AGENT_QUEUE,
-      (job) => this.orchestrator.run(job.data.organizationId, job.data.taskId),
+      (job) => runInProviderScope(job.data.organizationId, () => this.orchestrator.run(job.data.organizationId, job.data.taskId)),
       { connection: createRedisConnection('worker-agent'), concurrency: 5 },
     );
     agentWorker.on('failed', (job, error) => log.error('worker.agent_failed', { jobId: job?.id, taskId: job?.data.taskId, error: errorMessage(error) }));
@@ -109,7 +110,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // Approved marketing campaigns: one recipient per job, rate-limited well under Meta's messaging throughput.
     const marketingWorker = new Worker<CampaignJobData>(
       MARKETING_QUEUE,
-      (job) => this.marketing.processRecipient(job.data),
+      (job) => runInProviderScope(undefined, () => this.marketing.processRecipient(job.data)),
       { connection: createRedisConnection('worker-marketing'), concurrency: 2, limiter: { max: 10, duration: 1000 } },
     );
     marketingWorker.on('failed', (job, error) => log.error('worker.marketing_failed', { jobId: job?.id, campaignId: job?.data.campaignId, error: errorMessage(error) }));

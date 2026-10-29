@@ -1,4 +1,5 @@
 import { Agent, Runner } from '@openai/agents';
+import { openaiRunner } from '../integrations/openai-runner.js';
 import { configureClient, modelSettings } from 'ai/agents/real-estate-agent.js';
 import { llmConfigured } from 'ai/agents/restaurant-agent.js';
 import { errorMessage, log } from '../common/logger.js';
@@ -113,10 +114,12 @@ export const openAiCopyGenerator: CopyGenerator = async (req, sheet) => {
     ].join('\n'),
     tools: [],
   });
-  const runner = new Runner();
-  const result = await runner.run(agent, `${KIND_RULE[req.kind]}\n${LANG_RULE[req.language]}\n\n${sheet}`, { maxTurns: 1, signal: AbortSignal.timeout(30_000) });
+  // The organization's own OpenAI key and model when configured, else the deployment's default.
+  const acct = await openaiRunner();
+  if (!acct.runner) throw new Error(`OpenAI is not configured for this organization (${acct.reason ?? 'no key'})`);
+  const result = await acct.runner.run(agent, `${KIND_RULE[req.kind]}\n${LANG_RULE[req.language]}\n\n${sheet}`, { maxTurns: 1, signal: AbortSignal.timeout(30_000) });
   const usage = result.runContext?.usage;
-  return { text: String(result.finalOutput ?? '').trim(), model: process.env.OPENAI_MODEL || 'gpt-5.4-mini', inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens };
+  return { text: String(result.finalOutput ?? '').trim(), model: acct.model ?? (process.env.OPENAI_MODEL || 'gpt-5.4-mini'), inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens };
 };
 
 /**

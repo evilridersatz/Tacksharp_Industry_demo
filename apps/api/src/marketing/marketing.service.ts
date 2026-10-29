@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { bindOrganization } from '../integrations/provider-scope.js';
 import { Prisma } from '@prisma/client';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -581,6 +582,7 @@ export class MarketingService {
   async processRecipient(job: CampaignJobData): Promise<string> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { id: job.recipientId }, include: { customer: true, campaign: true } });
     if (!r || r.campaignId !== job.campaignId) return 'missing';
+    bindOrganization(r.campaign.organizationId);
     const c = r.campaign;
     if (r.status !== 'queued') return `already_${r.status}`;
     if (c.status === 'paused') return 'paused';

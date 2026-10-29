@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { UnrecoverableError } from 'bullmq';
+import { providerCredentials } from '../integrations/provider-scope.js';
 import { config } from '../common/config.js';
 import { log } from '../common/logger.js';
 import { describeError, isAmbiguousNetworkFailure, isConnectFailure } from '../common/errors.js';
@@ -56,8 +57,16 @@ export class WhatsAppPermanentError extends UnrecoverableError {
  */
 @Injectable()
 export class WhatsAppSenderService {
-  private get url() {
-    return `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/messages`;
+  /**
+   * The WhatsApp account serving the current organization (provider scope): its own saved, tested, enabled number, or
+   * the deployment's environment number for pre-existing organizations. A self-service organization without its own
+   * number gets nothing (never the platform's number).
+   */
+  private async account() {
+    const wa = await providerCredentials('whatsapp');
+    if (wa.source === 'none') throw new WhatsAppPermanentError(`WhatsApp not configured for this organization: ${wa.reason ?? 'no account'}`, 0);
+    const own = wa.source === 'organization';
+    return { token: own ? wa.secrets.accessToken : config.whatsapp.accessToken, phoneNumberId: own ? wa.config.phoneNumberId : config.whatsapp.phoneNumberId, source: wa.source };
   }
 
   /** Template for a follow-up step: its own approved template, else the shared one. */
@@ -73,16 +82,17 @@ export class WhatsAppSenderService {
     if (process.env.DRY_RUN !== 'false') {
       throw new WhatsAppPermanentError('DRY_RUN is on: WhatsApp provider request blocked', 0);
     }
-    if (!config.whatsapp.accessToken || !config.whatsapp.phoneNumberId) {
+    const acct = await this.account();
+    if (!acct.token || !acct.phoneNumberId) {
       // Configuration, not a network problem: retrying in a few seconds cannot fix it.
       throw new WhatsAppPermanentError('WhatsApp not configured: WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID missing', 0);
     }
     let response: Response;
     try {
-      response = await (this.fetchImpl ?? fetch)(this.url, {
+      response = await (this.fetchImpl ?? fetch)(`https://graph.facebook.com/${config.whatsapp.apiVersion}/${acct.phoneNumberId}/messages`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${config.whatsapp.accessToken}`,
+          Authorization: `Bearer ${acct.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', ...body }),
@@ -194,14 +204,15 @@ export class WhatsAppSenderService {
 
   /** Downloads an incoming media file (voice note) from Meta. */
   async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    const { token } = await this.account();
     const meta = await fetch(`https://graph.facebook.com/${config.whatsapp.apiVersion}/${mediaId}`, {
-      headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
+      headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10_000),
     });
     if (!meta.ok) throw new Error(`WhatsApp media lookup ${meta.status}`);
     const info = (await meta.json()) as { url: string; mime_type?: string };
     const file = await fetch(info.url, {
-      headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
+      headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(20_000),
     });
     if (!file.ok) throw new Error(`WhatsApp media download ${file.status}`);

@@ -19,6 +19,8 @@ export function createRateLimiter(now: () => number = Date.now) {
   sweep.unref();
 
   function rule(path: string): { name: string; limit: number; windowMs: number } {
+    if (path === '/auth/signup' || path === '/auth/forgot-password') return { name: 'signup', limit: config.rateLimit.signupPerHour, windowMs: 60 * 60_000 };
+    if (/^\/integrations\/[a-z]+\/test/.test(path)) return { name: 'provider_test', limit: config.rateLimit.providerTestsPer10Min, windowMs: 10 * 60_000 };
     if (path.startsWith('/auth/login') || path.startsWith('/team/links/')) return { name: 'login', limit: config.rateLimit.loginPerWindow, windowMs: 5 * 60_000 };
     if (path.startsWith('/webhooks/') || /^\/voice\/(answer|inbound|turn|hangup|audio\/|ready\/|feedback\/)/.test(path)) {
       return { name: 'webhook', limit: config.rateLimit.webhookPerMinute, windowMs: 60_000 };

@@ -13,8 +13,22 @@ model Organization {
   vertical     String         @default("real_estate")
   /// A demonstration workspace with synthetic data only (seeded). Never a real business; real messages are never sent.
   isDemo       Boolean        @default(false)
+  /// active | pending_review | suspended. Self-registered organizations start as pending_review until a platform
+  /// admin activates them (no email provider is configured, so activation is the verification step).
+  status       String         @default("active")
+  /// Created through public self-service signup (never a demo, never inherits the platform's provider accounts).
+  selfServe    Boolean        @default(false)
+  activatedAt  DateTime?
+  suspendedAt  DateTime?
+  suspendedReason String?
+  /// Industries this organization may switch to in Settings (null = all). Set by a platform admin.
+  allowedIndustries Json?
+  /// Business phone given at signup (contact only; never used for routing).
+  contactPhone String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  integrationCredentials IntegrationCredential[]
+  integrationEvents      IntegrationEvent[]
   calls        Call[]
   customers    Customer[]
   users        User[]
@@ -366,6 +380,10 @@ model User {
   disabledAt     DateTime?
   /// Sessions issued before this moment are refused (password reset, removal, role change).
   sessionsRevokedAt DateTime?
+  /// Platform superadmin (Tacksharp staff). Never set by signup or by an organization admin: only by the
+  /// `npm run platform:admin` script on the server. Checked from the database on every platform request.
+  isPlatformAdmin Boolean     @default(false)
+  emailVerifiedAt DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -2227,4 +2245,62 @@ model UserInvitation {
 
   @@index([organizationId, createdAt])
   @@index([email])
+}
+
+/// Provider credentials for one organization (plivo | sarvam | openai | whatsapp). Secret fields are encrypted with
+/// AES-256-GCM using a server-side key (CREDENTIALS_KEYS) that is never stored in the database; the organization id and
+/// provider are bound as additional authenticated data, so a ciphertext copied to another row does not decrypt.
+/// Only masked hints ever leave the server.
+model IntegrationCredential {
+  id             String       @id @default(cuid())
+  organizationId String
+  provider       String
+  enabled        Boolean      @default(false)
+  /// Non-secret settings (caller ID, model, language, voice, phone number id ...).
+  config         Json?
+  /// base64 AES-256-GCM ciphertext of the JSON object of secret fields.
+  secretCiphertext String?    @db.Text
+  secretIv       String?
+  secretTag      String?
+  /// Which key in CREDENTIALS_KEYS encrypted it (rotation re-encrypts to the active key).
+  keyVersion     String?
+  /// Masked hints per secret field, e.g. {"authToken":"••••3fa1"}.
+  secretHints    Json?
+  /// untested | ok | failed (a save always resets to untested: saving is not proof of a working connection).
+  status         String       @default("untested")
+  lastTestAt     DateTime?
+  lastSuccessAt  DateTime?
+  /// Sanitized provider error (no secrets, no stack traces).
+  lastError      String?      @db.Text
+  updatedBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+}
+
+/// Provider usage and errors per organization: connection tests, speech, model calls, calls, messages.
+model IntegrationEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  provider       String
+  /// test | stt | tts | chat | call | message | config
+  kind           String
+  ok             Boolean
+  latencyMs      Int?
+  errorCode      String?
+  /// Sanitized, user-safe message.
+  message        String?      @db.Text
+  units          Int?
+  /// characters | seconds | tokens | calls | messages
+  unitType       String?
+  costEstimate   Decimal?     @db.Decimal(12, 4)
+  /// organization | environment (which account served it).
+  source         String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, provider, createdAt])
+  @@index([createdAt])
 }

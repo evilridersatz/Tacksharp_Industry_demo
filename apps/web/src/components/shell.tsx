@@ -1,9 +1,10 @@
 'use client';
 
+import { Toaster } from './toast';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, Check, ChevronsUpDown, FlaskConical, Loader2, LogOut, Menu, Pause, Play, Search, X } from 'lucide-react';
+import { Bell, Check, ChevronsUpDown, Clock, FlaskConical, Loader2, LogOut, Menu, Pause, Play, Search, ShieldCheck, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
@@ -40,7 +41,8 @@ function activeHref(items: NavItem[], pathname: string, search: URLSearchParams)
       if (search.get(k) !== v) ok = false;
     });
     if (!ok) continue;
-    const score = 1 + [...params.keys()].length;
+    // More query params, then the longer (more specific) path wins: /settings/integrations over /settings.
+    const score = 1 + [...params.keys()].length * 1000 + path.length;
     if (!best || score > best.score) best = { href: item.href, score };
   }
   return best?.href ?? null;
@@ -254,6 +256,11 @@ function UserCard() {
         <p className="truncate text-[13px] font-semibold text-white">{name}</p>
         <p className="truncate text-[11px] text-slate-400">{me ? me.role : ''}</p>
       </div>
+      {me?.isPlatformAdmin && (
+        <Link href="/platform" aria-label="Platform console" title="Platform console (Tacksharp staff)" className="grid size-11 place-items-center rounded-[10px] text-slate-400 hover:text-white lg:size-9">
+          <ShieldCheck className="size-4" />
+        </Link>
+      )}
       <button onClick={logout} aria-label="Log out" title="Log out" className="grid size-11 place-items-center rounded-[10px] text-slate-500 hover:text-white lg:size-9">
         <LogOut className="size-4" />
       </button>
@@ -263,10 +270,14 @@ function UserCard() {
 
 const BARE_ROUTES = ['/login', '/onboarding', '/invite'];
 
+/** Public marketing site and account pages: no dashboard chrome, no session needed. */
+export const PUBLIC_ROUTES = ['/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/signup', '/forgot-password', '/terms', '/privacy'];
+export const isPublicRoute = (p: string) => PUBLIC_ROUTES.some((r) => p === r || p.startsWith(`${r}/`));
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  if (BARE_ROUTES.includes(pathname)) return <>{children}</>;
-  return <Shell>{children}</Shell>;
+  if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster /></>;
+  return <><Shell>{children}</Shell><Toaster /></>;
 }
 
 /** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */
@@ -432,6 +443,14 @@ function Shell({ children }: { children: ReactNode }) {
       </Drawer>
 
       <main className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">
+        {me?.organizationStatus === 'pending_review' && me.organizationId === me.homeOrganizationId && (
+          <div role="note" className="mb-4 flex flex-wrap items-center gap-2 rounded-[12px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-[12.5px] text-slate-800">
+            <Clock className="size-4 shrink-0 text-sky-700" aria-hidden />
+            <b>Awaiting activation.</b>
+            <span className="min-w-0 flex-1">Tacksharp reviews every new organization (email verification is not configured). Set up integrations, your team and data now; test calls stay off until activation.</span>
+            <Link href="/settings/integrations" className="font-semibold text-sky-800 underline">Set up integrations</Link>
+          </div>
+        )}
         {workspace?.isDemo && def && <DemoBanner def={def} />}
         {workspace && !workspace.isDemo && def && <LiveSetupCard industry={workspace.industry} />}
         {children}

@@ -185,13 +185,18 @@ export class HospitalController {
   }
 
   @Get('appointments')
-  list(@Org() org: string, @Query() q: { day?: string; status?: string; doctorId?: string; q?: string }) {
-    return this.hospital.list(org, q);
+  async list(@Org() org: string, @CurrentUser() u: SessionClaims, @Query() q: { day?: string; status?: string; doctorId?: string; q?: string }) {
+    requirePermission(u, PERMISSIONS.viewClinic);
+    return maskPatientData(await this.hospital.list(org, q), u.role);
   }
 
   @Get('appointments/:id')
-  get(@Org() org: string, @Param('id') id: string) {
-    return this.hospital.get(org, id);
+  async get(@Org() org: string, @CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.viewClinic);
+    const a = await this.hospital.get(org, id);
+    // Access log for patient records (who opened which record, when). No medical content is logged.
+    await this.prisma.auditEvent.create({ data: { organizationId: org, actor: actor(u), entityType: 'appointment', entityId: id, action: 'patient_record.viewed', data: {} } }).catch(() => undefined);
+    return maskPatientData(a, u.role);
   }
 
   @Post('appointments')
@@ -221,8 +226,9 @@ export class HospitalController {
   }
 
   @Get('patients')
-  patients(@Org() org: string, @Query('q') q?: string) {
-    return this.hospital.patients(org, q);
+  async patients(@Org() org: string, @CurrentUser() u: SessionClaims, @Query('q') q?: string) {
+    requirePermission(u, PERMISSIONS.viewClinic);
+    return maskPatientData(await this.hospital.patients(org, q), u.role);
   }
 
   @Get('insurance')
@@ -262,4 +268,26 @@ export class HospitalController {
 
 function stay(q: { checkIn?: string; checkOut?: string; adults?: string | number; children?: string | number; rooms?: string | number }): StayRequest {
   return { checkIn: String(q.checkIn ?? ''), checkOut: String(q.checkOut ?? ''), adults: Number(q.adults ?? 2), children: Number(q.children ?? 0), rooms: Number(q.rooms ?? 1) };
+}
+
+/**
+ * Healthcare privacy: people who only VIEW the clinic (read-only viewers, analysts) see patients' phone numbers masked
+ * and no visit reason. Front desk, managers, admins and the insurance desk see them in full. Applied on the server.
+ */
+const PHONE_KEYS = new Set(['phone', 'patientPhone', 'toNumber', 'fromNumber']);
+const MEDICAL_KEYS = new Set(['reasonNote', 'notes', 'diagnosis']);
+export function maskPatientData<T>(value: T, role: string | undefined): T {
+  if (can(role, PERMISSIONS.manageClinic) || can(role, PERMISSIONS.manageInsurance)) return value;
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v instanceof Date || v === null || typeof v !== 'object') return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (PHONE_KEYS.has(k) && typeof x === 'string') out[k] = x.length > 4 ? `••••${x.slice(-4)}` : '••••';
+      else if (MEDICAL_KEYS.has(k) && typeof x === 'string' && x) out[k] = '(hidden: your role cannot see medical details)';
+      else out[k] = walk(x);
+    }
+    return out;
+  };
+  return walk(value) as T;
 }

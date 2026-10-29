@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { Runner, user, assistant, type Agent, type AgentInputItem } from '@openai/agents';
+import { Injectable, Optional } from '@nestjs/common';
+import { user, assistant, type Agent, type AgentInputItem } from '@openai/agents';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { openaiRunner } from '../integrations/openai-runner.js';
 import type { Channel, TacksharpAgentContext, Toolset } from 'ai/agents/real-estate-agent.js';
 import { errorMessage, log } from '../common/logger.js';
 import type { SessionMessage } from '../conversation/session.js';
@@ -32,6 +34,8 @@ const AI_TIMEOUT_MS: Record<Channel, number> = { whatsapp: 45_000, voice: 15_000
 /** Thin wrapper around the OpenAI Agents SDK so the engine (and tests) deal with one small interface. */
 @Injectable()
 export class LlmRunner {
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
+
   async run(args: {
     channel: Channel;
     toolset: Toolset;
@@ -52,8 +56,15 @@ export class LlmRunner {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), AI_TIMEOUT_MS[channel]);
 
-    // One Runner per call, so concurrent calls never mix up each other's timings.
-    const runner = new Runner();
+    // One Runner per call, so concurrent calls never mix up each other's timings. The organization's own OpenAI key
+    // and model when it configured one; the deployment's default otherwise; none for a self-service organization
+    // without a key (the engine's non-AI fallback answers).
+    const acct = await openaiRunner();
+    if (!acct.runner) {
+      clearTimeout(timeout);
+      return { text: '', failed: true, aborted: false, error: `openai_not_configured: ${acct.reason ?? ''}`, usage: {} };
+    }
+    const runner = acct.runner;
     const toolStarts = new Map<string, { name: string; startedAt: number }>();
     const toolCalls: Array<{ name: string; ms: number }> = [];
     const key = (toolCall: unknown): string => {
@@ -89,6 +100,12 @@ export class LlmRunner {
       clearTimeout(timeout);
     }
 
+    // Usage per organization (tokens; which account served it). Never the prompt or the reply.
+    if (this.prisma && acct.organizationId) {
+      void this.prisma.integrationEvent
+        .create({ data: { organizationId: acct.organizationId, provider: 'openai', kind: 'chat', ok: !failed, latencyMs: Date.now() - startedAt, errorCode: failed ? 'run_failed' : null, message: failed ? (error ?? '').slice(0, 300) : null, units: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0) || null, unitType: 'tokens', source: acct.source } })
+        .catch(() => undefined);
+    }
     const agentMs = Date.now() - startedAt;
     const toolMs = toolCalls.reduce((s, c) => s + c.ms, 0);
     return {

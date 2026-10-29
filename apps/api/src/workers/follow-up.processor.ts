@@ -1,4 +1,5 @@
 import { Injectable, Optional } from '@nestjs/common';
+import { bindOrganization } from '../integrations/provider-scope.js';
 import { VERTICAL_SOURCES, VerticalFollowUps } from '../verticals/vertical-followups.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
@@ -42,8 +43,9 @@ export class FollowUpProcessor {
   }
 
   async process(followUpId: string) {
-    const head = await this.prisma.followUp.findUnique({ where: { id: followUpId }, select: { customerId: true } });
+    const head = await this.prisma.followUp.findUnique({ where: { id: followUpId }, select: { customerId: true, organizationId: true } });
     if (!head) return { skipped: 'not_found' };
+    bindOrganization(head.organizationId);
     // Everything below runs while holding the customer lock, so a WhatsApp reply arriving
     // at the same moment is applied either fully before (we skip) or fully after (it cancels the rest).
     return withLock(queueRedis, customerLockKey(head.customerId), () => this.processLocked(followUpId), { ttlMs: 60_000, waitMs: 30_000 });

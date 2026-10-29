@@ -25,6 +25,7 @@ const ROLE_HELP: Record<string, string> = {
   technician: 'VisionOps devices and incidents',
   finance: 'Invoices, payments and collections',
   marketing: 'Campaigns and content (sending needs approval)',
+  operator: 'Day-to-day work: customers, orders, bookings, stock, incidents. No people, settings or integrations',
   viewer: 'Read-only: can look around, cannot change anything',
 };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');

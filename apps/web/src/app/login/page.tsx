@@ -169,7 +169,8 @@ function Login() {
           {caps && <p className="mt-1 text-[12px] text-[#b45309]">Caps Lock is on.</p>}
           {forgot && (
             <p role="note" className="mt-2 rounded-[10px] bg-slate-50 px-3 py-2 text-[12.5px] text-body">
-              Ask your workspace admin for a password-reset link (Team & access). The link works once and expires within a few hours.
+              Ask your workspace admin for a password-reset link (Team & access), or{' '}
+              <a href="/forgot-password" className="font-semibold text-brand underline">record a reset request</a>. Email is not configured, so nothing is emailed; a reset link works once and expires within a few hours.
             </p>
           )}
 
@@ -181,9 +182,13 @@ function Login() {
           <Button type="submit" variant="primary" busy={busy} className="mt-6 h-11 w-full text-[14px]">
             Log in
           </Button>
-          <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11.5px] text-faint">
+          <p className="mt-5 text-center text-[13px] text-muted">
+            New to Tacksharp? <a href="/signup" className="font-semibold text-brand hover:text-brand-dark">Create an organization</a>
+          </p>
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[11.5px] text-faint">
             <ShieldCheck className="size-3.5" aria-hidden /> Secure session · your data stays in your workspace
           </p>
+          <p className="mt-2 text-center text-[12px]"><a href="/welcome" className="text-muted hover:text-ink">← Tacksharp.ai website</a></p>
         </form>
       </div>
     </div>

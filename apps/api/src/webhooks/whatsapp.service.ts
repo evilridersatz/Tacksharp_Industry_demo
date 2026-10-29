@@ -1,4 +1,5 @@
 import { Injectable, Optional } from '@nestjs/common';
+import { recordWebhookFailure } from '../common/webhook-failures.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { queueRedis, whatsappQueue } from '../queues/queues.js';
 import { customerLockKey, withLock } from '../common/redis-lock.js';
@@ -78,6 +79,7 @@ export class WhatsAppService {
         const organizationId = await this.tenancy.resolve('whatsapp_phone_number_id', phoneNumberId);
         if (!organizationId || !phoneNumberId) {
           log.warn('whatsapp.unknown_phone_number_id', { messages: value.messages?.length ?? 0 });
+          recordWebhookFailure('whatsapp', 'unknown_phone_number_id', '/webhooks/whatsapp');
           continue;
         }
 

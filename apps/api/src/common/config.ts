@@ -55,6 +55,28 @@ export const config = {
     apiPerMinute: num('RATE_LIMIT_API_PER_MIN', 300),
     webhookPerMinute: num('RATE_LIMIT_WEBHOOK_PER_MIN', 1200),
     publicApiPerMinute: num('RATE_LIMIT_PUBLIC_API_PER_MIN', 60),
+    /** Public signup and forgot-password requests per IP per hour (abuse protection). */
+    signupPerHour: num('RATE_LIMIT_SIGNUP_PER_HOUR', 5),
+    /** Provider connection tests / test calls per IP per 10 minutes (each may cost money at the provider). */
+    providerTestsPer10Min: num('RATE_LIMIT_PROVIDER_TESTS', 20),
+  },
+
+  /**
+   * Public self-service signup. `SIGNUP_ENABLED=false` closes it (the page says so). New organizations start as
+   * pending_review: a platform admin activates them (no email provider is configured, so this is the verification).
+   */
+  signup: {
+    enabled: process.env.SIGNUP_ENABLED !== 'false',
+  },
+
+  /**
+   * Encryption keys for stored provider credentials, never in the database:
+   *   CREDENTIALS_KEYS="v1:<base64 32 bytes>,v2:<base64 32 bytes>"   CREDENTIALS_ACTIVE_KEY=v2
+   * New secrets are encrypted with the active key; older versions stay readable until `npm run credentials:rotate`.
+   */
+  credentials: {
+    keys: process.env.CREDENTIALS_KEYS ?? '',
+    activeKey: process.env.CREDENTIALS_ACTIVE_KEY ?? '',
   },
 
   /** Run BullMQ workers inside the API process (simplest for local + single Lightsail box). */
@@ -243,6 +265,9 @@ export function configWarnings(env: NodeJS.ProcessEnv = process.env): string[] {
   }
   if (env.DRY_RUN === 'false' && !env.WHATSAPP_TEMPLATE_ORDER_READY) {
     warnings.push('WHATSAPP_TEMPLATE_ORDER_READY is empty: the WhatsApp "order ready" fallback reaches only customers who messaged in the last 24h.');
+  }
+  if (!env.CREDENTIALS_KEYS) {
+    warnings.push('CREDENTIALS_KEYS is not set: organizations cannot save their own provider credentials (Settings → Integrations / AI providers). Existing environment accounts keep working.');
   }
   return warnings;
 }

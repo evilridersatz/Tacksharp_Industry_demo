@@ -6,7 +6,7 @@ import { ForbiddenException } from '@nestjs/common';
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: ['*'],
-  manager: ['customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
+  manager: ['integrations.view', 'customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
   sales: ['customers.view', 'customers.manage', 'sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
   operations: ['customers.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
   // Hotel front desk: reservations, check-in / check-out, room status.
@@ -20,6 +20,9 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
   // Marketing staff draft, import, segment and approve content; sending to customers needs marketing.approve_campaign
   // (admin / manager), so every campaign passes through the approval queue.
   marketing: ['customers.view', 'customers.manage', 'marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
+  // Operator: day-to-day work across the workspace's modules (customers, orders, bookings, appointments, stock,
+  // monitoring incidents), no people / settings / integrations / finance approvals.
+  operator: ['customers.view', 'customers.manage', 'sales.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'orders.*', 'bookings.view', 'bookings.manage', 'clinic.view', 'clinic.manage', 'monitoring.view', 'monitoring.operate', 'marketing.view', 'agents.view', 'agents.run'],
   // Read-only demo / stakeholder access: views the workspace; every write is refused by the auth guard.
   viewer: ['customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
 };
@@ -32,6 +35,10 @@ export const PERMISSIONS = {
   customersContact: 'customers.contact',
   /** Invite people, change roles, remove access, issue password-reset links (workspace admin only). */
   usersManage: 'users.manage',
+  /** Provider credentials (Plivo, Sarvam, OpenAI, WhatsApp): save, test, enable / disable. Organization admin only. */
+  integrationsManage: 'integrations.manage',
+  /** See integration status and usage (masked; never secrets). */
+  integrationsView: 'integrations.view',
   approveDiscount: 'sales.approve_discount',
   adjustStock: 'operations.adjust_stock',
   receiveStock: 'operations.receive_stock',
@@ -57,6 +64,8 @@ export const PERMISSIONS = {
   manageMenu: 'orders.manage_menu',
   manageBookings: 'bookings.manage',
   manageRooms: 'bookings.manage_rooms',
+  /** Read appointments and patients (phones / visit reasons masked unless the role also manages the clinic). */
+  viewClinic: 'clinic.view',
   manageClinic: 'clinic.manage',
   manageDoctors: 'clinic.manage_doctors',
   viewInsurance: 'insurance.view',

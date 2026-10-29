@@ -16,7 +16,7 @@ const SESSION_DAYS = 7;
 const hash = (t: string) => createHash('sha256').update(t).digest('hex');
 
 /** Roles an admin can give in a workspace (the existing role model plus a read-only viewer). */
-export const ASSIGNABLE_ROLES = ['admin', 'manager', 'sales', 'operations', 'front_desk', 'reception', 'insurance', 'technician', 'finance', 'marketing', 'viewer'] as const;
+export const ASSIGNABLE_ROLES = ['admin', 'manager', 'sales', 'operations', 'front_desk', 'reception', 'insurance', 'technician', 'finance', 'marketing', 'operator', 'viewer'] as const;
 
 /**
  * Members and access links of ONE workspace (the admin's session organization; never from the request).

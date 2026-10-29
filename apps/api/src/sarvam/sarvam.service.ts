@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { providerCredentials } from '../integrations/provider-scope.js';
 import { config } from '../common/config.js';
 import { errorMessage, log } from '../common/logger.js';
 import { TtsLimiter, retryableTtsStatus, ttsBackoffMs, type TtsPriority } from './tts-limiter.js';
@@ -48,27 +49,48 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     return Boolean(config.sarvam.apiKey);
   }
 
+  /**
+   * The Sarvam account and voice settings for the current organization (provider scope): its own saved, tested,
+   * enabled key and settings, or the deployment's environment key for pre-existing organizations. A self-service
+   * organization without its own key gets none (never the platform's key).
+   */
+  private async account() {
+    const env = { key: config.sarvam.apiKey, sttModel: config.sarvam.sttModel, sttMode: config.sarvam.sttMode, sttLanguage: config.sarvam.sttLanguage, ttsModel: config.sarvam.ttsModel, ttsSpeaker: config.sarvam.ttsSpeaker };
+    const r = await providerCredentials('sarvam');
+    if (r.source === 'none') return { ...env, key: '' };
+    if (r.source !== 'organization') return env;
+    return {
+      key: r.secrets.apiKey ?? '',
+      sttModel: r.config.sttModel || env.sttModel,
+      sttMode: r.config.sttMode || env.sttMode,
+      sttLanguage: r.config.sttLanguage || env.sttLanguage,
+      ttsModel: r.config.ttsModel || env.ttsModel,
+      ttsSpeaker: r.config.ttsSpeaker || env.ttsSpeaker,
+    };
+  }
+
   /** `keyterms`: this call's vocabulary (a restaurant's products); defaults to the service-wide list. */
   async speechToText(audio: Buffer, filename = 'audio.wav', mimeType = 'audio/wav', keyterms?: string[]): Promise<SttResult> {
     const startedAt = Date.now();
-    if (!this.enabled) throw new Error('SARVAM_API_KEY is missing');
+    const acct = await this.account();
+    if (!acct.key) throw new Error('SARVAM_API_KEY is missing');
 
     const form = new FormData();
     form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
-    form.append('model', config.sarvam.sttModel);
-    if (config.sarvam.sttModel.startsWith('saaras')) {
-      form.append('mode', config.sarvam.sttMode);
+    form.append('model', acct.sttModel);
+    if (acct.sttModel.startsWith('saaras')) {
+      form.append('mode', acct.sttMode);
     }
-    form.append('language_code', config.sarvam.sttLanguage);
+    form.append('language_code', acct.sttLanguage);
     // Bias recognition toward local place / project names (saaras:v4 only, max 50).
     const terms = keyterms ?? this.keyterms;
-    if (config.sarvam.sttModel === 'saaras:v4' && terms.length > 0) {
+    if (acct.sttModel === 'saaras:v4' && terms.length > 0) {
       form.append('keyterms', JSON.stringify(terms.slice(0, 50)));
     }
 
     const response = await fetch('https://api.sarvam.ai/speech-to-text', {
       method: 'POST',
-      headers: { 'api-subscription-key': config.sarvam.apiKey },
+      headers: { 'api-subscription-key': acct.key },
       body: form,
       signal: AbortSignal.timeout(config.sarvam.timeoutMs),
     });
@@ -116,10 +138,11 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
   async textToSpeech(text: string, options: { cache?: boolean; priority?: TtsPriority } = {}): Promise<TtsResult> {
     const clean = text.trim();
     const languageCode = this.languageFor(clean);
-    if (!clean || !this.enabled) return { url: '', ms: 0, attempts: 0, cached: false, languageCode, error: clean ? 'disabled' : 'empty' };
+    const acct = await this.account();
+    if (!clean || !acct.key) return { url: '', ms: 0, attempts: 0, cached: false, languageCode, error: clean ? 'disabled' : 'empty' };
 
     // The key covers everything that changes the audio, so a changed voice / pace / model never serves old audio.
-    const cacheKey = `${languageCode}:${config.sarvam.ttsModel}:${config.sarvam.ttsSpeaker}:${config.sarvam.ttsPace}:${this.temperature() ?? ''}:${config.sarvam.ttsSampleRate}:${clean}`;
+    const cacheKey = `${languageCode}:${acct.ttsModel}:${acct.ttsSpeaker}:${config.sarvam.ttsPace}:${this.temperature() ?? ''}:${config.sarvam.ttsSampleRate}:${clean}`;
     const cachedName = `prompt-${crypto.createHash('sha1').update(cacheKey).digest('hex').slice(0, 16)}.wav`;
     if (options.cache) {
       // Deterministic file name: the disk copy survives API restarts, so a restart does not re-pay for every prompt.
@@ -130,7 +153,7 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
       const running = this.inflight.get(cacheKey);
       if (running) return running;
     }
-    const work = this.synthesize(clean, languageCode, options.cache ? cachedName : `${crypto.randomUUID()}.wav`, options.priority ?? 'live').then((r) => {
+    const work = this.synthesize(clean, languageCode, options.cache ? cachedName : `${crypto.randomUUID()}.wav`, options.priority ?? 'live', acct).then((r) => {
       if (r.url && options.cache) this.cache.set(cacheKey, cachedName);
       return r;
     });
@@ -141,7 +164,7 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     return work;
   }
 
-  private async synthesize(clean: string, languageCode: string, filename: string, priority: TtsPriority): Promise<TtsResult> {
+  private async synthesize(clean: string, languageCode: string, filename: string, priority: TtsPriority, acct: { key: string; ttsModel: string; ttsSpeaker: string }): Promise<TtsResult> {
     const startedAt = Date.now();
     const budget = priority === 'live' ? config.sarvam.ttsBudgetMs : 60_000;
     // Background (cache warm-up): one try, a 429 is skipped, never retried - it would eat capacity a caller needs.
@@ -163,11 +186,11 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
           if (remaining < 500) return { status: 0, body: 'budget_exceeded_while_queued' };
           const response = await fetch('https://api.sarvam.ai/text-to-speech', {
             method: 'POST',
-            headers: { 'api-subscription-key': config.sarvam.apiKey, 'Content-Type': 'application/json' },
+            headers: { 'api-subscription-key': acct.key, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               text: this.prepareForSpeech(clean).slice(0, 2500),
-              model: config.sarvam.ttsModel,
-              speaker: config.sarvam.ttsSpeaker,
+              model: acct.ttsModel,
+              speaker: acct.ttsSpeaker,
               language_code: languageCode,
               pace: config.sarvam.ttsPace,
               ...(this.temperature() !== undefined ? { temperature: this.temperature() } : {}),

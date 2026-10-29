@@ -25,8 +25,11 @@ export class SettingsController {
     const before = await this.settings.get(organizationId);
     if (this.prisma && requested !== undefined && requested !== before.industry) {
       // A restaurant (GR Chicken) runs the ordering engine: its industry is fixed by the organization, never by a click.
-      const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { vertical: true } });
+      const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { vertical: true, allowedIndustries: true } });
       if (org?.vertical === 'restaurant') throw new BadRequestException('This is a restaurant workspace: its industry is fixed. Use the workspace switcher to open another industry.');
+      // Industries a platform admin assigned to this organization (null = any).
+      const allowed = Array.isArray(org?.allowedIndustries) ? (org!.allowedIndustries as unknown[]).map(String) : null;
+      if (allowed && !allowed.includes(String(requested))) throw new ForbiddenException(`Your plan includes: ${allowed.join(', ')}. Ask Tacksharp to enable another industry.`);
     }
     // The live demo feed is switched only by POST /monitoring/live-demo (demo workspaces); a settings save never changes it.
     const mon = (body as { monitoring?: Record<string, unknown> } | null)?.monitoring;

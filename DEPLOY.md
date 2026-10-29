@@ -20,6 +20,12 @@ facts (from the repo docs, never verified) are:
 Migrations pending against a database at the pre-October-28 schema, from the repo, all **additive**:
 - `20261028000000_demo_sessions`: creates table `DemoSession`.
 - `20261028100000_team_access`: creates table `UserInvitation`, and adds nullable `User.disabledAt` and `User.sessionsRevokedAt`.
+- `20261029000000_enterprise_platform` (branch `enterprise-saas-20261029`):
+  - creates tables `IntegrationCredential` and `IntegrationEvent`;
+  - adds defaulted columns to `Organization`: `status` (default `active`, so every existing organization stays active),
+    `selfServe` (default false), plus nullable `activatedAt`, `suspendedAt`, `suspendedReason`, `allowedIndustries`
+    and `contactPhone`;
+  - adds `User.isPlatformAdmin` (default false) and nullable `User.emailVerifiedAt`.
 
 Neither drops, renames or rewrites anything. `prisma migrate status` on the host decides what is actually pending.
 If it lists more (for example `20261023000000_visionops`), read those files too before applying.
@@ -99,6 +105,16 @@ Before going further, confirm `apps/api/.env` has:
 - an HTTPS `PUBLIC_BASE_URL`
 - `DRY_RUN=true`
 - `RUN_WORKERS` set as on the current staging
+- `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`: a NEW random key per environment, kept outside the database and the repo
+  (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`). Without it, organizations cannot
+  save their own provider credentials; environment accounts keep working.
+- `SIGNUP_ENABLED`: `true` to open public registration (new organizations wait for platform activation), `false` to
+  keep it closed.
+
+After the migration, grant the platform console to your own existing login (never through signup):
+```bash
+cd "$NEW/apps/api" && npm run platform:admin -- grant <your email> && npm run platform:admin -- list
+```
 
 `check:config` lists problems by name only, never values.
 
@@ -162,6 +178,17 @@ Then check by hand in the browser (staging):
      WhatsApp number; it should appear in that workspace's conversations, with the reply recorded as not sent.
    - Switch the dashboard elsewhere and send again: the message still goes to the session's workspace.
    - End the session: the next message reaches the number's owner.
+
+5. **Enterprise flows (branch `enterprise-saas-20261029`):**
+   - Open `/welcome` and `/signup` and create a test organization. Confirm the dashboard shows "Awaiting activation".
+   - As a platform admin, open `/platform` and find the organization. Activate it by typing its name.
+   - In the test organization, open **Settings → Integrations → WhatsApp** and save **test** credentials. Check:
+     - the page shows "Saved, not tested" and the secret is masked;
+     - **Test connection** reports the real provider result;
+     - **Enable** stays disabled until a test passes.
+   - Confirm GR Chicken's integrations page (`/integrations`) is unchanged and its calls still use the environment
+     account.
+   - Suspend the test organization from `/platform`; its session must end at once.
 
 **Live sends:** only with written approval, set `DRY_RUN=false` with your own numbers in `LIVE_TEST_RECIPIENTS` and
 an approved WhatsApp template, and repeat step 4 with the confirmed WhatsApp test and test call from the tester's

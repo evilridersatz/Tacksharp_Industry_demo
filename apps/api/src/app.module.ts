@@ -32,6 +32,9 @@ import { PrivacyController } from './privacy.controller.js';
 
 import { DemoSessionsModule } from './demo-sessions/demo-sessions.module.js';
 import { TeamModule } from './team/team.module.js';
+import { IntegrationsModule } from './integrations/integrations.module.js';
+import { PlatformModule } from './platform/platform.module.js';
+
 @Module({
   imports: [
     PrismaModule,
@@ -39,6 +42,7 @@ import { TeamModule } from './team/team.module.js';
     SettingsModule,
     GovernanceModule,
     AuthModule,
+    IntegrationsModule,
     HealthModule,
     SarvamModule,
     WhatsAppSenderModule,
@@ -63,6 +67,7 @@ import { TeamModule } from './team/team.module.js';
     CustomersModule,
     DemoSessionsModule,
     TeamModule,
+    PlatformModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

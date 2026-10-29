@@ -18,11 +18,17 @@ type UserState = { exists: boolean; disabledAt: Date | null; revokedAt: Date | n
 // Shared by every guard instance in the process, so team changes (remove / role / reset) apply at once.
 const users = new Map<string, { at: number; v: UserState }>();
 const memberships = new Map<string, { at: number; role: string | null }>();
+const orgs = new Map<string, { at: number; status: string | null }>();
 
 /** Forget cached access for a user (called after removal, role change or password reset). */
 export function invalidateAccess(userId: string) {
   users.delete(userId);
   for (const k of [...memberships.keys()]) if (k.startsWith(`${userId}|`)) memberships.delete(k);
+}
+
+/** Forget the cached organization status (called after a platform admin activates or suspends it). */
+export function invalidateOrganization(organizationId: string) {
+  orgs.delete(organizationId);
 }
 
 /**
@@ -56,6 +62,14 @@ export class AuthGuard implements CanActivate {
     return m?.role ?? null;
   }
 
+  private async orgStatus(organizationId: string) {
+    const hit = orgs.get(organizationId);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.status;
+    const o = await this.prisma!.organization.findUnique({ where: { id: organizationId }, select: { status: true } });
+    orgs.set(organizationId, { at: Date.now(), status: o?.status ?? null });
+    return o?.status ?? null;
+  }
+
   canActivate(context: ExecutionContext): boolean | Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [context.getHandler(), context.getClass()]);
     if (isPublic) return true;
@@ -80,6 +94,10 @@ export class AuthGuard implements CanActivate {
       role = await this.membershipRole(claims.sub, claims.org);
       if (!role) throw new UnauthorizedException('Your access to this workspace was removed. Please log in again.');
     }
+    // A suspended (or deleted) organization: every session into it stops at once (within the cache window).
+    const status = await this.orgStatus(claims.org);
+    if (!status) throw new UnauthorizedException('This workspace no longer exists. Please log in again.');
+    if (status === 'suspended') throw new UnauthorizedException('This organization is suspended. Contact Tacksharp support.');
     req.auth = { ...claims, role: role ?? claims.role };
     return this.readOnly(req, req.auth.role);
   }

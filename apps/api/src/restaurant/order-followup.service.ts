@@ -1,4 +1,5 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { bindOrganization } from '../integrations/provider-scope.js';
 import { Prisma } from '@prisma/client';
 import { UnrecoverableError } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -202,6 +203,7 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
   async process(followUpId: string, now = new Date()): Promise<{ status: string; skipped?: string }> {
     const row = await this.prisma.orderFollowUp.findUnique({ where: { id: followUpId } });
     if (!row) return { status: 'missing' };
+    bindOrganization(row.organizationId);
     if (!OPEN.includes(row.status)) return { status: row.status, skipped: 'already processed' };
     if (row.scheduledAt.getTime() > now.getTime() + 5_000) return { status: row.status, skipped: 'not due yet' };
     const claimed = await this.prisma.orderFollowUp.updateMany({ where: { id: row.id, status: row.status, attempts: row.attempts }, data: { status: 'processing', attempts: row.attempts + 1 } });

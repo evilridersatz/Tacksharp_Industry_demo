@@ -6,6 +6,7 @@ import { ConversationsService } from '../conversations/conversations.service.js'
 import { LeadsService } from '../leads/leads.service.js';
 import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
 import { SarvamService } from '../sarvam/sarvam.service.js';
+import { bindOrganization, providerCredentials, type ResolvedCredentials } from '../integrations/provider-scope.js';
 import { config } from '../common/config.js';
 import { normalizePhone } from '../common/phone.js';
 import { nextAllowedCallTime } from '../common/time.js';
@@ -312,13 +313,27 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     return outboundOpening(customer, orgName, config.voice.agentName);
   }
 
-  private plivo() {
-    if (!config.plivo.authId || !config.plivo.authToken) {
-      throw new Error('PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN missing');
+  /**
+   * The Plivo client for the account that serves this organization (resolved credentials: its own saved, tested
+   * account, or the deployment's environment account for pre-existing organizations). Never another organization's.
+   */
+  private plivo(creds?: ResolvedCredentials) {
+    const authId = creds?.source === 'organization' ? creds.secrets.authId : config.plivo.authId;
+    const authToken = creds?.source === 'organization' ? creds.secrets.authToken : config.plivo.authToken;
+    if (!authId || !authToken) throw new Error('Plivo is not configured for this organization');
+    if (creds?.source === 'organization') {
+      let c = this.orgClients.get(authId);
+      if (!c || c.token !== authToken) {
+        c = { token: authToken, client: new plivo.Client(authId, authToken) };
+        this.orgClients.set(authId, c);
+      }
+      return c.client;
     }
-    this.client ??= new plivo.Client(config.plivo.authId, config.plivo.authToken);
+    this.client ??= new plivo.Client(authId, authToken);
     return this.client;
   }
+
+  private readonly orgClients = new Map<string, { token: string; client: InstanceType<typeof plivo.Client> }>();
 
   // ---------------------------------------------------------------------------
   // Outbound
@@ -348,7 +363,11 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
         return { started: false, reason: `not_live: ${gate.reason}` };
       }
     }
-    if (!config.plivo.fromNumber) return { started: false, reason: 'PLIVO_FROM_NUMBER missing' };
+    bindOrganization(organizationId);
+    const pv = await providerCredentials('plivo', organizationId);
+    if (pv.source === 'none') return { started: false, reason: `plivo_not_configured: ${pv.reason ?? 'no account'}` };
+    const fromNumber = pv.source === 'organization' ? pv.config.fromNumber : config.plivo.fromNumber;
+    if (!fromNumber) return { started: false, reason: 'PLIVO_FROM_NUMBER missing' };
 
     if (!params.ignoreCallWindow) {
       // The business's own window, never wider than the deployment's legal window from .env.
@@ -397,7 +416,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
         direction: 'outbound',
         status: 'queued',
         toNumber: customer.phone,
-        fromNumber: config.plivo.fromNumber,
+        fromNumber,
         attempt,
         followUpId: params.followUpId,
       },
@@ -414,8 +433,8 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
 
     const base = config.publicBaseUrl;
     try {
-      const result = await this.plivo().calls.create(
-        config.plivo.fromNumber,
+      const result = await this.plivo(pv).calls.create(
+        fromNumber,
         customer.phone,
         `${base}/voice/answer?callId=${call.id}`,
         {
@@ -874,7 +893,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
   async hangupLive(rt: CallRuntime, reason: string) {
     if (!rt.providerCallId) return;
     try {
-      await this.plivo().calls.hangup(rt.providerCallId);
+      await this.plivo(await providerCredentials('plivo', rt.organizationId)).calls.hangup(rt.providerCallId);
       log.info('voice.stream_hangup', { callId: rt.callId, reason });
     } catch (error) {
       // Already over (customer hung up first) is fine; anything else is logged.
@@ -1198,7 +1217,11 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
 
   /** Plivo stores the recording asynchronously; retry briefly if it's not there yet. */
   private async downloadRecording(url: string): Promise<Buffer> {
-    const auth = 'Basic ' + Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
+    // The account that served this call (the scope is bound to the call's organization by the webhook handler).
+    const pv = await providerCredentials('plivo');
+    const id = pv.source === 'organization' ? pv.secrets.authId : config.plivo.authId;
+    const token = pv.source === 'organization' ? pv.secrets.authToken : config.plivo.authToken;
+    const auth = 'Basic ' + Buffer.from(`${id}:${token}`).toString('base64');
     let useAuth = false;
     for (let attempt = 0; attempt < 8; attempt++) {
       const res = await fetch(url, {

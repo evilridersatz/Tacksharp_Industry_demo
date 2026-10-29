@@ -1,6 +1,6 @@
 import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
-  LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
+  Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
   Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, type LucideIcon,
 } from 'lucide-react';
@@ -39,6 +39,8 @@ const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/demo-data', label: 'Data & APIs', icon: Database },
   { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
   { href: '/team', label: 'Team & access', icon: UserCog },
+  { href: '/settings/integrations', label: 'Integrations', icon: PlugZap },
+  { href: '/settings/ai-providers', label: 'AI providers', icon: Cpu },
 ];
 const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
 
@@ -204,6 +206,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/contacts', label: 'Buyers & contacts', icon: Users },
         { href: '/conversations', label: 'WhatsApp conversations', icon: MessageSquare },
         { href: '/calls', label: 'AI voice calls', icon: Phone, badge: 'live' },
+        { href: '/properties', label: 'Properties', icon: Building2 },
         { href: '/site-visits', label: 'Site visits', icon: CalendarCheck },
       ] },
       { section: 'Pipeline', items: [

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { Tone } from './format';
 
-export type Me = { id: string; email: string; name: string | null; role: string; organizationId: string; organizationName: string; vertical: 'real_estate' | 'restaurant'; isDemo?: boolean; homeOrganizationId?: string };
+export type Me = { id: string; email: string; name: string | null; role: string; organizationId: string; organizationName: string; vertical: 'real_estate' | 'restaurant'; isDemo?: boolean; homeOrganizationId?: string; organizationStatus?: 'active' | 'pending_review' | 'suspended'; selfServe?: boolean; isPlatformAdmin?: boolean; emailVerified?: boolean };
 
 let mePromise: Promise<Me> | null = null;
 

@@ -15,6 +15,9 @@ export class ApiError extends Error {
   }
 }
 
+/** Pages that never bounce to the login screen on a 401 (public site, account pages). */
+const NO_LOGIN_REDIRECT = ['/login', '/invite', '/signup', '/forgot-password', '/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/terms', '/privacy'];
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -29,7 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
-  if (response.status === 401 && !path.startsWith('/auth/') && !path.startsWith('/team/links/') && typeof window !== 'undefined' && !['/login', '/invite'].includes(window.location.pathname)) {
+  if (response.status === 401 && !path.startsWith('/auth/') && !path.startsWith('/team/links/') && typeof window !== 'undefined' && !NO_LOGIN_REDIRECT.some((r) => window.location.pathname === r || window.location.pathname.startsWith(`${r}/`))) {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   }
   if (!response.ok) {

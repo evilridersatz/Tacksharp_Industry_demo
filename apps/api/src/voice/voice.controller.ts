@@ -6,6 +6,7 @@ import {
   Get,
   HttpCode,
   NotFoundException,
+  Optional,
   Param,
   Post,
   Query,
@@ -23,6 +24,9 @@ import { HANGUP, response } from './plivo-xml.js';
 import { Org, Public } from '../auth/decorators.js';
 import { latencyStats } from '../common/latency.js';
 import { checkPlivoSignature } from './plivo-signature.js';
+import { recordWebhookFailure } from '../common/webhook-failures.js';
+import { TenancyService } from '../tenancy/tenancy.service.js';
+import { bindOrganization, providerCredentials } from '../integrations/provider-scope.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 
 @Controller('voice')
@@ -30,6 +34,7 @@ export class VoiceController {
   constructor(
     private readonly voice: VoiceService,
     private readonly prisma: PrismaService,
+    @Optional() private readonly tenancy?: TenancyService,
   ) {}
 
   @Public()
@@ -109,7 +114,7 @@ export class VoiceController {
   async answer(@Query('callId') callId: string | undefined, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
     // A request without a form body (a manual test, a misconfigured webhook) must not crash the handler.
     const body = raw ?? {};
-    this.verify(req, body);
+    await this.verify(req, body);
     const xml = await this.safe(() => (callId ? this.voice.answerOutbound(callId, body) : this.voice.answerInbound(body)));
     res.status(200).type('application/xml').send(xml);
   }
@@ -120,7 +125,7 @@ export class VoiceController {
   async inbound(@Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
     // A request without a form body (a manual test, a misconfigured webhook) must not crash the handler.
     const body = raw ?? {};
-    this.verify(req, body);
+    await this.verify(req, body);
     const xml = await this.safe(() => this.voice.answerInbound(body));
     res.status(200).type('application/xml').send(xml);
   }
@@ -131,7 +136,7 @@ export class VoiceController {
   async turn(@Query('callId') callId: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
     // A request without a form body (a manual test, a misconfigured webhook) must not crash the handler.
     const body = raw ?? {};
-    this.verify(req, body);
+    await this.verify(req, body);
     const xml = await this.safe(() => this.voice.handleTurn(callId, body), () => this.voice.recordHandlerFailure(callId));
     res.status(200).type('application/xml').send(xml);
   }
@@ -142,7 +147,7 @@ export class VoiceController {
   async hangup(@Query('callId') callId: string | undefined, @Req() req: Request, @Body() raw: Record<string, string> | undefined) {
     // A request without a form body (a manual test, a misconfigured webhook) must not crash the handler.
     const body = raw ?? {};
-    this.verify(req, body);
+    await this.verify(req, body);
     // Inbound calls: configure this same URL as the Plivo application's Hangup URL (no callId; resolved by CallUUID).
     return this.voice.handleHangup(callId || undefined, body);
   }
@@ -180,14 +185,31 @@ export class VoiceController {
 
   /** Plivo V3 signature check (enable with PLIVO_VALIDATE_SIGNATURE=true once behind a stable HTTPS URL). */
   /** Plivo V3 signature check (PLIVO_VALIDATE_SIGNATURE=true; see voice/plivo-signature.ts). */
-  private verify(req: Request, body: Record<string, string>) {
-    const check = checkPlivoSignature(req, body, { enabled: config.plivo.validateSignature, authToken: config.plivo.authToken, publicBaseUrl: config.publicBaseUrl });
+  private async verify(req: Request, body: Record<string, string>) {
+    // Which organization this callback is for: the call WE placed (callId), or the number the customer dialled. Never
+    // the caller's input. Its account's token is the one Plivo signed with.
+    const organizationId = await this.callbackOrganization(req, body);
+    bindOrganization(organizationId);
+    const pv = organizationId ? await providerCredentials('plivo', organizationId) : null;
+    const authToken = pv?.source === 'organization' ? pv.secrets.authToken : config.plivo.authToken;
+    const check = checkPlivoSignature(req, body, { enabled: config.plivo.validateSignature || pv?.source === 'organization', authToken, publicBaseUrl: config.publicBaseUrl });
     if (!check.ok) {
       log.warn('voice.signature_invalid', { path: req.path, reason: check.reason });
+      recordWebhookFailure('plivo', check.reason ?? 'signature_invalid', req.path);
       throw new ForbiddenException('Invalid Plivo signature');
     }
   }
 
+  private async callbackOrganization(req: Request, body: Record<string, string>): Promise<string | undefined> {
+    const callId = typeof req.query?.callId === 'string' ? req.query.callId : '';
+    try {
+      if (callId) return (await this.prisma.call.findUnique({ where: { id: callId }, select: { organizationId: true } }))?.organizationId;
+      if (body.To && this.tenancy) return await this.tenancy.resolve('plivo_number', body.To);
+    } catch {
+      // Lookup trouble: fall back to the deployment's account (legacy behaviour).
+    }
+    return undefined;
+  }
 }
 
 /**

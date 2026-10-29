@@ -1,7 +1,12 @@
+'use client';
+
+import { Prose, SitePage, SiteHero } from '@/components/site';
+
 export default function PrivacyPolicyPage() {
   return (
-    <main style={{ maxWidth: 900, margin: '0 auto', padding: '48px 24px', lineHeight: 1.7 }}>
-      <h1>Privacy Policy</h1>
+    <SitePage>
+      <SiteHero title="Privacy policy" lead="How Tacksharp collects, uses and protects information." />
+      <Prose>
       <p><strong>Last updated:</strong> October 10, 2026</p>
 
       <h2>1. Introduction</h2>
@@ -62,6 +67,7 @@ export default function PrivacyPolicyPage() {
       <p>
         For privacy-related questions or requests, please contact Tacksharp.
       </p>
-    </main>
+      </Prose>
+    </SitePage>
   );
 }

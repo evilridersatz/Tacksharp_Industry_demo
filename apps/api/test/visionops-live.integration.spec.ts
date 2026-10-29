@@ -95,7 +95,7 @@ describe.skipIf(!enabled)('VisionOps live feed and scheduler (integration)', { t
     process.env.DRY_RUN = 'false'; // demo incidents must stay simulated whatever DRY_RUN says
     try {
       const cam = ids.demo.cams[2];
-      feed.simulate(DEMO, 'camera_unreachable', cam.id, at(1));
+      await feed.simulate(DEMO, 'camera_unreachable', cam.id, at(1));
       for (let m = 1; m <= 75; m++) await scheduler.runOrg(DEMO, at(m));
       const incs = await prisma.downtimeIncident.findMany({ where: { organizationId: DEMO, deviceId: cam.id } });
       expect(incs).toHaveLength(1);
@@ -118,7 +118,7 @@ describe.skipIf(!enabled)('VisionOps live feed and scheduler (integration)', { t
 
   it('an agent "power cut": checks are queued locally, the sweep marks devices UNKNOWN with an agent incident, reconnect replays the queue', async () => {
     const agent = ids.demo.agent;
-    feed.simulate(DEMO, 'agent_offline', agent.id, at(80));
+    await feed.simulate(DEMO, 'agent_offline', agent.id, at(80));
     for (let m = 80; m <= 88; m++) await scheduler.runOrg(DEMO, at(m));
     const inc = await prisma.downtimeIncident.findFirst({ where: { organizationId: DEMO, deviceId: agent.id, category: 'agent_offline' } });
     expect(inc).toBeTruthy();
@@ -133,7 +133,7 @@ describe.skipIf(!enabled)('VisionOps live feed and scheduler (integration)', { t
   });
 
   it('an internet outage on a site with 4G backup: incident while monitoring continues, then cleared', async () => {
-    feed.simulate(DEMO, 'internet_outage', ids.backup.site.id, at(150));
+    await feed.simulate(DEMO, 'internet_outage', ids.backup.site.id, at(150));
     for (let m = 150; m <= 153; m++) await scheduler.runOrg(DEMO, at(m));
     const inc = await prisma.downtimeIncident.findFirst({ where: { organizationId: DEMO, siteId: ids.backup.site.id, category: 'internet_outage' } });
     expect(inc).toBeTruthy();
