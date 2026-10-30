@@ -35,6 +35,9 @@ import { TeamModule } from './team/team.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
 import { PlatformModule } from './platform/platform.module.js';
 import { AssistantModule } from './assistant/assistant.module.js';
+import { KnowledgeModule } from './knowledge/knowledge.module.js';
+import { VoiceAgentsModule } from './voice-agents/voice-agents.module.js';
+import { TelephonyModule } from './telephony/telephony.module.js';
 
 @Module({
   imports: [
@@ -70,6 +73,9 @@ import { AssistantModule } from './assistant/assistant.module.js';
     TeamModule,
     PlatformModule,
     AssistantModule,
+    KnowledgeModule,
+    VoiceAgentsModule,
+    TelephonyModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

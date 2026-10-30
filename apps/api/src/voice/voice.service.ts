@@ -26,6 +26,8 @@ import { assessTranscript } from '../conversation/transcript-gate.js';
 import { ACK_LINES, staticVoiceLines } from '../conversation/replies.js';
 import { TurnDedupe, type DedupeRedis } from './turn-dedupe.js';
 import { queueRedis } from '../queues/queues.js';
+import { VoiceAgentsService } from '../voice-agents/voice-agents.service.js';
+import type { ChatTurn } from '../voice-agents/agent-engine.js';
 import {
   ENGLISH_FALLBACK,
   FILLERS,
@@ -103,6 +105,12 @@ export type CallRuntime = {
   openingUrl?: string;
   /** Opening line text (real-time mode compares echo of it against what the caller "said"). */
   openingText?: string;
+  /** Custom agent handling this call (Agent Builder): its instructions + knowledge base answer every turn. */
+  agentId?: string;
+  /** The custom agent's conversation so far (its engine is stateless). */
+  agentHistory?: ChatTurn[];
+  /** Voice conversation the custom agent's turns are saved to (transcript on the dashboard). */
+  agentConversationId?: string;
 };
 
 type GenerateResult = Awaited<ReturnType<AiService['generateResponse']>>;
@@ -177,6 +185,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     private readonly sarvam: SarvamService,
     private readonly tenancy: TenancyService,
     @Optional() private readonly demoSessions?: DemoSessionsService,
+    @Optional() private readonly agents?: VoiceAgentsService,
   ) {
     // A call whose hang-up webhook never arrives must not stay in memory forever.
     this.sweeper = setInterval(() => {
@@ -345,6 +354,8 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     leadId?: string;
     followUpId?: string;
     ignoreCallWindow?: boolean;
+    /** Custom agent (Agent Builder) that speaks on this call; omitted = the organization's built-in engine. */
+    agentId?: string;
   }): Promise<StartCallResult> {
     const organizationId = params.organizationId ?? config.defaultOrganizationId;
     const customer = await this.prisma.customer.findFirst({ where: { id: params.customerId, organizationId } });
@@ -419,13 +430,18 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
         fromNumber,
         attempt,
         followUpId: params.followUpId,
+        agentId: params.agentId ?? null,
+        provider: 'plivo',
       },
     });
 
     // Prepare the opening line before dialing (TTS ~1s) so there is no silence on answer.
     const organization = await this.prisma.organization.findUnique({ where: { id: organizationId } });
     const orgName = organization?.name ?? config.defaultOrganizationName;
-    const openingText = this.outboundOpeningFor(vertical, customer, orgName, await this.industryOf(organizationId));
+    const agentRow = params.agentId ? await this.prisma.voiceAgent.findFirst({ where: { id: params.agentId, organizationId }, select: { greeting: true, callLimits: true } }) : null;
+    const agentGreeting = agentRow?.greeting;
+    const agentMaxSec = Number((agentRow?.callLimits as { maxCallSeconds?: number } | null)?.maxCallSeconds) || undefined;
+    const openingText = agentGreeting ?? this.outboundOpeningFor(vertical, customer, orgName, await this.industryOf(organizationId));
     const openingUrl = await this.sarvam.textToSpeechUrl(openingText);
     this.trackAudio(call.id, openingUrl);
     this.openingAudio.set(call.id, { url: openingUrl, text: openingText });
@@ -442,7 +458,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
           hangupUrl: `${base}/voice/hangup?callId=${call.id}`,
           hangupMethod: 'POST',
           ringTimeout: config.plivo.ringTimeoutSec,
-          timeLimit: config.plivo.maxCallSec,
+          timeLimit: agentMaxSec ? Math.min(agentMaxSec, config.plivo.maxCallSec) : config.plivo.maxCallSec,
         },
       );
       const requestUuid = (result as { requestUuid?: string | string[] }).requestUuid;
@@ -484,6 +500,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const industry = await this.industryOf(call.organizationId);
 
     let opening = this.openingAudio.get(call.id);
+    if (call.agentId) return this.answerWithAgent(call, call.customer.phone!, 'outbound', params, opening);
     if (!opening) {
       const text = this.outboundOpeningFor(vertical, call.customer, orgName, industry);
       opening = { text, url: await this.sarvam.textToSpeechUrl(text) };
@@ -569,6 +586,15 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       return response('<Speak voice="WOMAN" language="en-US">This is the Tacksharp demo line. Please ask your presenter to start a demo session, then call again. Goodbye.</Speak>\n' + HANGUP);
     }
     const organizationId = routed ? routed.organizationId : owner;
+    // A custom agent (Agent Builder) published for this number answers instead of the built-in engine.
+    const agent = !routed && dialed && this.agents ? await this.agents.inboundAgent(organizationId, dialed).catch(() => null) : null;
+    if (agent) {
+      const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound' });
+      const call = await this.prisma.call.create({
+        data: { organizationId, customerId: customer.id, direction: 'inbound', status: 'in_progress', toNumber: dialed ?? '', fromNumber: phone, providerCallId: params.CallUUID, answeredAt: new Date(), agentId: agent.id, provider: 'plivo' },
+      });
+      return this.answerWithAgent({ ...call, agentId: agent.id }, phone, 'inbound', params, undefined);
+    }
 
     // Unknown callers become new customers (+ leads for real estate); they are never rejected.
     const vertical = await this.tenancy.vertical(organizationId);
@@ -738,7 +764,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     if (gate.verdict === 'reject') return this.unclearDecision(rt, durationMs);
 
     const turns = rt.turns + 1;
-    const result = await this.ai.generateResponse({
+    const result = rt.agentId ? await this.agentTurn(rt, gate.text) : await this.ai.generateResponse({
       organizationId: rt.organizationId,
       channel: 'voice',
       phone: rt.phone,
@@ -940,6 +966,66 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * A call handled by a custom agent: its greeting is the opening line, every turn goes to the shared agent engine
+   * (instructions + knowledge base), and the transcript is saved to the customer's voice conversation.
+   */
+  private async answerWithAgent(
+    call: { id: string; organizationId: string; customerId: string; agentId: string | null; turns?: number; silentTurns?: number },
+    phone: string,
+    direction: 'outbound' | 'inbound',
+    params: PlivoParams,
+    opening: { url: string; text: string } | undefined,
+  ) {
+    const agent = await this.prisma.voiceAgent.findFirst({ where: { id: call.agentId ?? '', organizationId: call.organizationId } });
+    if (!agent) {
+      log.warn('voice.agent_missing', { callId: call.id });
+      return response('<Speak voice="WOMAN" language="en-US">Sorry, this line is not available right now. Goodbye.</Speak>\n' + HANGUP);
+    }
+    const vertical = await this.tenancy.vertical(call.organizationId);
+    const rt = this.newRuntime(call, phone, direction, `Custom agent ${agent.name}`, undefined, vertical);
+    rt.providerCallId = params.CallUUID;
+    rt.agentId = agent.id;
+    rt.agentHistory = [{ role: 'assistant', content: agent.greeting }];
+    const [conversation] = await Promise.all([
+      this.conversations.getOrCreateConversation({ organizationId: call.organizationId, channel: 'voice', externalId: phone, customerId: call.customerId }),
+      direction === 'outbound' ? this.prisma.call.update({ where: { id: call.id }, data: { status: 'in_progress', answeredAt: new Date(), providerCallId: params.CallUUID ?? undefined } }) : undefined,
+    ]);
+    rt.agentConversationId = conversation.id;
+    void this.conversations.addMessage({ organizationId: call.organizationId, conversationId: conversation.id, role: 'assistant', content: agent.greeting, metadata: { callId: call.id, agentId: agent.id } }).catch(() => undefined);
+    const url = opening?.url ?? (await this.sarvam.textToSpeechUrl(agent.greeting));
+    rt.openingUrl = url;
+    rt.openingText = agent.greeting;
+    log.info('voice.answered', { callId: call.id, direction, agentId: agent.id, providerCallId: params.CallUUID });
+    const xml = config.voice.mode === 'stream' && url ? response(streamXml(call.id)) : response(sayXml(url, 'Hello, how can I help you?') + '\n' + recordXml(call.id));
+    this.answerXml.set(call.id, xml);
+    return xml;
+  }
+
+  /** One custom-agent turn (shared engine); result shaped like the built-in engine's for the call bookkeeping. */
+  private async agentTurn(rt: CallRuntime, text: string): Promise<GenerateResult> {
+    const history = rt.agentHistory ?? [];
+    const r = this.agents ? await this.agents.replyForCall(rt.organizationId, rt.agentId!, text, history) : null;
+    const reply = r?.reply ?? 'Sorry, I could not answer that. Our team will call you back.';
+    history.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+    rt.agentHistory = history.slice(-16);
+    if (rt.agentConversationId) {
+      const conv = rt.agentConversationId;
+      this.ai.background(rt.sessionKey, async () => {
+        await this.conversations.addMessage({ organizationId: rt.organizationId, conversationId: conv, role: 'user', content: text, metadata: { callId: rt.callId } });
+        await this.conversations.addMessage({ organizationId: rt.organizationId, conversationId: conv, role: 'assistant', content: reply, metadata: { callId: rt.callId, agentId: rt.agentId, sources: r?.sources ?? [], timings: r?.timings ?? null } });
+      });
+    }
+    return {
+      response: reply,
+      language: r?.style === 'en' ? 'en' : 'ta',
+      actions: { ...(r?.escalate ? { endCall: true, outcome: 'human_requested' } : {}) },
+      path: 'agent',
+      failed: !r,
+      ...(r?.escalate ? { endReason: 'handoff' } : {}),
+    } as unknown as GenerateResult;
+  }
+
   // ---------------------------------------------------------------------------
   // Per-call runtime
   // ---------------------------------------------------------------------------
@@ -983,6 +1069,11 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     const vertical = await this.tenancy.vertical(call.organizationId);
     const reason = direction === 'inbound' ? inboundCallReason(call.customer, call.lead?.status) : industryCallReason(await this.industryOf(call.organizationId), await this.orgName(call.organizationId)) ?? callReason(call.customer, call.lead?.source);
     const rt = this.newRuntime(call, call.customer.phone, direction, reason, call.leadId ?? undefined, vertical);
+    if (call.agentId) {
+      rt.agentId = call.agentId;
+      rt.agentHistory = [];
+      rt.agentConversationId = (await this.prisma.conversation.findFirst({ where: { organizationId: call.organizationId, channel: 'voice', externalId: call.customer.phone }, select: { id: true } }))?.id;
+    }
     if (vertical === 'restaurant') rt.keyterms = await this.ai.restaurantKeyterms(call.organizationId).catch(() => undefined);
     rt.providerCallId = call.providerCallId ?? undefined;
     rt.outcome = call.outcome ?? undefined;

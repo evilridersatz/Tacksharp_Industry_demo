@@ -9,7 +9,7 @@ import { Badge, Button, Card, CardHeader, ErrorBanner, Skeleton, cx } from './ui
 import { Dialog, inputCls } from './textile';
 import { toast } from './toast';
 
-export type ProviderId = 'plivo' | 'sarvam' | 'openai' | 'whatsapp';
+export type ProviderId = 'plivo' | 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony';
 type Field = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: string[] };
 type Usage = {
   days: number; total: number; failed: number; costEstimate: number | null; costNote: string;
@@ -41,6 +41,7 @@ export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrati
   whatsapp: { name: 'WhatsApp Cloud API', group: 'Integrations', href: '/settings/integrations/whatsapp', blurb: 'Your WhatsApp Business number, templates and delivery receipts.' },
   sarvam: { name: 'Sarvam AI', group: 'AI providers', href: '/settings/ai-providers/sarvam', blurb: 'Speech recognition and Tamil / English voices for calls.' },
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
+  sarvam_telephony: { name: 'Sarvam Voice Agents (telephony)', group: 'Integrations', href: '/settings/integrations/sarvam-telephony', blurb: 'Calls answered by an agent hosted on Sarvam: outbound calls and post-call results.' },
 };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
@@ -245,9 +246,11 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
           <CardHeader title="Connection" subtitle="Tests use the SAVED credentials and make a real request to the provider." action={<PlugZap className="size-4 text-muted" aria-hidden />} />
           <div className="grid gap-3 px-5 pb-5">
             <div className="flex flex-wrap gap-2">
-              <Button variant="primary" busy={busy === 'test-connection'} disabled={!canManage || !data.saved} onClick={() => void test('connection')}>
-                <ShieldCheck className="size-4" /> Test connection
-              </Button>
+              {data.operations.includes('connection') ? (
+                <Button variant="primary" busy={busy === 'test-connection'} disabled={!canManage || !data.saved} onClick={() => void test('connection')}>
+                  <ShieldCheck className="size-4" /> Test connection
+                </Button>
+              ) : <p className="w-full text-[12.5px] text-muted">Sarvam documents no read-only credential check for Voice Agents: a successful test call (below) verifies these settings.</p>}
               {data.saved && (
                 data.enabled
                   ? <Button busy={busy === 'enable'} disabled={!canManage} onClick={() => void act('enable', () => api.post(`/integrations/${provider}/enable`, { enabled: false }), () => toast('Disabled. This organization no longer uses these credentials.'))}>Disable integration</Button>
@@ -266,6 +269,7 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
         </Card>
 
         {provider === 'plivo' && <TestCall data={data} canManage={canManage} busy={busy} test={test} />}
+        {provider === 'sarvam_telephony' && <SarvamTestCall data={data} canManage={canManage} busy={busy} test={test} />}
         <UsageCard usage={data.usage} />
       </div>
 
@@ -369,6 +373,31 @@ function TestCall({ data, canManage, busy, test }: { data: Integration; canManag
         <Button type="submit" busy={busy === 'test-call'} disabled={!canManage || Boolean(blocked) || !to.trim() || !confirm}><Phone className="size-4" /> Place test call</Button>
         {blocked && <p className="text-[12px] text-amber-800">{blocked}</p>}
         <p className="text-[12px] text-muted">Whether the call rang and was answered appears in Usage below once Plivo reports the hangup.</p>
+      </form>
+    </Card>
+  );
+}
+
+function SarvamTestCall({ data, canManage, busy, test }: { data: Integration; canManage: boolean; busy: string | null; test: (op: string, body?: Record<string, unknown>) => Promise<void> }) {
+  const [to, setTo] = useState('');
+  const [appId, setAppId] = useState('');
+  const [appVersion, setAppVersion] = useState('1');
+  const [confirm, setConfirm] = useState(false);
+  const blocked = data.deployment.mode.dryRun ? 'This server is in dry-run mode: no real call can be placed.' : !data.saved ? 'Save the settings first.' : null;
+  return (
+    <Card>
+      <CardHeader title="Test call through Sarvam" subtitle="Places one REAL call answered by your Sarvam agent (charged by Sarvam). Only to numbers on the approved test list." />
+      <form className="grid gap-2 px-5 pb-5" onSubmit={(e) => { e.preventDefault(); void test('call', { to, confirm, appId, appVersion: Number(appVersion) }); }}>
+        <label htmlFor="sv-to" className="text-[12.5px] font-semibold text-body">Approved test number</label>
+        <input id="sv-to" className={inputCls} placeholder="e.g. 919800011122" value={to} onChange={(e) => setTo(e.target.value)} disabled={!canManage || Boolean(blocked)} />
+        <div className="grid grid-cols-[1fr_90px] gap-2">
+          <label className="grid gap-1 text-[12.5px] font-semibold text-body">Sarvam agent (app) id<input className={inputCls} value={appId} onChange={(e) => setAppId(e.target.value)} disabled={!canManage || Boolean(blocked)} /></label>
+          <label className="grid gap-1 text-[12.5px] font-semibold text-body">Version<input type="number" min={1} className={inputCls} value={appVersion} onChange={(e) => setAppVersion(e.target.value)} disabled={!canManage || Boolean(blocked)} /></label>
+        </div>
+        <label className="flex items-start gap-2 text-[12.5px] text-body"><input type="checkbox" className="mt-0.5" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} disabled={!canManage || Boolean(blocked)} /> I understand a real phone call will be placed.</label>
+        <Button type="submit" busy={busy === 'test-call'} disabled={!canManage || Boolean(blocked) || !to.trim() || !appId.trim() || !confirm}><Phone className="size-4" /> Place test call</Button>
+        {blocked && <p className="text-[12px] text-amber-800">{blocked}</p>}
+        <p className="text-[12px] text-muted">A number rented from Sarvam must be KYC-approved and on this connection. Results of calls placed by agents arrive at the webhook shown on the Voice agents page.</p>
       </form>
     </Card>
   );

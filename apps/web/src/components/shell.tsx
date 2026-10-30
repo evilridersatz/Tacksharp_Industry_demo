@@ -272,7 +272,7 @@ function UserCard() {
 const BARE_ROUTES = ['/login', '/onboarding', '/invite'];
 
 /** Public marketing site and account pages: no dashboard chrome, no session needed. */
-export const PUBLIC_ROUTES = ['/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/signup', '/forgot-password', '/terms', '/privacy'];
+export const PUBLIC_ROUTES = ['/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/voice-demos', '/signup', '/forgot-password', '/terms', '/privacy'];
 export const isPublicRoute = (p: string) => PUBLIC_ROUTES.some((r) => p === r || p.startsWith(`${r}/`));
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -445,7 +445,7 @@ function Shell({ children }: { children: ReactNode }) {
         {sidebar(() => setOpen(false))}
       </Drawer>
 
-      <main className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-[1440px] px-4 pt-5 pb-24 sm:px-6 lg:px-8">
         {me?.organizationStatus === 'pending_review' && me.organizationId === me.homeOrganizationId && (
           <div role="note" className="mb-4 flex flex-wrap items-center gap-2 rounded-[12px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-[12.5px] text-slate-800">
             <Clock className="size-4 shrink-0 text-sky-700" aria-hidden />

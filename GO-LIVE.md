@@ -80,3 +80,18 @@ presenter at 16 kHz, so Tamil and Tanglish sound the same as on calls.
    - Video starts only when the visitor presses the button, and stops when they close Tara.
 3. Video also needs `SARVAM_API_KEY`, because it uses our voice. Without Simli the button is hidden. If Simli cannot
    connect within 15 s, the visitor sees a message and Tara carries on with the animated face and voice.
+4. Once connected, Tara greets the visitor by herself (once per session) and the conversation is continuous: she listens,
+   answers, and listens again; the visitor can talk over her. When the session ends (time or idle limit), Tara says so
+   and never opens a new paid session by herself.
+
+## Custom voice agents and Sarvam telephony
+
+See `VOICE-AGENTS.md` for what Sarvam supports (verified from its documentation), the Agent Builder, knowledge bases
+and costs. Before going live with custom agents:
+- set `TELEPHONY_WEBHOOK_SECRET` (32+ random characters) and `KNOWLEDGE_DIR` (backed up with the database);
+- Plivo agents: route the agent's inbound number to the organization (Settings → Integrations → Plivo → Numbers);
+- Sarvam agents: in Sarvam's console complete KYC, assign the number to an inbound deployment (inbound) or connection
+  (outbound), create the agent with the same instructions and documents, then save the ids in Settings → Integrations →
+  Sarvam Voice Agents and place one test call to a `LIVE_TEST_RECIPIENTS` number;
+- outbound calls by agents follow the same `DRY_RUN` / `LIVE_TEST_RECIPIENTS` / `LIVE_ALLOW_ALL_CUSTOMERS` steps above,
+  plus consent, do-not-contact, calling hours, idempotency and per-organization / per-agent limits.

@@ -2,8 +2,7 @@ import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
-  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, type LucideIcon,
-} from 'lucide-react';
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, type LucideIcon, AudioLines } from 'lucide-react';
 
 /**
  * Industry registry (web). The server decides WHICH industry a workspace is (GET /industry/workspace); this file decides
@@ -36,6 +35,7 @@ export type IndustryDef = {
 
 /** Every workspace: settings, the demo data explorer and the safe scenario runner. */
 const WORKSPACE_TOOLS: NavItem[] = [
+  { href: '/voice-agents', label: 'Voice agents', icon: AudioLines },
   { href: '/demo-data', label: 'Data & APIs', icon: Database },
   { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
   { href: '/team', label: 'Team & access', icon: UserCog },

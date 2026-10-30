@@ -20,6 +20,9 @@ export const OPERATIONS: Record<Provider, string[]> = {
   sarvam: ['connection', 'tts', 'stt'],
   openai: ['connection'],
   whatsapp: ['connection'],
+  // Sarvam documents no read-only credential check for Voice Agents, so the only proof is a real test call to an
+  // approved test number (DRY_RUN off). It costs a call; it is never automatic.
+  sarvam_telephony: ['call'],
 };
 
 const SAMPLE_TEXT: Record<string, string> = {
@@ -240,11 +243,14 @@ export class IntegrationsService {
           : { ...t, latencyMs: n.latencyMs + t.latencyMs, message: `The number works, but templates could not be read: ${t.message}` };
         break;
       }
+      case 'sarvam_telephony:call':
+        result = await this.testSarvamCall(actor, secrets, cfg, body);
+        break;
       default:
         throw new BadRequestException('Unknown test.');
     }
     // A connection test decides whether the saved credentials may be enabled.
-    const decides = op === 'connection' || (provider === 'sarvam' && op === 'tts');
+    const decides = op === 'connection' || (provider === 'sarvam' && op === 'tts') || (provider === 'sarvam_telephony' && op === 'call');
     if (decides) {
       await this.prisma.integrationCredential.update({
         where: { id: row.id },
@@ -252,7 +258,7 @@ export class IntegrationsService {
       });
       this.creds.invalidate(actor.org, provider);
     }
-    if (op !== 'call') await this.event(actor.org, provider, op === 'connection' ? 'test' : op, result, 'organization', cost);
+    if (op !== 'call' || provider === 'sarvam_telephony') await this.event(actor.org, provider, op === 'connection' ? 'test' : op, result, 'organization', cost);
     await this.audit(actor.org, who(actor), provider, 'integration.tested', { op, ok: result.ok, errorCode: result.errorCode ?? null });
     return { result: { ...result, costEstimate: cost }, integration: await this.get(actor.org, provider) };
   }
@@ -277,6 +283,25 @@ export class IntegrationsService {
     const r = await clients.plivoCall(this.fetchImpl, { authId: secrets.authId, authToken: secrets.authToken }, { from: cfg.fromNumber, to, answerUrl: `${base}/integrations/plivo/test-call/answer?${q}`, hangupUrl: `${base}/integrations/plivo/test-call/hangup?${q}` });
     await this.prisma.integrationEvent.update({ where: { id: ev.id }, data: { ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: r.ok ? 'Call requested; waiting for the hangup report.' : r.message.slice(0, 500), units: r.units ?? null, unitType: r.unitType ?? null } });
     return { ...r, details: { ...(r.details ?? {}), eventId: ev.id, to: `••••${to.slice(-4)}` } };
+  }
+
+  /**
+   * A REAL test call through Sarvam Voice Agents (proves the API key, ids, connection and caller number). Same gates as
+   * the Plivo test call: an active organization, explicit confirmation, DRY_RUN off, an approved test recipient, and
+   * the Sarvam agent (app) id to answer it.
+   */
+  private async testSarvamCall(actor: Actor, secrets: Record<string, string>, cfg: Record<string, string>, body: Record<string, unknown>) {
+    const org = await this.prisma.organization.findUnique({ where: { id: actor.org }, select: { status: true } });
+    if (org?.status !== 'active') throw new ForbiddenException('Test calls are available once Tacksharp has activated this organization.');
+    if (body?.confirm !== true) throw new BadRequestException('Confirm that a real phone call should be placed (it is charged by Sarvam).');
+    const live = followUpConfig();
+    if (live.dryRun) throw new ForbiddenException('This server runs in dry-run mode (DRY_RUN=true): no real call is placed. An operator must switch it off for live tests.');
+    const to = normalizePhone(String(body?.to ?? ''));
+    if (!to || !live.liveTestRecipients.includes(to)) throw new ForbiddenException('Test calls go only to numbers on the approved test-recipient list (LIVE_TEST_RECIPIENTS).');
+    const appId = typeof body?.appId === 'string' ? body.appId.trim() : '';
+    const appVersion = Number(body?.appVersion ?? 1);
+    if (!/^[\w-]{3,100}$/.test(appId) || !Number.isInteger(appVersion) || appVersion < 1) throw new BadRequestException('Give the Sarvam agent (app) id and version that should answer the test call.');
+    return clients.sarvamOutboundCall(this.fetchImpl, { apiKey: secrets.apiKey, orgId: cfg.orgId, workspaceId: cfg.workspaceId, connectionId: cfg.connectionId, agentPhoneNumber: cfg.agentPhoneNumber }, { appId, appVersion, to });
   }
 
   /** Plivo hangup callback for a test call (signature already verified with THIS organization's token). */

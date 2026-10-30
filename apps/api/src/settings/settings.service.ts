@@ -32,10 +32,13 @@ export class SettingsService {
   async update(organizationId: string, patch: unknown): Promise<TenantSettings> {
     const current = await this.get(organizationId);
     const next = sanitizeSettings(patch, current);
+    // Keys owned by other modules (telephony provider choice) live in the same document: keep them.
+    const stored = (await this.prisma.organizationSettings.findUnique({ where: { organizationId } }))?.data as Record<string, unknown> | undefined;
+    const data = { ...next, ...(stored?.telephony ? { telephony: stored.telephony } : {}) };
     await this.prisma.organizationSettings.upsert({
       where: { organizationId },
-      create: { organizationId, data: next as never },
-      update: { data: next as never },
+      create: { organizationId, data: data as never },
+      update: { data: data as never },
     });
     this.cache.set(organizationId, { at: Date.now(), value: next });
     log.info('settings.updated', { organizationId });

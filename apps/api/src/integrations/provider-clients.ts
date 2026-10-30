@@ -169,3 +169,44 @@ export async function whatsappTemplates(fetchImpl: FetchLike, s: { accessToken: 
   const data = (((r.json ?? {}) as { data?: Array<Record<string, string>> }).data ?? []).map((t) => ({ name: t.name, status: t.status, language: t.language, category: t.category }));
   return { ok: true, latencyMs: r.ms, message: `${data.length} template(s); ${data.filter((t) => t.status === 'APPROVED').length} approved.`, templates: data };
 }
+
+// ------------------------------------------------------------------------------------------------ Sarvam Voice Agents telephony
+/**
+ * Documented endpoint (docs.sarvam.ai → API Reference → Instant Outbound → Create outbound call):
+ *   POST https://apps.sarvam.ai/api/outbounds/v1/orgs/:org_id/workspaces/:workspace_id/outbounds
+ *   header X-API-Key; body { app_config: { app_id, app_version, connection_config: { connection_id, agent_phone_number } },
+ *   user_config: { user_phone_number }, webhook_config? }; 200 -> { attempt_id }; 422 on a bad request.
+ * The call is answered by the agent HOSTED on Sarvam (app_id); its outcome arrives at our webhook after the call ends.
+ */
+export const SARVAM_APPS_API = 'https://apps.sarvam.ai';
+export type SarvamTelephony = { apiKey: string; orgId: string; workspaceId: string; connectionId: string; agentPhoneNumber: string };
+
+export async function sarvamOutboundCall(
+  fetchImpl: FetchLike,
+  s: SarvamTelephony,
+  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string> },
+): Promise<ProviderResult & { attemptId?: string; retryable?: boolean }> {
+  const url = `${SARVAM_APPS_API}/api/outbounds/v1/orgs/${encodeURIComponent(s.orgId)}/workspaces/${encodeURIComponent(s.workspaceId)}/outbounds`;
+  const body = {
+    app_config: {
+      app_id: p.appId,
+      app_version: p.appVersion,
+      connection_config: { connection_id: s.connectionId, agent_phone_number: plus(s.agentPhoneNumber) },
+      ...(p.variables && Object.keys(p.variables).length ? { agent_variables: p.variables } : {}),
+    },
+    user_config: { user_phone_number: plus(p.to) },
+    ...(p.webhookUrl ? { webhook_config: { url: p.webhookUrl } } : {}),
+  };
+  // Never retried here: a timeout or 5xx might still have placed the call (the caller decides, see TelephonyService).
+  const r = await request(fetchImpl, url, { method: 'POST', headers: { 'X-API-Key': s.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, [s.apiKey], false);
+  if (r.status === 200 || r.status === 201) {
+    const j = (r.json ?? {}) as { attempt_id?: string };
+    if (!j.attempt_id) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Sarvam accepted the request but returned no attempt id.' };
+    return { ok: true, latencyMs: r.ms, attemptId: j.attempt_id, message: 'Sarvam accepted the call request. The outcome is reported to the webhook after the call ends.', units: 1, unitType: 'calls' };
+  }
+  const res = fail(r, 'Sarvam outbound call request', r.status === 422 ? 'Check the agent (app) id and version, connection id and caller number.' : undefined);
+  // Rejected before placing (documented: "A call that would go past a limit is rejected"; connection never made).
+  return { ...res, retryable: r.status === 429 || r.code === 'network' };
+}
+
+const plus = (n: string) => (n.startsWith('+') ? n : `+${n}`);

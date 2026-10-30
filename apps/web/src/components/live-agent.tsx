@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Languages, Loader2, MessageSquareText, Mic, MicOff, Phone, Square, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { ApiError, api } from '@/lib/api';
 import { cx } from './ui';
+import { encodeWav, sentences, wavPcm } from '@/lib/voice';
 
 /**
  * "Tara": the Tacksharp assistant on the website and in the dashboard. Text or voice in Tamil, English or Tanglish;
@@ -12,7 +13,9 @@ import { cx } from './ui';
  */
 type Style = 'ta' | 'en' | 'tanglish';
 type Msg = { role: 'user' | 'assistant'; content: string; voice?: boolean };
-type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
+type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting';
+/** Video call states shown to the visitor. */
+type VideoState = 'off' | 'connecting' | 'live' | 'ended';
 
 const LANGS: Array<{ id: Style | 'auto'; label: string }> = [
   { id: 'auto', label: 'Auto' },
@@ -25,63 +28,17 @@ const QUICK: Record<Style, Array<[string, string]>> = {
   ta: [['💬', 'WhatsApp assistant எப்படி வேலை செய்யும்?'], ['📞', 'தமிழ்ல call பண்ணுமா?'], ['💰', 'விலை எவ்வளவு?'], ['🚀', 'எப்படி ஆரம்பிக்கறது?']],
   tanglish: [['💬', 'WhatsApp assistant epdi work aagum?'], ['📞', 'Tamil la call pannuma?'], ['💰', 'Price evlo?'], ['🚀', 'Epdi start panradhu?']],
 };
-const PHASE_LABEL: Record<Phase, string> = { idle: 'Online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…' };
+const PHASE_LABEL: Record<Phase, string> = { idle: 'Online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…', reconnecting: 'Reconnecting…' };
+/** Barge-in: the visitor talking over Tara (echo-cancelled mic, louder and sustained, so her own voice never triggers it). */
+const BARGE_RMS = 0.06;
+const BARGE_MS = 300;
 const STORE = 'ts-tara-v1';
 
 type SimliLike = { start(): Promise<void>; stop(): Promise<void>; sendAudioData(d: Uint8Array): void; ClearBuffer: () => void; on(ev: string, cb: (...a: unknown[]) => void): void };
 
-/** PCM16 samples of a WAV file (the "data" chunk), for the video presenter's lip-sync. */
-export function wavPcm(bytes: Uint8Array): Uint8Array {
-  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let o = 12;
-  while (o + 8 <= bytes.length) {
-    const id = String.fromCharCode(bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]);
-    const size = v.getUint32(o + 4, true);
-    if (id === 'data') return bytes.subarray(o + 8, Math.min(bytes.length, o + 8 + size));
-    o += 8 + size + (size % 2);
-  }
-  return bytes.subarray(44);
-}
-
 const errText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
-
-/** Split a reply into speakable sentences (Tamil, English and mixed) so the first one plays while the rest are made. */
-function sentences(text: string): string[] {
-  const parts = text.replace(/\s+/g, ' ').match(/[^.!?।\n]+[.!?।]*\s*/g) ?? [text];
-  const out: string[] = [];
-  for (const p of parts.map((x) => x.trim()).filter(Boolean)) {
-    if (out.length && (out[out.length - 1].length < 25 || p.length < 12)) out[out.length - 1] += ` ${p}`;
-    else out.push(p);
-  }
-  return out.slice(0, 6);
-}
-
-/** 16 kHz mono 16-bit WAV from recorded float samples (what speech recognition expects). */
-function encodeWav(chunks: Float32Array[], inRate: number): string {
-  const total = chunks.reduce((n, c) => n + c.length, 0);
-  const all = new Float32Array(total);
-  let o = 0;
-  for (const c of chunks) { all.set(c, o); o += c.length; }
-  const ratio = inRate / 16000;
-  const n = Math.floor(all.length / ratio);
-  const buf = new ArrayBuffer(44 + n * 2);
-  const v = new DataView(buf);
-  const w = (p: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(p + i, s.charCodeAt(i)); };
-  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) {
-    // Average the source samples that fall into this output sample (simple anti-aliasing).
-    const a = Math.floor(i * ratio), b = Math.min(all.length, Math.floor((i + 1) * ratio));
-    let s = 0;
-    for (let j = a; j < b; j++) s += all[j];
-    const x = Math.max(-1, Math.min(1, s / Math.max(1, b - a)));
-    v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
-  }
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
-}
+/** Network trouble or a server hiccup is worth one quiet retry during a call; a refusal (4xx) is not. */
+const retryable = (e: unknown) => !(e instanceof ApiError) || e.status === 0 || e.status >= 500;
 
 /**
  * Tara's mark: a brand-coloured orb that breathes with the live audio level (no cartoon face). Used in the launcher,
@@ -132,7 +89,18 @@ export function LiveAgent() {
   const [handsFree, setHandsFree] = useState(false);
   const [status, setStatus] = useState<{ chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string } | null>(null);
   /** Talking video presenter (Simli): off until the visitor starts it (it is billed per minute). */
-  const [video, setVideo] = useState<'off' | 'connecting' | 'live'>('off');
+  const [video, setVideo] = useState<VideoState>('off');
+  /** Duplicate-start guard: a double click or a re-render never opens a second (billable) video session. */
+  const videoStarting = useRef(false);
+  /** The greeting is spoken once per video session. */
+  const greeted = useRef(false);
+  /** The browser blocked autoplay: one "Start conversation" tap unlocks audio. */
+  const [needsStart, setNeedsStart] = useState(false);
+  /** The visitor ended the video themselves (vs. the session ending on its own). */
+  const userStopped = useRef(false);
+  /** One microphone stream reused across turns while a voice / video call is on (no permission prompt per turn). */
+  const mic = useRef<MediaStream | null>(null);
+  const failures = useRef(0);
   const videoEl = useRef<HTMLVideoElement>(null);
   const videoAudioEl = useRef<HTMLAudioElement>(null);
   const simli = useRef<SimliLike | null>(null);
@@ -148,6 +116,10 @@ export function LiveAgent() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const handsFreeRef = useRef(false);
   handsFreeRef.current = handsFree;
+  const startListeningRef = useRef<() => Promise<void>>(async () => undefined);
+  const greetRef = useRef<() => Promise<void>>(async () => undefined);
+  const bargedRef = useRef(false);
+  const quiet = useRef(0);
   const style: Style = lang === 'auto' ? 'en' : lang;
 
   // Restore the conversation for this tab (convenience only; nothing is stored on the server).
@@ -198,9 +170,23 @@ export function LiveAgent() {
   }, []);
   const stopMeter = () => { cancelAnimationFrame(raf.current); setLevel(0); };
 
-  /** Start the talking presenter: a short-lived session from our server, then the provider's video stream. */
+  /** The microphone for this call (reused across turns, released when the call ends). */
+  const getMic = useCallback(async () => {
+    if (mic.current?.getAudioTracks().some((t) => t.readyState === 'live')) return mic.current;
+    mic.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    return mic.current;
+  }, []);
+  const releaseMic = useCallback(() => { mic.current?.getTracks().forEach((t) => t.stop()); mic.current = null; }, []);
+
+  /**
+   * Start the talking presenter: ONE short-lived session from our server, then the provider's video stream. Never
+   * retried automatically (each session is billed); a failure falls back to voice and chat.
+   */
   const startVideo = useCallback(async () => {
-    if (simli.current || !videoEl.current || !videoAudioEl.current) return;
+    if (videoStarting.current || simli.current || !videoEl.current || !videoAudioEl.current) return;
+    videoStarting.current = true;
+    userStopped.current = false;
+    greeted.current = false;
     setVideo('connecting');
     setNotice(null);
     try {
@@ -214,8 +200,22 @@ export function LiveAgent() {
         client = new SimliClient(sessionToken, videoEl.current, videoAudioEl.current, null, LogLevel.ERROR, 'livekit') as unknown as SimliLike;
       }
       client.on('silent', () => { silentWaiter.current?.(); silentWaiter.current = null; });
-      client.on('stop', () => { simli.current = null; setVideo('off'); });
-      client.on('error', (d) => setNotice(`Video presenter: ${String(d)}`));
+      client.on('stop', () => {
+        // Session over (time / idle limit, network, or the visitor). Never reopened automatically.
+        const wasLive = simli.current === client;
+        simli.current = null;
+        stopSpeech.current();
+        if (wasLive && !userStopped.current) {
+          // End the call loop too: no half-finished recording is sent after the video ended.
+          handsFreeRef.current = false;
+          rec.current?.stop(false);
+          releaseMic();
+          setVideo('ended');
+          setHandsFree(false);
+          setNotice('The video call ended. You can continue by voice or chat, or start a new video call.');
+        } else setVideo('off');
+      });
+      client.on('error', () => setNotice('The video presenter had a problem. Tara keeps answering by voice and text.'));
       // The SDK retries a failed connection for a long time; the visitor gets an answer within 15 s either way.
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -228,15 +228,29 @@ export function LiveAgent() {
       }
       simli.current = client;
       setVideo('live');
+      setHandsFree(true);
+      // Autoplay: the tap on "Video call" normally allows sound; if the browser still blocks it, ask for one tap.
+      // play() can stay pending until the provider attaches its audio track: wait briefly, never forever.
+      try {
+        await Promise.race([videoAudioEl.current?.play(), new Promise((r) => setTimeout(r, 1500))]);
+      } catch (e) {
+        if ((e as DOMException)?.name === 'NotAllowedError') { setNeedsStart(true); return; }
+      }
+      void greetRef.current();
     } catch (e) {
       simli.current = null;
       setVideo('off');
-      setNotice(`${errText(e)}`.startsWith('The video') ? errText(e) : `The video presenter could not start (${errText(e)}). Chat and voice still work.`);
+      setHandsFree(false);
+      setNotice(`${errText(e)}`.startsWith('The video') || `${errText(e)}`.startsWith('Too many') ? errText(e) : `The video presenter could not start (${errText(e)}). Chat and voice still work.`);
+    } finally {
+      videoStarting.current = false;
     }
-  }, []);
+  }, [releaseMic]);
   const stopVideo = useCallback(() => {
     const c = simli.current;
+    userStopped.current = true;
     simli.current = null;
+    setNeedsStart(false);
     setVideo('off');
     void c?.stop().catch(() => undefined);
   }, []);
@@ -275,9 +289,43 @@ export function LiveAgent() {
     return !cancelled;
   }, []);
 
+  /**
+   * While Tara speaks during a call, listen for the visitor talking over her (barge-in): stop her and listen.
+   * Uses the call's echo-cancelled mic, a higher level than normal speech detection and a sustained 300 ms, so her
+   * own voice from the speaker does not interrupt her (feedback loop).
+   */
+  const bargeIn = useCallback((onBarge: () => void) => {
+    const stream = mic.current;
+    if (!stream || !handsFreeRef.current) return () => undefined;
+    const c = ctx();
+    const src = c.createMediaStreamSource(stream);
+    const an = c.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    const data = new Uint8Array(an.fftSize);
+    let loudSince = 0;
+    let stopped = false;
+    const tick = () => {
+      if (stopped) return;
+      an.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += ((v - 128) / 128) ** 2;
+      const rms = Math.sqrt(sum / data.length);
+      if (rms > BARGE_RMS) { loudSince ||= performance.now(); if (performance.now() - loudSince > BARGE_MS) { stop(); onBarge(); return; } } else loudSince = 0;
+      setTimeout(tick, 50);
+    };
+    const stop = () => { if (!stopped) { stopped = true; try { src.disconnect(); } catch { /* gone */ } } };
+    tick();
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** Speak a reply sentence by sentence: the next sentence's audio is fetched while the current one plays. */
   const speak = useCallback(async (text: string, st: Style) => {
-    if (simli.current) return speakVideo(text, st);
+    if (simli.current) {
+      const endBarge = bargeIn(() => { stopSpeech.current(); bargedRef.current = true; });
+      try { return await speakVideo(text, st); } finally { endBarge(); }
+    }
     const c = ctx();
     let cancelled = false;
     stopSpeech.current = () => { cancelled = true; try { playing.current?.stop(); } catch { /* already stopped */ } };
@@ -291,6 +339,7 @@ export function LiveAgent() {
     let next = fetchAudio(parts[0]);
     setPhase('speaking');
     meter(analyser.current!);
+    const endBarge = bargeIn(() => { stopSpeech.current(); bargedRef.current = true; });
     try {
       for (let i = 0; i < parts.length && !cancelled; i++) {
         const buf = await next;
@@ -309,16 +358,19 @@ export function LiveAgent() {
       setNotice(`Voice reply unavailable: ${errText(e)} The text answer is above.`);
       setVoiceOut(false);
     } finally {
+      endBarge();
       stopMeter();
       setPhase('idle');
     }
     return !cancelled;
-  }, [meter, speakVideo]);
+  }, [meter, speakVideo, bargeIn]);
 
   const send = useCallback(async (text: string, viaVoice = false) => {
     const message = text.trim();
     if (!message || phase === 'thinking') return;
     stopSpeech.current();
+    // Typed while the call was listening: drop that recording (the typed question wins; no double turn).
+    if (!viaVoice) rec.current?.stop(false);
     setNotice(null);
     const history = msgs.slice(-8).map(({ role, content }) => ({ role, content }));
     setMsgs((m) => [...m, { role: 'user', content: message, voice: viaVoice }]);
@@ -326,29 +378,45 @@ export function LiveAgent() {
     setPhase('thinking');
     try {
       const r = await api.post<{ reply: string; style: Style; source: 'ai' | 'faq' }>('/assistant/chat', { message, history, ...(lang !== 'auto' ? { lang } : {}) });
+      failures.current = 0;
       setMsgs((m) => [...m, { role: 'assistant', content: r.reply }]);
-      if (voiceOut && status?.voice) {
+      if ((voiceOut || simli.current) && status?.voice) {
+        bargedRef.current = false;
         const finished = await speak(r.reply, r.style);
-        if (finished && handsFreeRef.current) setTimeout(() => startListening(), 250);
-      } else setPhase('idle');
+        // Continuous call: listen again after Tara finishes, or at once when the visitor talked over her.
+        if (handsFreeRef.current && (finished || bargedRef.current)) setTimeout(() => void startListeningRef.current(), finished ? 250 : 0);
+      } else {
+        setPhase('idle');
+        if (handsFreeRef.current) setTimeout(() => void startListeningRef.current(), 250);
+      }
     } catch (e) {
+      if (handsFreeRef.current && retryable(e) && failures.current++ < 1) {
+        // One quiet retry of the turn (network blip); the visitor sees "Reconnecting".
+        setPhase('reconnecting');
+        setTimeout(() => void startListeningRef.current(), 1500);
+        return;
+      }
       setPhase('idle');
       setNotice(errText(e));
+      if (handsFreeRef.current) { setHandsFree(false); setNotice(`${errText(e)} The call was paused; tap Voice call to continue.`); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msgs, lang, voiceOut, status, phase, speak]);
 
   /** Record the visitor until ~1 s of silence (or 25 s), then recognise and send it. */
-  const startListening = useCallback(async () => {
-    if (rec.current) { rec.current.stop(true); return; }
+  const startListening = useCallback(async (fromButton = false) => {
+    // The mic button toggles (tap again to send); the call loop never interrupts a recording already running.
+    if (rec.current) { if (fromButton) rec.current.stop(true); return; }
     stopSpeech.current();
     setNotice(null);
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    } catch {
-      setNotice('Microphone permission is needed to talk. You can type instead.');
+      stream = await getMic();
+    } catch (e) {
+      const name = (e as DOMException)?.name;
+      setNotice(name === 'NotFoundError' ? 'No microphone was found. Connect one, or type instead.' : name === 'NotAllowedError' || name === 'SecurityError' ? 'Microphone permission is blocked. Allow it in the browser (lock icon in the address bar), or type instead.' : 'The microphone could not start. You can type instead.');
       setHandsFree(false);
+      setPhase('idle');
       return;
     }
     const c = ctx();
@@ -379,29 +447,65 @@ export function LiveAgent() {
       done = true;
       rec.current = null;
       proc.disconnect(); source.disconnect();
-      stream.getTracks().forEach((t) => t.stop());
+      // The call keeps its microphone between turns; a single tap-to-talk releases it.
+      if (!handsFreeRef.current) releaseMic();
       stopMeter();
-      if (!sendIt || !heard) { setPhase('idle'); if (!heard) setNotice('I did not hear anything. Tap the mic and speak, or type.'); setHandsFree(false); return; }
+      if (!sendIt) { setPhase('idle'); return; }
+      if (!heard) {
+        // In a call, silence just means "keep listening" a few times; then the call pauses (no endless open mic).
+        if (handsFreeRef.current && quiet.current++ < 2) { setTimeout(() => void startListeningRef.current(), 100); return; }
+        quiet.current = 0;
+        setPhase('idle');
+        setNotice(handsFreeRef.current ? 'Still there? The call is paused. Tap Voice call to continue.' : 'I did not hear anything. Tap the mic and speak, or type.');
+        setHandsFree(false);
+        releaseMic();
+        return;
+      }
+      quiet.current = 0;
       setPhase('transcribing');
       api.post<{ transcript: string }>('/assistant/stt', { audioBase64: encodeWav(chunks, c.sampleRate) })
-        .then((r) => { if (r.transcript) void send(r.transcript, true); else { setPhase('idle'); setNotice('I could not catch that. Please try again.'); } })
-        .catch((e) => { setPhase('idle'); setNotice(errText(e)); setHandsFree(false); });
+        .then((r) => {
+          failures.current = 0;
+          if (r.transcript) void send(r.transcript, true);
+          else if (handsFreeRef.current) setTimeout(() => void startListeningRef.current(), 100);
+          else { setPhase('idle'); setNotice('I could not catch that. Please try again.'); }
+        })
+        .catch((e) => {
+          if (handsFreeRef.current && retryable(e) && failures.current++ < 1) { setPhase('reconnecting'); setTimeout(() => void startListeningRef.current(), 1500); return; }
+          setPhase('idle'); setNotice(errText(e)); setHandsFree(false); releaseMic();
+        });
     };
     rec.current = { stop };
-  }, [meter, send]);
+  }, [meter, send, getMic, releaseMic]);
+  startListeningRef.current = startListening;
 
-  useEffect(() => () => { stopSpeech.current(); rec.current?.stop(false); cancelAnimationFrame(raf.current); void simli.current?.stop().catch(() => undefined); }, []);
+  /** Spoken once per video session, as soon as the presenter is connected (and audio is allowed). */
+  const greet = useCallback(async () => {
+    if (greeted.current || !simli.current) return;
+    greeted.current = true;
+    const text = status?.greeting || 'Vanakkam! I am Tara, the Tacksharp AI assistant. How can I help?';
+    setMsgs((m) => [...m, { role: 'assistant', content: text }]);
+    try { await getMic(); } catch { /* the first listen will explain */ }
+    bargedRef.current = false;
+    const finished = await speak(text, lang === 'auto' ? 'en' : lang);
+    if (handsFreeRef.current && (finished || bargedRef.current)) void startListening();
+  }, [status, speak, startListening, lang, getMic]);
+  greetRef.current = greet;
+
+  // Unmount: stop speech, the mic, the meter and the video session (no session outlives the page).
+  useEffect(() => () => { stopSpeech.current(); rec.current?.stop(false); cancelAnimationFrame(raf.current); mic.current?.getTracks().forEach((t) => t.stop()); void simli.current?.stop().catch(() => undefined); }, []);
 
   const greeting = status?.greeting;
-  const mode: 'chat' | 'voice' | 'video' = video !== 'off' ? 'video' : handsFree ? 'voice' : 'chat';
+  const mode: 'chat' | 'voice' | 'video' = video === 'connecting' || video === 'live' ? 'video' : handsFree ? 'voice' : 'chat';
   const setMode = (m: 'chat' | 'voice' | 'video') => {
     if (m === mode) return;
     if (m !== 'video' && video !== 'off') stopVideo();
-    if (m === 'chat') { setHandsFree(false); rec.current?.stop(false); }
-    if (m === 'voice') { setHandsFree(true); if (phase === 'idle') void startListening(); }
-    if (m === 'video') { setHandsFree(false); void startVideo(); }
+    if (m === 'chat') { handsFreeRef.current = false; setHandsFree(false); stopSpeech.current(); rec.current?.stop(false); releaseMic(); }
+    if (m === 'voice') { handsFreeRef.current = true; setHandsFree(true); failures.current = 0; quiet.current = 0; if (phase === 'idle' || phase === 'speaking') { stopSpeech.current(); void startListening(); } }
+    if (m === 'video') { rec.current?.stop(false); stopSpeech.current(); void startVideo(); }
   };
-  const close = () => { stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); stopVideo(); setOpen(false); };
+  const close = () => { handsFreeRef.current = false; stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); releaseMic(); stopVideo(); setOpen(false); };
+  const videoLabel = video === 'connecting' ? 'Connecting…' : video === 'ended' ? 'Ended' : PHASE_LABEL[phase];
   const iconBtn = 'grid size-9 place-items-center rounded-[10px] text-[#16183d]/70 hover:bg-[#16183d]/5 hover:text-[#16183d] disabled:opacity-40';
   return (
     <>
@@ -424,7 +528,7 @@ export function LiveAgent() {
             <div className="min-w-0 flex-1 leading-tight">
               <p className="text-[15px] font-semibold text-[#16183d]">Tara <span className="ml-1 rounded-full bg-[#ebeaf6] px-1.5 py-px align-middle text-[10.5px] font-semibold text-[#16183d]/70">AI</span></p>
               <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-[#16183d]/60" aria-live="polite">
-                <span className={cx('size-1.5 rounded-full', phase === 'idle' ? 'bg-emerald-500' : phase === 'listening' ? 'bg-rose-500' : 'bg-[#7c5cf0]')} />{PHASE_LABEL[phase]}
+                <span className={cx('size-1.5 rounded-full', phase === 'reconnecting' || video === 'ended' ? 'bg-amber-500' : phase === 'idle' ? 'bg-emerald-500' : phase === 'listening' ? 'bg-rose-500' : 'bg-[#7c5cf0]')} /><span data-testid="tara-status">{video !== 'off' ? videoLabel : PHASE_LABEL[phase]}</span>
               </p>
             </div>
             <button onClick={() => { setVoiceOut(!voiceOut); stopSpeech.current(); }} aria-pressed={voiceOut} aria-label={voiceOut ? 'Mute voice replies' : 'Turn on voice replies'} title={voiceOut ? 'Voice replies on' : 'Voice replies off'} className={iconBtn} disabled={!status?.voice}>
@@ -436,19 +540,25 @@ export function LiveAgent() {
           {/* Stage: the video presenter, or the voice visual. */}
           <div className="relative bg-[radial-gradient(120%_100%_at_50%_0%,#262a63_0%,#16183d_60%,#0d0f2b_100%)] px-4 pt-4 pb-3 text-white">
             {status?.video && (
-              <div className={cx('relative overflow-hidden rounded-[14px] bg-black/40', video === 'off' ? 'hidden' : 'block')}>
+              <div className={cx('relative overflow-hidden rounded-[14px] bg-black/40', video === 'connecting' || video === 'live' ? 'block' : 'hidden')}>
                 <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-video w-full object-cover" aria-label="Tara, AI video presenter" />
                 <audio ref={videoAudioEl} autoPlay />
                 {video === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting video…</span></p>}
                 <span className="absolute bottom-2 left-2 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur">AI presenter · our voice</span>
+                {video === 'live' && <span className="absolute top-2 right-2 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur" aria-live="polite">{videoLabel}</span>}
+                {needsStart && (
+                  <button onClick={() => { setNeedsStart(false); void videoAudioEl.current?.play().catch(() => undefined); void greetRef.current(); }} className="absolute inset-0 grid place-items-center bg-black/50 text-[14px] font-semibold text-white">
+                    <span className="rounded-full bg-white px-4 py-2 text-[#16183d]">Start conversation</span>
+                  </button>
+                )}
               </div>
             )}
-            {video === 'off' && (
+            {(video === 'off' || video === 'ended') && (
               <div className="flex items-center gap-4">
                 <Orb size={64} level={level} phase={phase} />
                 <div className="min-w-0 flex-1">
                   <Waveform level={level} phase={phase} />
-                  <p className="mt-1 truncate text-[12px] text-white/60">{phase === 'idle' ? (mode === 'voice' ? 'Voice call on · just start talking' : 'Ask by typing, or switch to a voice call') : PHASE_LABEL[phase]}</p>
+                  <p className="mt-1 truncate text-[12px] text-white/60">{video === 'ended' ? 'Video call ended' : phase === 'idle' ? (mode === 'voice' ? 'Voice call on · just start talking' : 'Ask by typing, or switch to a voice call') : PHASE_LABEL[phase]}</p>
                 </div>
               </div>
             )}
@@ -495,7 +605,7 @@ export function LiveAgent() {
               <label htmlFor="tara-input" className="sr-only">Message Tara</label>
               <textarea id="tara-input" ref={inputRef} rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={style === 'ta' ? 'உங்க கேள்வியை type பண்ணுங்க…' : style === 'tanglish' ? 'Unga question type pannunga…' : 'Ask about Tacksharp…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
               {status?.voice && (
-                <button type="button" onClick={() => { if (phase === 'speaking') { stopSpeech.current(); return; } void startListening(); }} aria-label={phase === 'listening' ? 'Stop and send' : phase === 'speaking' ? 'Stop speaking' : 'Speak your question'} className={cx('grid size-10 shrink-0 place-items-center rounded-[12px] transition-colors', phase === 'listening' ? 'bg-rose-600 text-white' : 'text-[#16183d]/70 hover:bg-[#16183d]/5')}>
+                <button type="button" onClick={() => { if (phase === 'speaking') { stopSpeech.current(); return; } void startListening(true); }} aria-label={phase === 'listening' ? 'Stop and send' : phase === 'speaking' ? 'Stop speaking' : 'Speak your question'} className={cx('grid size-10 shrink-0 place-items-center rounded-[12px] transition-colors', phase === 'listening' ? 'bg-rose-600 text-white' : 'text-[#16183d]/70 hover:bg-[#16183d]/5')}>
                   {phase === 'listening' ? <Square className="size-4" /> : phase === 'speaking' ? <MicOff className="size-[18px]" /> : <Mic className="size-[18px]" />}
                 </button>
               )}

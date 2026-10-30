@@ -3,7 +3,7 @@
  * for the platform console. In memory and bounded: the authoritative record is the log (same event names). Never
  * holds payloads, phone numbers or secrets.
  */
-export type WebhookFailure = { at: string; source: 'whatsapp' | 'plivo' | 'meta_leads' | 'plivo_test_call'; reason: string; path: string };
+export type WebhookFailure = { at: string; source: 'whatsapp' | 'plivo' | 'meta_leads' | 'plivo_test_call' | 'sarvam'; reason: string; path: string };
 
 const MAX = 200;
 const ring: WebhookFailure[] = [];

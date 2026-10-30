@@ -122,39 +122,108 @@ with sync_playwright() as p:
     check('video: provider unreachable -> clear message, back to the animated face, chat still works', dlg.get_by_role('status').filter(has_text='Chat and voice still work').count() == 1 and dlg.get_by_role('button', name=re.compile('Video call'), pressed=False).count() == 1)
     ctx.close()
 
-    # (b) Stand-in presenter (records what it is sent): our 16 kHz voice is streamed to it for lip-sync.
-    ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page(); errs = []; pg.on('pageerror', lambda e: errs.append(str(e)))
-    pg.add_init_script('''
-      window.__TARA_SENT__ = [];
+    # (b) Stand-in presenter (records what it is sent; no Simli session is ever created by the tests).
+    STANDIN = '''
+      window.__TARA_SENT__ = []; window.__TARA_STARTS__ = 0; window.__TARA_STOPS__ = 0; window.__TARA_CLEARED__ = 0;
       window.__TARA_SIMLI__ = (token, video, audio) => {
         const handlers = {};
+        if (window.__TARA_BLOCK_AUTOPLAY__) audio.play = () => Promise.reject(new DOMException('blocked', 'NotAllowedError'));
+        window.__TARA_END__ = () => handlers.stop && handlers.stop();
         return {
           on: (ev, cb) => { handlers[ev] = cb; },
-          start: async () => { window.__TARA_TOKEN__ = token; const c = document.createElement('canvas'); c.width = 64; c.height = 48; const g = c.getContext('2d'); g.fillStyle = '#3b3f86'; g.fillRect(0, 0, 64, 48); video.srcObject = c.captureStream(5); },
-          stop: async () => { handlers.stop && handlers.stop(); },
+          start: async () => { window.__TARA_STARTS__++; window.__TARA_TOKEN__ = token; const c = document.createElement('canvas'); c.width = 64; c.height = 48; const g = c.getContext('2d'); g.fillStyle = '#3b3f86'; g.fillRect(0, 0, 64, 48); video.srcObject = c.captureStream(5); },
+          stop: async () => { window.__TARA_STOPS__++; handlers.stop && handlers.stop(); },
           sendAudioData: (d) => { window.__TARA_SENT__.push(d.length); clearTimeout(window.__TARA_T__); window.__TARA_T__ = setTimeout(() => handlers.silent && handlers.silent(), 300); },
-          ClearBuffer: () => { window.__TARA_CLEARED__ = true; },
+          ClearBuffer: () => { window.__TARA_CLEARED__++; },
         };
-      };''')
-    pg.route('**/assistant/status*', vstatus); pg.route('**/assistant/video/session', vsession); pg.route('**/assistant/tts', vtts)
-    pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
-    pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
-    dlg = pg.get_by_role('dialog', name=re.compile('Tara'))
-    dlg.get_by_role('button', name=re.compile('Video call')).click(); pg.wait_for_timeout(1200)
-    check('video: presenter goes live with the server-issued session', pg.evaluate('window.__TARA_TOKEN__') == 'test-session-token' and dlg.get_by_label('Tara, AI video presenter').is_visible())
+      };'''
+    vstt = []
+    def vstt_route(route):
+        vstt.append(1)
+        # First utterance is a question; later ones are background noise (no words): the call keeps listening.
+        t = 'Price evlo?' if len(vstt) == 1 else ''
+        route.fulfill(status=200, content_type='application/json', body=json.dumps({'transcript': t, 'language': 'ta-IN', 'style': 'tanglish'}))
+    # A speaker who says something (0.8 s) and then pauses (2.5 s), looped by Chrome's fake microphone.
+    utter = os.path.join(tempfile.gettempdir(), 'tara-utterance.wav')
+    with wave.open(utter, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b''.join(struct.pack('<h', int(9000 * math.sin(2 * math.pi * 220 * i / 16000))) for i in range(int(0.8 * 16000))) + b'\x00\x00' * int(2.5 * 16000))
+    bv = p.chromium.launch(args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', f'--use-file-for-fake-audio-capture={utter}', '--autoplay-policy=no-user-gesture-required'])
+    def video_page(block_autoplay=False, session_route=None):
+        c = bv.new_context(viewport={'width': 1440, 'height': 900}, permissions=['microphone']); pg = c.new_page(); errs = []; pg.on('pageerror', lambda e: errs.append(str(e)))
+        pg.add_init_script(('window.__TARA_BLOCK_AUTOPLAY__ = true;' if block_autoplay else '') + STANDIN)
+        pg.route('**/assistant/status*', vstatus); pg.route('**/assistant/video/session', session_route or vsession); pg.route('**/assistant/tts', vtts); pg.route('**/assistant/stt', vstt_route)
+        pg.goto(WEB + '/welcome'); pg.wait_for_timeout(1200)
+        pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).click(); pg.wait_for_timeout(1000)
+        return c, pg, errs, pg.get_by_role('dialog', name=re.compile('Tara'))
+
+    sessions.clear(); tts16.clear(); vstt.clear()
+    ctx, pg, errs, dlg = video_page()
     dlg.get_by_role('radio', name='Tanglish').click()
-    tts16.clear()
-    dlg.get_by_label('Message Tara').fill('Price evlo?'); dlg.get_by_role('button', name='Send').click()
-    pg.wait_for_timeout(4000)
-    sent = pg.evaluate('window.__TARA_SENT__')
-    check('video: reply voice requested at 16 kHz for lip-sync', tts16 and all(x == 16000 for x in tts16), str(tts16))
-    check('video: PCM streamed to the presenter in ~6000-byte chunks (WAV header stripped)', sum(sent) > 0 and max(sent) <= 6000 and sum(sent) == len(tts16) * (len(base64.b64decode(TTS)) - 44), f'{len(sent)} chunks, {sum(sent)} bytes')
-    check('video: back to idle after the presenter reports silence', pg.get_by_role('dialog').get_by_text('Online', exact=True).count() == 1)
+    vbtn = dlg.get_by_role('button', name=re.compile('Video call'))
+    vbtn.click(); vbtn.click(force=True)  # double click: the duplicate-start guard must hold
+    pg.wait_for_timeout(1500)
+    check('video: presenter goes live with the server-issued session', pg.evaluate('window.__TARA_TOKEN__') == 'test-session-token' and dlg.get_by_label('Tara, AI video presenter').is_visible())
+    check('video: a double click opens ONE session (videoStarting guard)', len(sessions) == 1 and pg.evaluate('window.__TARA_STARTS__') == 1, f'{len(sessions)} sessions')
+    for _ in range(20):
+        if sum(pg.evaluate('window.__TARA_SENT__')): break
+        pg.wait_for_timeout(250)
+    pg.wait_for_timeout(1200)
+    greet_sent = sum(pg.evaluate('window.__TARA_SENT__'))
+    check('video: greets automatically once connected (no button to press)', greet_sent > 0 and dlg.locator('ol li').filter(has_text='Tara').count() >= 1)
+    check('video: greeting voice at 16 kHz, PCM in ~6000-byte chunks (WAV header stripped)', tts16 and all(x == 16000 for x in tts16) and max(pg.evaluate('window.__TARA_SENT__')) <= 6000 and greet_sent % (len(base64.b64decode(TTS)) - 44) == 0, f'{greet_sent} bytes / {len(tts16)} tts {tts16} max {max(pg.evaluate("window.__TARA_SENT__"))}')
+    # Continuous loop: listen -> (fake mic) -> recognise -> answer -> speak -> listen again
+    ok = False
+    for _ in range(40):
+        pg.wait_for_timeout(500)
+        if dlg.get_by_text(re.compile('Pilot, Growth, Enterprise nu')).count() and len(vstt) >= 2: ok = True; break
+    check('video: continuous conversation (heard → answered → spoken → listening again)', ok and sum(pg.evaluate('window.__TARA_SENT__')) > greet_sent, f'{len(vstt)} utterances')
+    statuses = set()
+    for _ in range(12):
+        statuses.add(dlg.get_by_test_id('tara-status').inner_text()); pg.wait_for_timeout(250)
+    check('video: status shows the call state (Listening / Thinking / Speaking …)', statuses & {'Listening…', 'Got it…', 'Thinking…', 'Speaking…'}, str(statuses))
+    greetings = dlg.locator('ol li').filter(has_text=re.compile('Vanakkam|Hi|Hello|வணக்கம்'))
+    check('video: greeting not repeated during the conversation', greetings.count() <= 2, str(greetings.count()))
+    # No overlapping audio: a new question while she speaks clears the presenter's buffer first.
+    cleared = pg.evaluate('window.__TARA_CLEARED__')
+    dlg.get_by_label('Message Tara').fill('What does it cost?'); dlg.get_by_role('button', name='Send', exact=True).click(); pg.wait_for_timeout(300)
+    dlg.get_by_label('Message Tara').fill('How do I get started?'); dlg.get_by_role('button', name='Send', exact=True).click(); pg.wait_for_timeout(2500)
+    check('video: a new turn stops the previous reply first (no double audio)', pg.evaluate('window.__TARA_CLEARED__') > cleared)
     pg.screenshot(path=os.path.join(SHOTS, 'assistant-video.png'))
+    # The session ends by itself (limit / idle): "Ended", no automatic new (billable) session, voice and chat remain.
+    pg.evaluate('window.__TARA_END__()'); pg.wait_for_timeout(800)
+    check('video: session ended -> "Ended" state, explained, no automatic reconnect', dlg.get_by_test_id('tara-status').inner_text() == 'Ended' and dlg.get_by_role('status').filter(has_text='video call ended').count() == 1 and len(sessions) == 1, dlg.get_by_test_id('tara-status').inner_text() + ' | ' + ' / '.join(dlg.get_by_role('status').all_inner_texts()))
     dlg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(300)
-    check('video: closing ends the presenter session', not pg.get_by_label('Tara, AI video presenter').count())
+    check('video: closing cleans up (no presenter, no mic left open)', not pg.get_by_label('Tara, AI video presenter').count() and pg.evaluate("navigator.mediaDevices ? true : false"))
     check('video: no page errors', not errs, '; '.join(errs)[:200])
     ctx.close()
+
+    # Closing during a live call stops the session.
+    ctx, pg, errs, dlg = video_page()
+    dlg.get_by_role('button', name=re.compile('Video call')).click(); pg.wait_for_timeout(1500)
+    dlg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(500)
+    check('video: closing during the call stops the presenter session', pg.evaluate('window.__TARA_STOPS__') == 1)
+    ctx.close()
+
+    # Autoplay blocked: one "Start conversation" tap, then exactly one greeting.
+    ctx, pg, errs, dlg = video_page(block_autoplay=True)
+    dlg.get_by_role('button', name=re.compile('Video call')).click(); pg.wait_for_timeout(1500)
+    start = dlg.get_by_role('button', name='Start conversation')
+    check('autoplay blocked: "Start conversation" shown, nothing spoken yet', start.count() == 1 and sum(pg.evaluate('window.__TARA_SENT__')) == 0)
+    start.click(); pg.wait_for_timeout(3500)
+    check('autoplay blocked: after the tap Tara greets once', sum(pg.evaluate('window.__TARA_SENT__')) > 0 and start.count() == 0)
+    ctx.close()
+
+    # Rate limit: 4 sessions per 10 minutes per visitor. The 429 is readable (CORS) and explained; no retry loop.
+    tries = []
+    def limited(route):
+        tries.append(1); route.fulfill(status=429, content_type='application/json', headers={'Access-Control-Allow-Origin': WEB, 'Access-Control-Allow-Credentials': 'true'}, body=json.dumps({'statusCode': 429, 'message': 'Too many requests. Please wait and try again.'}))
+    ctx, pg, errs, dlg = video_page(session_route=limited)
+    dlg.get_by_role('button', name=re.compile('Video call')).click(); pg.wait_for_timeout(2500)
+    check('rate limit: the visitor sees "Too many requests", one attempt only, chat still works', dlg.get_by_role('status').filter(has_text='Too many requests').count() == 1 and len(tries) == 1 and pg.evaluate('window.__TARA_STARTS__') == 0)
+    ctx.close()
+
+    bv.close()
 
     # (c) Without the presenter configured, no video button appears (real status from the API).
     ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page()

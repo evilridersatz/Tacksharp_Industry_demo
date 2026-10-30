@@ -14,6 +14,7 @@ const NAV = [
   { href: '/solutions', label: 'Industries' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/docs', label: 'Getting started' },
+  { href: '/voice-demos', label: 'Voice agents' },
   { href: '/demo', label: 'Demos' },
 ];
 
@@ -79,7 +80,7 @@ function Footer() {
           <p className="mt-3 max-w-xs text-[13.5px] leading-relaxed">AI employees for WhatsApp, phone and operations, built in Chennai for businesses that talk to customers in Tamil and English.</p>
           <p className="mt-4 text-[12.5px] text-white/55">Tacksharp AI Private Limited<br />53 B, SPE Monocity, Parivakkam, Poonamallee, Chennai 600056</p>
         </div>
-        <FooterCol title="Product" links={[['/product', 'How it works'], ['/solutions', 'Industries'], ['/pricing', 'Pricing'], ['/demo', 'Demos']]} />
+        <FooterCol title="Product" links={[['/product', 'How it works'], ['/solutions', 'Industries'], ['/pricing', 'Pricing'], ['/voice-demos', 'Voice agent demos'], ['/demo', 'Demos']]} />
         <FooterCol title="Start" links={[['/signup', 'Create an account'], ['/login', 'Log in'], ['/docs', 'Getting started'], ['/forgot-password', 'Password help']]} />
         <FooterCol title="Legal" links={[['/privacy', 'Privacy policy'], ['/terms', 'Terms of service']]} />
       </div>

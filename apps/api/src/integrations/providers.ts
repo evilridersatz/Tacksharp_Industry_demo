@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
  * Provider definitions: which fields are SECRET (encrypted, never returned) and which are plain configuration
  * (returned as-is), with validation. The backend decides what is allowed; the browser only renders it.
  */
-export const PROVIDERS = ['plivo', 'sarvam', 'openai', 'whatsapp'] as const;
+export const PROVIDERS = ['plivo', 'sarvam', 'openai', 'whatsapp', 'sarvam_telephony'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
@@ -40,6 +40,13 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
     { key: 'apiKey', label: 'API key', secret: true, required: true, help: 'platform.openai.com → API keys. A project key is recommended.' },
     { key: 'model', label: 'Model', secret: false, required: true, options: OPENAI_MODELS },
   ],
+  sarvam_telephony: [
+    { key: 'apiKey', label: 'Voice Agents API key', secret: true, required: true, help: 'Sarvam Voice Agents → Settings → API keys (workspace key, sent as X-API-Key).' },
+    { key: 'orgId', label: 'Sarvam org ID', secret: false, required: true, help: 'From your Sarvam Voice Agents workspace URL / settings.' },
+    { key: 'workspaceId', label: 'Workspace ID', secret: false, required: true },
+    { key: 'connectionId', label: 'Telephony connection ID', secret: false, required: true, help: 'Deploy → Phone Numbers → the connection (Sarvam-rented Vobiz number, or your own provider).' },
+    { key: 'agentPhoneNumber', label: 'Caller number (agent phone number)', secret: false, required: true, help: 'A number on that connection, with country code. Renting a number does not by itself enable calls: it must be KYC-approved, assigned to an inbound deployment for inbound and to a group / campaign for outbound.' },
+  ],
   whatsapp: [
     { key: 'accessToken', label: 'Access token (system user)', secret: true, required: true, help: 'Meta Business → System users → token with whatsapp_business_messaging and whatsapp_business_management.' },
     { key: 'appSecret', label: 'App secret', secret: true, required: false, help: 'Used to verify webhook signatures for this app.' },
@@ -53,6 +60,7 @@ export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
   sarvam: { sttModel: 'saaras:v3', sttMode: 'codemix', sttLanguage: 'unknown', ttsModel: 'bulbul:v3', ttsLanguage: 'ta-IN', ttsSpeaker: 'roopa' },
   openai: { model: 'gpt-5.4-mini' },
   whatsapp: {},
+  sarvam_telephony: {},
 };
 
 const digits = (v: string) => v.replace(/[\s()+-]/g, '');
@@ -84,6 +92,11 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
         v = digits(v);
         if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }
       }
+      if (provider === 'sarvam_telephony' && f.key === 'agentPhoneNumber' && v) {
+        v = digits(v);
+        if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }
+      }
+      if (provider === 'sarvam_telephony' && ['orgId', 'workspaceId', 'connectionId'].includes(f.key) && v && !/^[\w-]{2,100}$/.test(v)) { errors[f.key] = 'Letters, digits, - and _ only (copy it from Sarvam).'; continue; }
       if (provider === 'whatsapp' && (f.key === 'phoneNumberId' || f.key === 'businessAccountId') && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy it from WhatsApp Manager).'; continue; }
       config[f.key] = v;
     }

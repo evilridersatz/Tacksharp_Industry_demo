@@ -64,6 +64,12 @@ export function environmentCredentials(provider: Provider): ResolvedCredentials 
       return env({ apiKey: process.env.OPENAI_API_KEY ?? '' }, { model: process.env.OPENAI_MODEL || 'gpt-5.4-mini' }, ['apiKey']);
     case 'whatsapp':
       return env({ accessToken: config.whatsapp.accessToken, appSecret: process.env.META_APP_SECRET ?? '' }, { phoneNumberId: config.whatsapp.phoneNumberId }, ['accessToken', 'phoneNumberId']);
+    case 'sarvam_telephony':
+      return env(
+        { apiKey: process.env.SARVAM_AGENTS_API_KEY ?? '' },
+        { orgId: process.env.SARVAM_AGENTS_ORG_ID ?? '', workspaceId: process.env.SARVAM_AGENTS_WORKSPACE_ID ?? '', connectionId: process.env.SARVAM_AGENTS_CONNECTION_ID ?? '', agentPhoneNumber: process.env.SARVAM_AGENTS_PHONE_NUMBER ?? '' },
+        ['apiKey', 'orgId', 'workspaceId', 'connectionId', 'agentPhoneNumber'],
+      );
   }
 }
 

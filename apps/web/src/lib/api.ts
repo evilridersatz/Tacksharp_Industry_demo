@@ -16,7 +16,7 @@ export class ApiError extends Error {
 }
 
 /** Pages that never bounce to the login screen on a 401 (public site, account pages). */
-const NO_LOGIN_REDIRECT = ['/login', '/invite', '/signup', '/forgot-password', '/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/terms', '/privacy'];
+const NO_LOGIN_REDIRECT = ['/login', '/invite', '/signup', '/forgot-password', '/welcome', '/product', '/solutions', '/pricing', '/docs', '/demo', '/voice-demos', '/terms', '/privacy'];
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
