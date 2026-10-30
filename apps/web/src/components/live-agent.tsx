@@ -120,6 +120,8 @@ export function LiveAgent() {
   const greetRef = useRef<() => Promise<void>>(async () => undefined);
   const bargedRef = useRef(false);
   const quiet = useRef(0);
+  /** Bumped when a call ends: speech recognised for an ended call is dropped (no turn after "Ended"). */
+  const callEpoch = useRef(0);
   const style: Style = lang === 'auto' ? 'en' : lang;
 
   // Restore the conversation for this tab (convenience only; nothing is stored on the server).
@@ -208,6 +210,7 @@ export function LiveAgent() {
         if (wasLive && !userStopped.current) {
           // End the call loop too: no half-finished recording is sent after the video ended.
           handsFreeRef.current = false;
+          callEpoch.current++;
           rec.current?.stop(false);
           releaseMic();
           setVideo('ended');
@@ -463,14 +466,17 @@ export function LiveAgent() {
       }
       quiet.current = 0;
       setPhase('transcribing');
+      const epoch = callEpoch.current;
       api.post<{ transcript: string }>('/assistant/stt', { audioBase64: encodeWav(chunks, c.sampleRate) })
         .then((r) => {
+          if (epoch !== callEpoch.current) return;
           failures.current = 0;
           if (r.transcript) void send(r.transcript, true);
           else if (handsFreeRef.current) setTimeout(() => void startListeningRef.current(), 100);
           else { setPhase('idle'); setNotice('I could not catch that. Please try again.'); }
         })
         .catch((e) => {
+          if (epoch !== callEpoch.current) return;
           if (handsFreeRef.current && retryable(e) && failures.current++ < 1) { setPhase('reconnecting'); setTimeout(() => void startListeningRef.current(), 1500); return; }
           setPhase('idle'); setNotice(errText(e)); setHandsFree(false); releaseMic();
         });
@@ -504,7 +510,7 @@ export function LiveAgent() {
     if (m === 'voice') { handsFreeRef.current = true; setHandsFree(true); failures.current = 0; quiet.current = 0; if (phase === 'idle' || phase === 'speaking') { stopSpeech.current(); void startListening(); } }
     if (m === 'video') { rec.current?.stop(false); stopSpeech.current(); void startVideo(); }
   };
-  const close = () => { handsFreeRef.current = false; stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); releaseMic(); stopVideo(); setOpen(false); };
+  const close = () => { callEpoch.current++; handsFreeRef.current = false; stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); releaseMic(); stopVideo(); setOpen(false); };
   const videoLabel = video === 'connecting' ? 'Connecting…' : video === 'ended' ? 'Ended' : PHASE_LABEL[phase];
   const iconBtn = 'grid size-9 place-items-center rounded-[10px] text-[#16183d]/70 hover:bg-[#16183d]/5 hover:text-[#16183d] disabled:opacity-40';
   return (

@@ -323,6 +323,7 @@ export function standardNav(groups: NavGroup[]): NavGroup[] {
     section,
     items: items
       .filter((i) => sectionOf(i.href) === section && !seen.has(i.href) && seen.add(i.href))
-      .map((i) => (i.href === '/' ? { ...i, label: 'Home' } : i)),
+      // The overview page becomes "Home"; a home with its own name (VisionOps "Operations center") keeps it.
+      .map((i) => (i.href === '/' && /overview|dashboard/i.test(i.label) ? { ...i, label: 'Home' } : i)),
   })).filter((g) => g.items.length > 0);
 }

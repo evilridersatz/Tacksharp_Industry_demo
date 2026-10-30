@@ -121,8 +121,8 @@ with sync_playwright() as p:
 
         # ---------------------------------------------------------------- integrations (A, admin)
         a.goto(WEB + '/settings/integrations'); a.wait_for_timeout(2500)
-        check('integrations: list shows Plivo and WhatsApp, not configured', a.get_by_text('Plivo voice').count() >= 1 and a.get_by_text('Not configured').count() >= 2)
-        check('integrations: a self-service org does not use the platform account', a.get_by_text(re.compile('Not in use')).count() >= 1)
+        check('integrations: list shows Plivo and WhatsApp, not connected', a.get_by_text('Plivo voice').count() >= 1 and a.get_by_test_id('integration-plivo').get_by_text('Not connected').count() == 1 and a.get_by_test_id('integration-whatsapp').get_by_text('Not connected').count() == 1)
+        check('integrations: a self-service org does not use the platform account', a.get_by_text('Provided by Tacksharp').count() == 0 and a.get_by_test_id('channel-voice').get_by_text('Not connected').count() == 1)
         a.goto(WEB + '/settings/integrations/plivo'); a.wait_for_timeout(2500)
         SECRET = f'plivo-ui-secret-{run}-ZZ'
         a.get_by_label('Auth ID', exact=True).fill(f'MAUITEST{run}AAAA')
