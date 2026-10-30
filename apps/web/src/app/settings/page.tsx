@@ -7,6 +7,7 @@ import type { Property, TenantSettings } from '@/lib/types';
 import { PageHeader } from '@/components/shell';
 import { Button, Card, CardHeader, ErrorBanner, Skeleton } from '@/components/ui';
 import { Dialog } from '@/components/textile';
+import { toast } from '@/components/toast';
 import { INDUSTRIES, industryDef, type IndustryId } from '@/lib/industries';
 import { forgetWorkspace, useWorkspace } from '@/lib/industry';
 
@@ -148,6 +149,7 @@ export default function SettingsPage() {
       />
       {(err || (error && !data)) && <div className="mb-4"><ErrorBanner message={err ?? error!} onRetry={reload} /></div>}
       {!d && <Skeleton className="h-96" />}
+      <BusinessProfile />
       {d && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <Card className="xl:col-span-2">
@@ -390,5 +392,32 @@ export default function SettingsPage() {
         )}
       </Dialog>
     </>
+  );
+}
+
+/** Business name and phone (shown on Home; the phone is how Tacksharp and your team reach you, never for routing). */
+function BusinessProfile() {
+  const { data, reload } = useApi<{ name: string; contactPhone: string | null; status: string } | null>('/settings/profile', 0);
+  const { workspace } = useWorkspace();
+  const admin = workspace?.role === 'admin' || !workspace?.role;
+  const [f, setF] = useState<{ name: string; contactPhone: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [errs, setErrs] = useState<Record<string, string>>({});
+  useEffect(() => { if (data && !f) setF({ name: data.name, contactPhone: data.contactPhone ?? '' }); }, [data, f]);
+  if (!data || !f) return <Skeleton className="mb-4 h-28" />;
+  return (
+    <Card className="mb-4">
+      <CardHeader title="Business profile" subtitle="Your business name and phone number" />
+      <form className="grid gap-3 px-5 pb-5 sm:grid-cols-[1fr_1fr_auto] sm:items-end" onSubmit={async (e) => {
+        e.preventDefault(); setBusy(true); setErrs({});
+        try { await api.patch('/settings/profile', f); await reload(); toast('Business profile saved.'); }
+        catch (x) { setErrs((x as { body?: { fields?: Record<string, string> } }).body?.fields ?? {}); toast(x instanceof Error ? x.message : String(x), 'error'); }
+        finally { setBusy(false); }
+      }}>
+        <label className="grid gap-1 text-[12.5px] font-semibold text-ink">Business name<input disabled={!admin} className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-normal" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />{errs.name && <span className="font-normal text-rose">{errs.name}</span>}</label>
+        <label className="grid gap-1 text-[12.5px] font-semibold text-ink">Business phone (with country code)<input disabled={!admin} inputMode="tel" className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-normal" value={f.contactPhone} onChange={(e) => setF({ ...f, contactPhone: e.target.value })} placeholder="91 98400 12345" />{errs.contactPhone && <span className="font-normal text-rose">{errs.contactPhone}</span>}</label>
+        {admin && <Button type="submit" busy={busy}>Save profile</Button>}
+      </form>
+    </Card>
   );
 }

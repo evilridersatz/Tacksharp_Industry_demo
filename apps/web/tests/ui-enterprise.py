@@ -76,7 +76,7 @@ with sync_playwright() as p:
         a.get_by_label('Your name').fill('Alpha Admin')
         a.get_by_label('Business email').fill(A_EMAIL)
         a.get_by_label('Password', exact=True).fill('short')
-        a.get_by_label('Industry').select_option('retail')
+        a.get_by_role('radio', name=re.compile('^Retail & e-commerce')).check(force=True)
         a.get_by_role('checkbox').check()
         a.get_by_role('button', name='Create organization').click(); a.wait_for_timeout(300)
         check('signup: weak password refused before submitting', a.get_by_text('Use at least 12 characters.').count() == 1)

@@ -156,6 +156,54 @@ export class CatalogService {
     return updated;
   }
 
+  /** A menu category ("Chicken", "Eggs" ...). Names are unique per organization. */
+  async createCategory(organizationId: string, input: Record<string, unknown>, actor: string) {
+    const name = typeof input.name === 'string' ? input.name.trim().slice(0, 60) : '';
+    if (name.length < 2) throw new BadRequestException('Give the category a name (at least 2 characters).');
+    const existing = await this.prisma.menuCategory.findFirst({ where: { organizationId, name } });
+    if (existing) throw new BadRequestException('A category with this name already exists.');
+    const count = await this.prisma.menuCategory.count({ where: { organizationId } });
+    const created = await this.prisma.menuCategory.create({ data: { organizationId, name, sortOrder: count } });
+    this.invalidate(organizationId);
+    log.info('menu.category_created', { organizationId, categoryId: created.id, actor });
+    return created;
+  }
+
+  /** A shop / pickup point. Opening hours are IST "HH:mm"; staff still confirm every order. */
+  async saveOutlet(organizationId: string, id: string | null, input: Record<string, unknown>, actor: string) {
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : undefined);
+    const data: Record<string, unknown> = {};
+    const errors: Record<string, string> = {};
+    const creating = id === null;
+    if (creating || input.name !== undefined) { const v = str(input.name, 120); if (!v || v.length < 2) errors.name = 'Enter the shop name.'; else data.name = v; }
+    if (creating || input.address !== undefined) { const v = str(input.address, 500); if (!v || v.length < 5) errors.address = 'Enter the shop address.'; else data.address = v; }
+    if (input.area !== undefined) data.area = str(input.area, 120) || null;
+    if (input.phone !== undefined) {
+      const v = (str(input.phone, 30) ?? '').replace(/[\s()+-]/g, '');
+      if (v && !/^\d{8,15}$/.test(v)) errors.phone = 'Digits with country code, 8 to 15 long.'; else data.phone = v || null;
+    }
+    for (const k of ['opensAt', 'closesAt'] as const) {
+      if (input[k] !== undefined) { const v = str(input[k], 5) ?? ''; if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) errors[k] = 'Time as HH:MM (24-hour).'; else data[k] = v; }
+    }
+    if (data.opensAt && data.closesAt && String(data.opensAt) >= String(data.closesAt)) errors.closesAt = 'Closing time must be after opening time.';
+    if (input.prepMinutes !== undefined) { const n = Number(input.prepMinutes); if (!Number.isInteger(n) || n < 0 || n > 600) errors.prepMinutes = 'Minutes between 0 and 600.'; else data.prepMinutes = n; }
+    if (input.active !== undefined) { if (typeof input.active !== 'boolean') errors.active = 'true or false.'; else data.active = input.active; }
+    if (Object.keys(errors).length) throw new BadRequestException({ statusCode: 400, message: 'Please correct the highlighted fields.', fields: errors });
+    let row;
+    if (creating) {
+      const count = await this.prisma.outlet.count({ where: { organizationId } });
+      row = await this.prisma.outlet.create({ data: { organizationId, sortOrder: count, ...(data as { name: string; address: string }) } });
+    } else {
+      const existing = await this.prisma.outlet.findFirst({ where: { id: id!, organizationId } });
+      if (!existing) throw new NotFoundException('Outlet not found');
+      if (!Object.keys(data).length) throw new BadRequestException('Nothing to update.');
+      row = await this.prisma.outlet.update({ where: { id: existing.id }, data });
+    }
+    this.invalidate(organizationId);
+    log.info(creating ? 'menu.outlet_created' : 'menu.outlet_updated', { organizationId, outletId: row.id, actor });
+    return row;
+  }
+
   async createItem(organizationId: string, input: Record<string, unknown>, actor: string) {
     const data = await this.validateItemInput(organizationId, input, true);
     try {

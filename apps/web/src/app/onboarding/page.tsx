@@ -7,6 +7,7 @@ import { api, useApi } from '@/lib/api';
 import { INDUSTRIES, industryDef, type IndustryId } from '@/lib/industries';
 import { forgetWorkspace, switchWorkspace, useWorkspace, type WorkspaceOption } from '@/lib/industry';
 import { Button, Card, Skeleton, cx } from '@/components/ui';
+import { IndustryPicker } from '@/components/industry-picker';
 
 const STEPS = ['Workspace', 'Industry', 'Connections', 'AI agents'] as const;
 
@@ -123,16 +124,17 @@ function WorkspaceStep({ onNext }: { onNext: () => void }) {
 
 function IndustryStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   const { workspace } = useWorkspace();
-  const [choice, setChoice] = useState<IndustryId | undefined>(workspace?.industry);
+  const current = workspace?.industry === 'restaurant' ? 'chicken_shop' : workspace?.industry;
+  const [choice, setChoice] = useState<string | undefined>(current);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (!workspace) return null;
-  const options: IndustryId[] = workspace.canChangeIndustry ? workspace.settableIndustries : [workspace.industry];
   async function next() {
-    if (!choice || choice === workspace!.industry) return onNext();
+    if (!choice || choice === current) return onNext();
     setBusy(true);
     setErr(null);
     try {
+      // The server decides: a new workspace can become a chicken shop; other industries come from Settings.
       await api.put('/settings', { industry: choice });
       forgetWorkspace();
       try {
@@ -151,68 +153,56 @@ function IndustryStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
       <h1 className="text-[20px] font-bold text-ink">What kind of business is {workspace.name}?</h1>
       <p className="mt-1 text-[13px] text-muted">
         {workspace.canChangeIndustry
-          ? 'This sets the menu, dashboard, pipeline stages and AI agents. No records are deleted or moved.'
-          : 'This workspace runs the restaurant ordering assistant, so its industry is fixed.'}
+          ? 'This sets your menu, dashboard, setup steps and AI assistant. No records are deleted or moved.'
+          : 'This workspace runs the chicken-shop ordering assistant, so its industry is fixed.'}
       </p>
       {err && <p role="alert" className="mt-3 rounded-[10px] bg-rose-soft px-3 py-2 text-[12.5px] text-rose">{err}</p>}
-      <div role="radiogroup" aria-label="Industry" className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        {options.map((id) => {
-          const d = INDUSTRIES[id];
-          const Icon = d.icon;
-          const on = choice === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              disabled={!workspace.canChangeIndustry}
-              onClick={() => setChoice(id)}
-              className={cx('flex min-h-[72px] items-start gap-3 rounded-[14px] border p-3 text-left transition', on ? 'border-2' : 'border-line hover:border-slate-300')}
-              style={on ? { borderColor: d.accent, background: d.accentSoft } : undefined}
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-white" style={{ color: d.accent }}><Icon className="size-5" aria-hidden /></span>
-              <span className="min-w-0">
-                <span className="block text-[13.5px] font-semibold text-ink">{d.label}</span>
-                <span className="block text-[12px] text-muted">{d.tagline}</span>
-              </span>
-            </button>
-          );
-        })}
+      <div className="mt-4">
+        {workspace.canChangeIndustry ? (
+          <IndustryPicker value={choice ?? ''} onChange={setChoice} name="onboarding-industry" />
+        ) : (
+          <p className="flex items-center gap-2 rounded-[14px] border-2 p-3 text-[13.5px] font-semibold text-ink" style={{ borderColor: INDUSTRIES.restaurant.accent, background: INDUSTRIES.restaurant.accentSoft }}><Check className="size-4" />GR Chicken / Chicken Shop</p>
+        )}
       </div>
-      <Nav onBack={onBack} onNext={next} busy={busy} nextLabel={choice && choice !== workspace.industry ? 'Save industry' : 'Continue'} />
+      <Nav onBack={onBack} onNext={next} busy={busy} nextLabel={choice && choice !== current ? 'Save industry' : 'Continue'} />
     </>
   );
 }
 
+type Channel = { id: string; label: string; status: 'connected' | 'not_connected' | 'needs_attention' | 'incomplete'; detail: string; href: string };
+const CHANNEL_LABEL: Record<Channel['status'], string> = { connected: 'Connected', not_connected: 'Not connected', needs_attention: 'Needs attention', incomplete: 'Configuration incomplete' };
+
 function ConnectionsStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   const { workspace } = useWorkspace();
+  // Truthful status from the server: "connected" only after a passed test or a number routed to this workspace.
+  const { data, error } = useApi<{ channels: Channel[]; mode: { dryRun: boolean } }>('/home?range=today', 0);
   if (!workspace) return null;
-  const i = workspace.integrations;
-  const rows = [
-    { label: 'WhatsApp Business', ok: i.whatsapp, hint: i.whatsapp ? 'Configured on the server.' : 'Not configured: WhatsApp agents cannot reply to customers yet.' },
-    { label: 'Voice calls (Plivo)', ok: i.voice, hint: i.voice ? 'Configured on the server.' : 'Not configured: AI calls are off.' },
-    { label: 'AI model', ok: i.ai, hint: i.ai ? 'Configured.' : 'Not configured: assistants use rules and templates only.' },
-    { label: 'Safe mode (DRY_RUN)', ok: i.dryRun, hint: i.dryRun ? 'On: no real messages are sent and no calls are placed.' : 'Off: messages and calls are live.' },
-  ];
-  const settingsHref = workspace.industry === 'restaurant' ? '/integrations' : '/settings';
   return (
     <>
-      <h1 className="text-[20px] font-bold text-ink">Connections</h1>
-      <p className="mt-1 text-[13px] text-muted">The real status on this server. Credentials are set by your administrator on the server and never shown here.</p>
-      <ul className="mt-4 divide-y divide-line rounded-[14px] border border-line">
-        {rows.map((r) => (
-          <li key={r.label} className="flex items-start gap-3 px-4 py-3">
-            {r.ok ? <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-brand" aria-label="Yes" /> : <CircleDashed className="mt-0.5 size-5 shrink-0 text-faint" aria-label="No" />}
-            <div className="min-w-0">
-              <p className="text-[13.5px] font-semibold text-ink">{r.label}</p>
-              <p className="text-[12.5px] text-muted">{r.hint}</p>
-            </div>
+      <h1 className="text-[20px] font-bold text-ink">Connect your channels</h1>
+      <p className="mt-1 text-[13px] text-muted">How customers reach your AI assistant. Each connection is tested before it is used.</p>
+      {error && <p role="alert" className="mt-3 rounded-[10px] bg-rose-soft px-3 py-2 text-[12.5px] text-rose">{error}</p>}
+      {!data && !error && <Skeleton className="mt-4 h-32" />}
+      {data && (
+        <ul className="mt-4 divide-y divide-line rounded-[14px] border border-line">
+          {data.channels.map((c) => (
+            <li key={c.id} className="flex items-start gap-3 px-4 py-3">
+              {c.status === 'connected' ? <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-brand" aria-hidden /> : <CircleDashed className="mt-0.5 size-5 shrink-0 text-amber" aria-hidden />}
+              <div className="min-w-0 flex-1">
+                <p className="text-[13.5px] font-semibold text-ink">{c.label} · <span className={c.status === 'connected' ? 'text-brand-dark' : 'text-amber-800'}>{CHANNEL_LABEL[c.status]}</span></p>
+                <p className="text-[12.5px] text-muted">{c.detail}</p>
+              </div>
+              {c.status !== 'connected' && <Link href={c.href} className="shrink-0 text-[12.5px] font-semibold text-brand-dark underline">{c.status === 'needs_attention' ? 'Repair' : 'Set up'}</Link>}
+            </li>
+          ))}
+          <li className="flex items-start gap-3 px-4 py-3">
+            <CircleDashed className="mt-0.5 size-5 shrink-0 text-faint" aria-hidden />
+            <div className="min-w-0"><p className="text-[13.5px] font-semibold text-ink">Sending mode · {data.mode.dryRun ? 'Test mode' : 'Live'}</p><p className="text-[12.5px] text-muted">{data.mode.dryRun ? 'Messages and calls are checked but not sent. Tacksharp switches live sending on for your account.' : 'Messages and calls reach customers who agreed to be contacted.'}</p></div>
           </li>
-        ))}
-      </ul>
+        </ul>
+      )}
       {workspace.isDemo && <p className="mt-3 text-[12.5px] text-muted">This is a demo workspace: agents run on sample data and nothing is sent, whatever the connection status.</p>}
-      <p className="mt-3 text-[12.5px]"><Link href={settingsHref} className="font-semibold text-brand">Open {workspace.industry === 'restaurant' ? 'Settings & integrations' : 'Settings'}</Link></p>
+      <p className="mt-3 text-[12.5px]"><Link href="/settings/integrations" className="font-semibold text-brand">Open Integrations</Link></p>
       <Nav onBack={onBack} onNext={onNext} />
     </>
   );
@@ -249,7 +239,8 @@ function AgentsStep({ onBack }: { onBack: () => void }) {
           </div>
         </div>
       )}
-      <Nav onBack={onBack} onNext={finish} nextLabel="Go to overview" />
+      <p className="mt-4 rounded-[12px] bg-canvas px-3 py-2.5 text-[13px] text-body">Want an assistant with your own instructions and documents? <Link href="/voice-agents" className="font-semibold text-brand-dark underline">Create a custom AI agent</Link> (guided, with a test before launch).</p>
+      <Nav onBack={onBack} onNext={finish} nextLabel="Go to Home" />
     </>
   );
 }

@@ -147,6 +147,24 @@ export class RestaurantController {
     return this.catalog.createItem(organizationId, body ?? {}, `user:${user.sub}`);
   }
 
+  @Post('menu/categories')
+  createCategory(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: Record<string, unknown>) {
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can add categories.');
+    return this.catalog.createCategory(organizationId, body ?? {}, `user:${user.sub}`);
+  }
+
+  @Post('outlets')
+  createOutlet(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: Record<string, unknown>) {
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can add shops.');
+    return this.catalog.saveOutlet(organizationId, null, body ?? {}, `user:${user.sub}`);
+  }
+
+  @Patch('outlets/:id')
+  updateOutlet(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    if (user.role !== 'admin') throw new ForbiddenException('Only an admin can change shops.');
+    return this.catalog.saveOutlet(organizationId, id, body ?? {}, `user:${user.sub}`);
+  }
+
   // ---- Inventory (stock on hand) -----------------------------------------------------------
 
   /** Stock per product for this organization (any signed-in role can view). */

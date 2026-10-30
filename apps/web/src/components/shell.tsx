@@ -9,7 +9,7 @@ import { Bell, Check, ChevronsUpDown, Clock, FlaskConical, Loader2, LogOut, Menu
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
-import { INDUSTRIES, PRODUCT_LABEL, PRODUCT_TAGLINE, industryDef, productOf, type IndustryDef, type NavItem, type ProductFamily } from '@/lib/industries';
+import { INDUSTRIES, PRODUCT_LABEL, PRODUCT_TAGLINE, industryDef, productOf, standardNav, type IndustryDef, type NavItem, type ProductFamily } from '@/lib/industries';
 import { forgetWorkspace, switchWorkspace, useWorkspace, type WorkspaceOption } from '@/lib/industry';
 import { cx } from './ui';
 
@@ -51,10 +51,11 @@ function activeHref(items: NavItem[], pathname: string, search: URLSearchParams)
 
 function NavListInner({ def, badges, onNavigate, search }: { def: IndustryDef; badges: Badges; onNavigate?: () => void; search: URLSearchParams }) {
   const pathname = usePathname();
-  const active = activeHref(def.nav.flatMap((g) => g.items), pathname, search);
+  const groups = standardNav(def.nav);
+  const active = activeHref(groups.flatMap((g) => g.items), pathname, search);
   return (
     <nav aria-label="Main" className="mt-5 flex flex-col gap-5">
-      {def.nav.map((group) => (
+      {groups.map((group) => (
         <div key={group.section}>
           <p className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{group.section}</p>
           <ul className="flex flex-col gap-0.5">

@@ -7,7 +7,11 @@ import { BadRequestException } from '@nestjs/common';
  * Industries offered at signup: everything an organization's Settings can choose. `restaurant` is the GR Chicken
  * engine (bound to that organization), so new restaurants get the general food-ordering module (`food`).
  */
-export const SIGNUP_INDUSTRIES = ['real_estate', 'food', 'retail', 'manufacturing', 'hospital', 'cctv', 'textile', 'hotel', 'agency'] as const;
+/**
+ * chicken_shop = "GR Chicken / Chicken Shop": the organization runs the meat-shop ordering engine (vertical
+ * "restaurant": menu by the kg, cuts, outlets, pickup orders, ready calls). Everything else is a Settings industry.
+ */
+export const SIGNUP_INDUSTRIES = ['real_estate', 'food', 'chicken_shop', 'retail', 'manufacturing', 'hospital', 'cctv', 'textile', 'hotel', 'agency'] as const;
 export type SignupIndustry = (typeof SIGNUP_INDUSTRIES)[number];
 
 export type SignupInput = {

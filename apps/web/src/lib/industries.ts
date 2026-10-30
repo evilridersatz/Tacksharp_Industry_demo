@@ -41,6 +41,7 @@ const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/team', label: 'Team & access', icon: UserCog },
   { href: '/settings/integrations', label: 'Integrations', icon: PlugZap },
   { href: '/settings/ai-providers', label: 'AI providers', icon: Cpu },
+  { href: '/settings/diagnostics', label: 'System health', icon: Activity },
 ];
 const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
 
@@ -95,7 +96,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
         { href: '/follow-ups', label: 'Follow-ups & feedback', icon: ListChecks },
       ] },
       { section: 'AI & reports', items: [{ href: '/agents', label: 'AI agents', icon: Bot }, { href: '/test-chat', label: 'Test chat', icon: FlaskConical }, { href: '/analytics', label: 'Sales & analytics', icon: BarChart3 }] },
-      { section: 'Setup', items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }, ...WORKSPACE_TOOLS] },
+      { section: 'Setup', items: [{ href: '/integrations', label: 'Settings & integrations', icon: PlugZap }, { href: '/settings', label: 'Business settings', icon: Settings }, ...WORKSPACE_TOOLS] },
     ],
     terms: { customer: 'customer', customers: 'customers', lead: 'customer', leads: 'customers', order: 'order', orders: 'orders', product: 'menu item', products: 'menu items' },
     settings: ['restaurant'],
@@ -297,3 +298,31 @@ export const ORCHESTRATED_INDUSTRIES: IndustryId[] = ['textile', 'retail', 'manu
 
 /** Every href in an industry's navigation (tests / guards). */
 export const navHrefs = (id: IndustryId) => INDUSTRIES[id].nav.flatMap((g) => g.items.map((i) => i.href.split('?')[0]));
+
+/**
+ * One sidebar structure for every industry: Home, AI Agents, Customers & Leads, Conversations, Orders & Business
+ * Activity, Analytics, Integrations, Settings. Each industry keeps its own items and labels (its registry above); this
+ * only places them in the standard sections, in a fixed order, so every business finds things in the same place.
+ */
+export const STANDARD_SECTIONS = ['Home', 'AI Agents', 'Customers & Leads', 'Conversations', 'Orders & Business Activity', 'Analytics', 'Integrations', 'Settings'] as const;
+export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
+  const p = href.split('?')[0];
+  if (p === '/') return 'Home';
+  if (/^\/(agents|voice-agents|test-chat)(\/|$)/.test(p)) return 'AI Agents';
+  if (/^\/(contacts|customers|leads|follow-ups|site-visits|hospital\/patients)(\/|$)/.test(p)) return 'Customers & Leads';
+  if (/^\/(conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
+  if (/^\/(analytics|performance)(\/|$)/.test(p) || p === '/visionops/reports') return 'Analytics';
+  if (/^\/(settings\/integrations|settings\/ai-providers|integrations)(\/|$)/.test(p)) return 'Integrations';
+  if (/^\/(settings|team|demo-data|scenarios)(\/|$)/.test(p)) return 'Settings';
+  return 'Orders & Business Activity';
+}
+export function standardNav(groups: NavGroup[]): NavGroup[] {
+  const items = groups.flatMap((g) => g.items);
+  const seen = new Set<string>();
+  return STANDARD_SECTIONS.map((section) => ({
+    section,
+    items: items
+      .filter((i) => sectionOf(i.href) === section && !seen.has(i.href) && seen.add(i.href))
+      .map((i) => (i.href === '/' ? { ...i, label: 'Home' } : i)),
+  })).filter((g) => g.items.length > 0);
+}

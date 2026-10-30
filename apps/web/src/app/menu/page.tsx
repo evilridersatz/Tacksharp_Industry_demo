@@ -34,18 +34,20 @@ export default function ProductsPage() {
         </DemoBanner>
       )}
       {error && !menu && <ErrorBanner message={error} onRetry={reload} />}
-      {adding && menu && <AddProduct categories={menu.categories} onDone={() => (setAdding(false), reload())} />}
+      {adding && menu && (menu.categories.length ? <AddProduct categories={menu.categories} onDone={() => (setAdding(false), reload())} /> : <Card className="mb-4 p-5"><p className="mb-2 text-[13px] text-body">Products belong to a category. Add one first.</p><AddCategory onDone={reload} /></Card>)}
 
       {!menu ? (
         <Skeleton className="h-[480px] rounded-[14px]" />
-      ) : !menu.items.length ? (
-        <Card>
-          <Empty icon={<UtensilsCrossed className="size-6" />} title="No products yet">
-            Run <code>npm run seed:gr-chicken</code> for the demo products, or add them.
-          </Empty>
-        </Card>
       ) : (
         <div className="flex flex-col gap-4">
+          {!menu.items.length && (
+            <Card>
+              <Empty icon={<UtensilsCrossed className="size-6" />} title="No products yet">
+                {isAdmin ? 'Add a category (for example "Chicken" or "Eggs"), then your products with their price per kg or per piece. Your AI assistant only quotes what you save here.' : 'Ask your admin to add the products and prices.'}
+              </Empty>
+              {isAdmin && <div className="px-5 pb-5"><AddCategory onDone={reload} /></div>}
+            </Card>
+          )}
           {menu.categories.map((c) => {
             const items = menu.items.filter((i) => i.categoryId === c.id);
             if (!items.length) return null;
@@ -62,7 +64,8 @@ export default function ProductsPage() {
           })}
 
           <Card>
-            <CardHeader title="Shop" subtitle="Opening hours and preparation time used when customers choose a pickup time" />
+            <CardHeader title="Shops" subtitle="Where customers pick up, opening hours and preparation time used when they choose a pickup time" action={isAdmin ? <AddOutletButton onDone={reload} /> : undefined} />
+            {!menu.outlets.length && <p className="px-5 pb-3 text-[13px] text-amber-900">No shop yet: add at least one so customers can choose where to pick up.</p>}
             <ul className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-2">
               {menu.outlets.map((o) => (
                 <li key={o.id} className="rounded-[12px] border border-line p-4 text-[13px]">
@@ -290,5 +293,59 @@ function AddProduct({ categories, onDone }: { categories: Catalog['categories'];
         </div>
       </form>
     </Card>
+  );
+}
+
+/** A menu category ("Chicken", "Eggs"...). Admins only; the server validates and keeps names unique. */
+function AddCategory({ onDone }: { onDone: () => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <form className="flex flex-wrap items-start gap-2" onSubmit={async (e) => {
+      e.preventDefault(); setBusy(true); setErr(null);
+      try { await api.post('/restaurant/menu/categories', { name }); setName(''); onDone(); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); } finally { setBusy(false); }
+    }}>
+      <label className="sr-only" htmlFor="new-category">Category name</label>
+      <input id="new-category" className="h-9 min-w-56 flex-1 rounded-[10px] border border-line px-3 text-[13px]" placeholder="Category name, e.g. Chicken" value={name} onChange={(e) => setName(e.target.value)} />
+      <Button type="submit" variant="primary" busy={busy} disabled={name.trim().length < 2}><Plus className="size-4" />Add category</Button>
+      {err && <p role="alert" className="w-full text-[12.5px] text-rose">{err}</p>}
+    </form>
+  );
+}
+
+const OUTLET_EMPTY = { name: '', address: '', area: '', phone: '', opensAt: '07:00', closesAt: '21:00', prepMinutes: '30' };
+
+/** A shop / pickup point (admins only; validated on the server). */
+function AddOutletButton({ onDone }: { onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState(OUTLET_EMPTY);
+  const [busy, setBusy] = useState(false);
+  const [errs, setErrs] = useState<Record<string, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const field = (k: keyof typeof OUTLET_EMPTY, label: string, props: Record<string, unknown> = {}) => (
+    <label className="grid gap-1 text-[12.5px] font-semibold text-ink">{label}
+      <input className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-normal" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} {...props} />
+      {errs[k] && <span className="font-normal text-rose">{errs[k]}</span>}
+    </label>
+  );
+  if (!open) return <Button onClick={() => setOpen(true)}><Plus className="size-4" />Add shop</Button>;
+  return (
+    <form className="grid w-full gap-2 rounded-[12px] border border-line bg-white p-3 sm:w-[520px] sm:grid-cols-2" onSubmit={async (e) => {
+      e.preventDefault(); setBusy(true); setErr(null); setErrs({});
+      try { await api.post('/restaurant/outlets', { ...f, prepMinutes: Number(f.prepMinutes) }); setF(OUTLET_EMPTY); setOpen(false); onDone(); }
+      catch (x) { setErrs((x as { body?: { fields?: Record<string, string> } }).body?.fields ?? {}); setErr(x instanceof Error ? x.message : String(x)); }
+      finally { setBusy(false); }
+    }}>
+      {field('name', 'Shop name')}
+      {field('area', 'Area')}
+      <div className="sm:col-span-2">{field('address', 'Address')}</div>
+      {field('phone', 'Shop phone (optional)', { inputMode: 'tel' })}
+      {field('prepMinutes', 'Minutes to cut and pack', { type: 'number', min: 0 })}
+      {field('opensAt', 'Opens', { type: 'time' })}
+      {field('closesAt', 'Closes', { type: 'time' })}
+      {err && <p role="alert" className="text-[12.5px] text-rose sm:col-span-2">{err}</p>}
+      <div className="flex gap-2 sm:col-span-2"><Button type="submit" variant="primary" busy={busy}>Save shop</Button><Button type="button" onClick={() => setOpen(false)}>Cancel</Button></div>
+    </form>
   );
 }

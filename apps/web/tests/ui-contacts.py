@@ -92,7 +92,7 @@ with sync_playwright() as p:
 
         # ---- opt out, then the contact buttons are blocked
         drawer.get_by_role('button', name='Mark opted out').click(); pg.wait_for_timeout(2000)
-        check('opt-out: shown as opted out and WhatsApp test blocked', drawer.get_by_text('opted out', exact=True).count() > 0 and drawer.get_by_role('button', name='Send WhatsApp test').is_disabled())
+        check('opt-out: shown as opted out and WhatsApp test blocked', (drawer.get_by_text('opted out', exact=True).count() > 0 or drawer.get_by_text('Contact opted out', exact=True).count() > 0) and drawer.get_by_role('button', name='Send WhatsApp test').is_disabled())
         hist = drawer.inner_text()
         check('history lists created / updated / contact tests', all(k in hist for k in ('created', 'updated')) and re.search(r'whatsapp test|test call', hist, re.I) is not None)
         drawer.get_by_role('button', name='Close').first.click(); pg.wait_for_timeout(500)

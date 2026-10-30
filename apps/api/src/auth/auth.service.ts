@@ -73,9 +73,10 @@ export class AuthService {
       if (sameName && sameName.name.toLowerCase() === nameKey)
         throw new ConflictException({ statusCode: 409, message: 'An organization with this name is already registered. Ask its admin to invite you.', fields: { organizationName: 'Already registered.' } });
       const org = await tx.organization.create({
-        data: { name: input.organizationName, vertical: 'real_estate', isDemo: false, status: 'pending_review', selfServe: true, contactPhone: input.phone },
+        data: { name: input.organizationName, vertical: input.industry === 'chicken_shop' ? 'restaurant' : 'real_estate', isDemo: false, status: 'pending_review', selfServe: true, contactPhone: input.phone },
       });
-      await tx.organizationSettings.create({ data: { organizationId: org.id, data: sanitizeSettings({ industry: input.industry }, DEFAULT_SETTINGS) as never } });
+      // A chicken shop runs the restaurant ordering engine (fixed by the organization); its Settings industry is food.
+      await tx.organizationSettings.create({ data: { organizationId: org.id, data: sanitizeSettings({ industry: input.industry === 'chicken_shop' ? 'food' : input.industry }, DEFAULT_SETTINGS) as never } });
       const user = await tx.user.create({ data: { organizationId: org.id, email: input.email, name: input.adminName, role: 'admin', passwordHash, isPlatformAdmin: false } });
       await tx.auditEvent.create({ data: { organizationId: org.id, actor: `user:${user.id}`, entityType: 'organization', entityId: org.id, action: 'organization.registered', data: { industry: input.industry, via: 'self_service_signup' } } });
       return { org, user };
@@ -83,7 +84,7 @@ export class AuthService {
     const exp = Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400;
     const token = signSession({ sub: result.user.id, org: result.org.id, role: 'admin', exp, iat: Date.now() }, config.auth.secret);
     log.info('auth.signup', { organizationId: result.org.id, userId: result.user.id, industry: input.industry });
-    return { token, maxAgeSec: SESSION_DAYS * 86400, user: publicUser(result.user), organization: { id: result.org.id, name: result.org.name, status: result.org.status, industry: input.industry } };
+    return { token, maxAgeSec: SESSION_DAYS * 86400, user: publicUser(result.user), organization: { id: result.org.id, name: result.org.name, status: result.org.status, industry: input.industry === 'chicken_shop' ? 'restaurant' : input.industry } };
   }
 
   /**

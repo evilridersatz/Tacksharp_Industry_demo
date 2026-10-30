@@ -102,11 +102,12 @@ function ContactsPage() {
 }
 
 function ConsentPills({ c }: { c: Customer }) {
-  if (c.optedOutAt || c.doNotContact) return <Pill tone="red">{c.optedOutAt ? 'opted out' : 'do not contact'}</Pill>;
+  // Plain consent labels. A number on a test list is never consent; only what the customer agreed to is shown.
+  if (c.optedOutAt || c.doNotContact) return <Pill tone="red">{c.optedOutAt ? 'Contact opted out' : 'Do not contact'}</Pill>;
   return (
     <span className="flex flex-wrap gap-1">
-      <Pill tone={c.messagingConsent ? 'green' : 'slate'}>{c.messagingConsent ? 'WhatsApp ok' : 'no WhatsApp consent'}</Pill>
-      <Pill tone={c.callingConsent ? 'green' : 'slate'}>{c.callingConsent ? 'calls ok' : 'no call consent'}</Pill>
+      <Pill tone={c.messagingConsent ? 'green' : 'slate'}>{c.messagingConsent ? 'WhatsApp: consent recorded' : 'WhatsApp: consent not recorded'}</Pill>
+      <Pill tone={c.callingConsent ? 'green' : 'slate'}>{c.callingConsent ? 'Calls: consent recorded' : 'Calls: consent not recorded'}</Pill>
     </span>
   );
 }

@@ -8,18 +8,9 @@ import { forgetWorkspace } from '@/lib/industry';
 import { forgetMe } from '@/lib/restaurant';
 import { SitePage } from '@/components/site';
 import { cx } from '@/components/ui';
+import { IndustryPicker } from '@/components/industry-picker';
 
-const INDUSTRIES: Array<[string, string]> = [
-  ['real_estate', 'Real estate'],
-  ['food', 'Restaurant and food ordering'],
-  ['retail', 'Retail and e-commerce'],
-  ['textile', 'Textile and apparel'],
-  ['manufacturing', 'Manufacturing and quality'],
-  ['hospital', 'Hospital and healthcare'],
-  ['hotel', 'Hotel and room booking'],
-  ['cctv', 'Vision AI and CCTV monitoring'],
-  ['agency', 'Marketing agency or other business'],
-];
+
 
 type Form = { organizationName: string; adminName: string; email: string; password: string; industry: string; phone: string; acceptTerms: boolean; website: string };
 const EMPTY: Form = { organizationName: '', adminName: '', email: '', password: '', industry: '', phone: '', acceptTerms: false, website: '' };
@@ -123,12 +114,11 @@ export default function SignupPage() {
                 </button>
               </span>
             </Field>
-            <Field error={err('industry')} k="industry" label="Industry" hint="Shapes your dashboard and assistant. An admin can change it later.">
-              <select {...a11y('industry')} className={input(Boolean(err('industry')))} value={f.industry} onChange={(e) => set('industry', e.target.value)}>
-                <option value="">Choose…</option>
-                {INDUSTRIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-            </Field>
+            <div className="grid gap-1">
+              <p id="industry-label" className="text-[13.5px] font-semibold">What kind of business is it?</p>
+              <IndustryPicker value={f.industry} onChange={(v) => { set('industry', v); setTouched({ ...touched, industry: true }); }} describedBy="industry-msg" invalid={Boolean(err('industry'))} compact />
+              <span id="industry-msg" className={cx('text-[12.5px]', err('industry') ? 'text-rose-700' : 'text-[#16183d]/55')}>{err('industry') ?? 'Shapes your dashboard, setup steps and AI assistant.'}</span>
+            </div>
             {/* Honeypot: hidden from people and screen readers; automated form fillers complete it and are refused. */}
             <div aria-hidden className="absolute -left-[9999px] h-px w-px overflow-hidden">
               <label htmlFor="website">Website</label>

@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/shell';
 import { Badge, Button, Card, CardHeader, Empty, ErrorBanner, Skeleton, cx } from '@/components/ui';
 import { Dialog, inputCls } from '@/components/textile';
 import { toast } from '@/components/toast';
+import { explainCallReason } from '@/lib/call-reasons';
 
 export type Agent = {
   id: string; name: string; description: string | null; industry: string; useCase: string | null; templateKey: string | null; instructions: string;
@@ -141,7 +142,7 @@ export default function VoiceAgentsPage() {
                   <Badge tone={CALL_TONE[c.status] ?? 'slate'}>{c.status.replace('_', ' ')}</Badge>
                   <span className="tabular text-ink">{c.to}</span>
                   <span className="text-muted">{c.provider}</span>
-                  <span className="min-w-0 flex-1 truncate text-muted" title={c.failureReason ?? ''}>{c.failureReason ?? (c.durationSec !== null ? `${c.durationSec} s` : '')}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted" title={c.failureReason ?? ''}>{c.failureReason ? explainCallReason(c.failureReason) : c.durationSec !== null ? `${c.durationSec} s` : ''}</span>
                   <time className="text-faint">{new Date(c.createdAt).toLocaleTimeString()}</time>
                 </li>
               ))}
@@ -186,7 +187,7 @@ function CallDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
         <p className="flex items-center gap-1.5 text-[12px] text-muted"><ShieldCheck className="size-3.5" />Checked on the server: consent, do-not-contact, calling hours, limits, duplicates. No automatic redial.</p>
         {result && (
           <p role="status" className={cx('rounded-[10px] px-3 py-2', result.status === 'dialing' ? 'bg-brand-soft text-brand-dark' : 'bg-amber-50 text-amber-900')}>
-            {result.status === 'dialing' ? 'Calling now. The outcome appears in Recent call requests.' : `${result.status.replace('_', ' ')}: ${result.failureReason ?? ''}`}
+            {result.status === 'dialing' ? 'Calling now. The outcome appears in Recent call requests.' : <>{result.status === 'dry_run' ? 'Test mode: ' : 'Not placed: '}{explainCallReason(result.failureReason)}<span className="sr-only"> ({result.status.replace('_', ' ')}: {result.failureReason})</span></>}
           </p>
         )}
         <div className="flex justify-end gap-2 pt-1">

@@ -24,6 +24,13 @@ export class TelephonyController {
     return this.svc.setDefaultProvider({ sub: u.sub, org: u.org }, body?.provider);
   }
 
+  /** Launch checklist for one agent (plain English, from real configuration). */
+  @Get('agents/:id/readiness')
+  readiness(@Org() org: string, @CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.agentsView);
+    return this.svc.agentReadiness(org, id);
+  }
+
   /** Place one outbound call with a custom agent (every gate in TelephonyService.placeCall). */
   @Post('calls')
   @HttpCode(200)

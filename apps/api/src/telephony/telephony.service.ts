@@ -78,6 +78,57 @@ export class TelephonyService {
     };
   }
 
+  // -------------------------------------------------------------------------------------------- readiness
+
+  /**
+   * Launch checklist for one agent, in plain English, from real state only: agent status and test, knowledge base
+   * processing, the chosen provider's configuration, number routing, customers who agreed to calls, calling hours,
+   * limits and whether this server sends for real (dry run). Each failing check says how to fix it.
+   */
+  async agentReadiness(organizationId: string, agentId: string) {
+    const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId } });
+    if (!agent) throw new NotFoundException('Agent not found.');
+    type Check = { id: string; label: string; ok: boolean; required: boolean; detail: string; action?: { label: string; href: string } };
+    const checks: Check[] = [];
+    const add = (c: Check) => checks.push(c);
+    const inbound = agent.inbound as { enabled?: boolean; phoneNumber?: string | null } | null;
+    const outbound = agent.outbound as { enabled?: boolean } | null;
+    const provider: ProviderId = agent.telephonyProvider === 'sarvam' ? 'sarvam' : 'plivo';
+    const self = `/voice-agents/${agent.id}`;
+
+    add({ id: 'instructions', label: 'Instructions and greeting', ok: agent.instructions.length >= 20 && agent.greeting.length >= 2, required: true, detail: 'The assistant knows what to do and how to greet callers.', action: { label: 'Edit', href: self } });
+    if (agent.knowledgeBaseId) {
+      const docs = await this.prisma.knowledgeDocument.groupBy({ by: ['status'], where: { organizationId, knowledgeBaseId: agent.knowledgeBaseId }, _count: { _all: true } });
+      const by = Object.fromEntries(docs.map((d) => [d.status, d._count._all])) as Record<string, number>;
+      const pending = (by.uploaded ?? 0) + (by.processing ?? 0);
+      add({ id: 'knowledge', label: 'Business knowledge', ok: (by.indexed ?? 0) > 0 && !pending && !by.failed, required: true, detail: by.failed ? `${by.failed} document(s) could not be read.` : pending ? `${pending} document(s) are still being processed.` : (by.indexed ?? 0) ? `${by.indexed} document(s) ready.` : 'The knowledge base is empty.', action: { label: 'Open knowledge', href: self } });
+    } else add({ id: 'knowledge', label: 'Business knowledge', ok: false, required: false, detail: 'No documents attached: the assistant answers only from its instructions.', action: { label: 'Add knowledge', href: self } });
+    add({ id: 'tested', label: 'Tested after the latest changes', ok: Boolean(agent.lastTestedAt), required: true, detail: agent.lastTestedAt ? 'A test conversation passed.' : 'Have a test conversation before launching.', action: { label: 'Test now', href: self } });
+    add({ id: 'active', label: 'Agent published', ok: agent.status === 'active', required: true, detail: agent.status === 'active' ? 'Active.' : agent.status === 'archived' ? 'Archived.' : 'Still a draft.', action: { label: 'Publish', href: self } });
+
+    if (inbound?.enabled || outbound?.enabled) {
+      const caps = await this.providers[provider].getCapabilities(organizationId);
+      add({ id: 'provider', label: `Voice provider (${provider === 'sarvam' ? 'Sarvam' : 'Plivo'})`, ok: caps.configured, required: true, detail: caps.configured ? 'Connected for this workspace.' : provider === 'sarvam' ? 'Sarvam Voice Agents is not set up (account details and a passed test call), or the server has no webhook secret.' : 'Plivo is not connected for this workspace.', action: { label: 'Set up', href: provider === 'sarvam' ? '/settings/integrations/sarvam-telephony' : '/settings/integrations/plivo' } });
+      if (provider === 'sarvam') add({ id: 'sarvam_app', label: 'Sarvam agent id', ok: Boolean(agent.sarvamAppId), required: true, detail: agent.sarvamAppId ? `Calls are answered by Sarvam agent ${agent.sarvamAppId} v${agent.sarvamAppVersion ?? 1}.` : 'Enter the id of the agent you created in Sarvam.', action: { label: 'Add it', href: self } });
+    }
+    if (inbound?.enabled) {
+      const owner = inbound.phoneNumber ? await this.prisma.organizationChannel.findUnique({ where: { kind_externalId: { kind: 'plivo_number', externalId: inbound.phoneNumber } } }) : null;
+      add({ id: 'inbound_number', label: 'Number customers call', ok: provider === 'sarvam' ? Boolean(inbound.phoneNumber) : owner?.organizationId === organizationId, required: true, detail: provider === 'sarvam' ? 'Assign this number to an inbound deployment in Sarvam and paste the webhook URL shown on the Voice agents page.' : owner?.organizationId === organizationId ? `+${inbound.phoneNumber} rings this agent.` : `+${inbound.phoneNumber ?? '?'} is not routed to your workspace yet.`, action: { label: 'Route number', href: '/settings/integrations/plivo' } });
+    }
+    if (outbound?.enabled) {
+      const consenting = await this.prisma.customer.count({ where: { organizationId, callingConsent: true, optedOutAt: null, doNotContact: false } });
+      add({ id: 'consent', label: 'Customers who agreed to calls', ok: consenting > 0, required: true, detail: consenting ? `${consenting} customer(s) can be called. Opt-outs and do-not-contact are always respected.` : 'No customer has agreed to be called yet. Record consent on the customer first.', action: { label: 'Customers', href: '/contacts' } });
+      const w = effectiveCallWindow(await this.followUps.settingsFor(organizationId));
+      add({ id: 'hours', label: 'Calling hours', ok: true, required: false, detail: `Calls are placed only between ${String(w.start).padStart(2, '0')}:00 and ${String(w.end).padStart(2, '0')}:00 (India time).`, action: { label: 'Change', href: '/settings' } });
+      const l = (agent.callLimits as { maxConcurrent?: number; dailyLimit?: number } | null) ?? {};
+      add({ id: 'limits', label: 'Limits', ok: true, required: false, detail: `At most ${l.maxConcurrent ?? 2} call(s) at once and ${l.dailyLimit ?? 50} per day for this agent; each request is placed once, never redialled.` });
+    }
+    const live = followUpConfig();
+    add({ id: 'live', label: 'Live sending', ok: !live.dryRun, required: false, detail: live.dryRun ? 'Test mode: calls are checked end to end but not placed. Tacksharp turns live calling on for your account.' : live.liveAllowAll ? 'Live for consenting customers.' : 'Live for approved test numbers only.' });
+    const blocking = checks.filter((c) => c.required && !c.ok);
+    return { agentId: agent.id, ready: blocking.length === 0, dryRun: live.dryRun, checks, missing: blocking.map((c) => c.label) };
+  }
+
   // -------------------------------------------------------------------------------------------- outbound
 
   async placeCall(actor: Actor, body: PlaceCallBody) {

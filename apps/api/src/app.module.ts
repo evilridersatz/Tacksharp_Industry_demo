@@ -38,6 +38,7 @@ import { AssistantModule } from './assistant/assistant.module.js';
 import { KnowledgeModule } from './knowledge/knowledge.module.js';
 import { VoiceAgentsModule } from './voice-agents/voice-agents.module.js';
 import { TelephonyModule } from './telephony/telephony.module.js';
+import { HomeModule } from './home/home.module.js';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { TelephonyModule } from './telephony/telephony.module.js';
     KnowledgeModule,
     VoiceAgentsModule,
     TelephonyModule,
+    HomeModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

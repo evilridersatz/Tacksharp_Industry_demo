@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Archive, Check, ChevronLeft, ChevronRight, FileText, Loader2, RefreshCw, RotateCcw, Rocket, Search, Trash2, Upload } from 'lucide-react';
+import { Archive, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, FileText, Loader2, Phone, RefreshCw, RotateCcw, Rocket, Search, Trash2, Upload, XCircle } from 'lucide-react';
 import { API_URL, ApiError, api, useApi } from '@/lib/api';
 import { useWorkspace } from '@/lib/industry';
 import { PageHeader } from '@/components/shell';
@@ -12,24 +12,42 @@ import { inputCls } from '@/components/textile';
 import { toast } from '@/components/toast';
 import { AgentConsole, type AgentReply } from '@/components/agent-console';
 import type { Agent } from '../page';
+import { explainCallReason } from '@/lib/call-reasons';
 
-const STEPS = ['Industry', 'Configure', 'Knowledge', 'Voice & phone', 'Test', 'Review', 'Publish'] as const;
-const INDUSTRIES: Array<[string, string]> = [['retail', 'Retail'], ['restaurant', 'Restaurant'], ['real_estate', 'Real estate'], ['healthcare', 'Healthcare'], ['education', 'Education'], ['automotive', 'Automotive'], ['banking', 'Banking'], ['manufacturing', 'Manufacturing / B2B'], ['hospitality', 'Hospitality'], ['general', 'General support'], ['other', 'Other']];
+const STEPS = ['Purpose', 'Business', 'Assistant', 'Knowledge', 'Channels', 'Safety', 'Test', 'Launch'] as const;
+const INDUSTRIES: Array<[string, string]> = [['retail', 'Retail'], ['restaurant', 'Restaurant / chicken shop'], ['real_estate', 'Real estate'], ['healthcare', 'Healthcare'], ['education', 'Education'], ['automotive', 'Automotive'], ['banking', 'Banking'], ['manufacturing', 'Manufacturing / B2B'], ['hospitality', 'Hospitality'], ['general', 'General support'], ['other', 'Other']];
 const SPEAKERS = ['roopa', 'anushka', 'manisha', 'vidya', 'arya', 'abhilash', 'karun', 'hitesh'];
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const TONES: Array<[string, string]> = [['friendly', 'Warm and friendly'], ['professional', 'Polite and professional'], ['brief', 'Short and to the point']];
+/** What custom agents can actually do on this platform (unavailable ones are shown, labelled, not selectable). */
+const PURPOSES: Array<{ id: string; label: string; detail: string; unavailable?: string }> = [
+  { id: 'answer', label: 'Answer customer questions', detail: 'By chat, voice on the website, and phone calls, from your instructions and documents.' },
+  { id: 'orders', label: 'Handle order enquiries', detail: 'Menu, prices, availability and order questions from your documents. Orders themselves are taken by your industry ordering assistant.' },
+  { id: 'leads', label: 'Follow up with leads', detail: 'Call customers who agreed to be called, one call per request.' },
+  { id: 'outbound', label: 'Make authorized outbound calls', detail: 'Calls only to customers with recorded consent, within your calling hours and limits.' },
+  { id: 'updates', label: 'Send customer updates on WhatsApp', detail: '', unavailable: 'Not available for custom agents: WhatsApp updates are sent by your industry assistant’s follow-ups.' },
+];
 type Doc = { id: string; filename: string; kind: string; sizeBytes: number; status: 'uploaded' | 'processing' | 'indexed' | 'failed'; error: string | null; chunkCount: number; flaggedLines: number; createdAt: string };
 type Base = { id: string; name: string; documents: Doc[]; agents: Array<{ id: string; name: string; status: string }> };
+type Check = { id: string; label: string; ok: boolean; required: boolean; detail: string; action?: { label: string; href: string } };
+type Readiness = { ready: boolean; dryRun: boolean; checks: Check[]; missing: string[] };
+type Channel = { id: string; label: string; status: 'connected' | 'not_connected' | 'needs_attention' | 'incomplete'; detail: string; href: string };
 const DOC_TONE = { uploaded: 'sky', processing: 'sky', indexed: 'brand', failed: 'rose' } as const;
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const label = 'mb-1 block text-[12.5px] font-semibold text-ink';
 const area = 'w-full rounded-[10px] border border-line bg-white px-3 py-2 text-[13px] text-ink outline-none focus:border-brand';
+const purposesOf = (a: Agent) => (a.useCase ?? '').split(',').map((x) => x.trim()).filter((x) => PURPOSES.some((p) => p.id === x));
+const toneOf = (instructions: string) => (/^Tone: (\w+)/.exec(instructions)?.[1] ?? '');
+const withTone = (instructions: string, tone: string) => `Tone: ${tone}. ${TONES.find(([t]) => t === tone)?.[1] ?? ''}.\n${instructions.replace(/^Tone: \w+\.[^\n]*\n?/, '')}`;
 
-/** Agent Builder: Industry → Configure → Knowledge → Voice & phone → Test → Review → Publish. */
+/** Guided agent setup: Purpose → Business → Assistant → Knowledge → Channels → Safety → Test → Launch. */
 export default function AgentBuilderPage() {
   const { id } = useParams<{ id: string }>();
   const { workspace } = useWorkspace();
   const canManage = !workspace?.role || ['admin', 'manager'].includes(workspace.role);
   const { data: agent, error, reload } = useApi<Agent>(`/voice-agents/${id}`, 0);
+  const { data: readiness, reload: reloadReadiness } = useApi<Readiness>(`/telephony/agents/${id}/readiness`, 0);
+  const { data: home } = useApi<{ channels: Channel[]; business: { name: string; industryLabel: string } }>('/home?range=today', 0);
   const [form, setForm] = useState<Agent | null>(null);
   const [step, setStep] = useState(0);
   const [fieldErrs, setFieldErrs] = useState<Record<string, string>>({});
@@ -46,7 +64,7 @@ export default function AgentBuilderPage() {
     setSaving(true); setFieldErrs({});
     try {
       const updated = await api.patch<Agent>(`/voice-agents/${id}`, payload(form));
-      setForm(updated); await reload();
+      setForm(updated); await reload(); await reloadReadiness();
       if (!quiet) toast('Saved. Test the agent again before publishing.');
       return true;
     } catch (e) {
@@ -54,15 +72,15 @@ export default function AgentBuilderPage() {
       toast(errMsg(e), 'error');
       return false;
     } finally { setSaving(false); }
-  }, [form, id, reload]);
-  const go = async (n: number) => { if (dirty && canManage && !(await save(true))) return; setStep(n); };
+  }, [form, id, reload, reloadReadiness]);
+  const go = async (n: number) => { if (dirty && canManage && !(await save(true))) return; setStep(n); void reloadReadiness(); };
 
   async function lifecycle(action: 'publish' | 'archive' | 'restore') {
     setSaving(true); setProblems([]);
     try {
       const updated = await api.post<Agent>(`/voice-agents/${id}/${action}`);
-      setForm(updated); await reload();
-      toast(action === 'publish' ? 'Published: the agent is live on its channels.' : action === 'archive' ? 'Archived.' : 'Restored as a draft.');
+      setForm(updated); await reload(); await reloadReadiness();
+      toast(action === 'publish' ? 'Published: your assistant is live on the channels you chose.' : action === 'archive' ? 'Archived.' : 'Restored as a draft.');
     } catch (e) {
       const p = e instanceof ApiError ? (e.body as { problems?: string[] })?.problems : undefined;
       if (p?.length) setProblems(p); else toast(errMsg(e), 'error');
@@ -73,10 +91,20 @@ export default function AgentBuilderPage() {
   if (!form) return <Skeleton className="h-96" />;
   const ro = !canManage || form.status === 'archived';
   const err = (k: string) => fieldErrs[k] && <p className="mt-1 text-[12px] text-rose">{fieldErrs[k]}</p>;
+  const purposes = purposesOf(form);
+  const togglePurpose = (p: string, on: boolean) => {
+    const next = on ? [...new Set([...purposes, p])] : purposes.filter((x) => x !== p);
+    set('useCase', next.join(', '));
+    if (p === 'outbound' || p === 'leads') {
+      const wantsCalls = next.includes('outbound') || next.includes('leads');
+      set('outbound', { enabled: wantsCalls, purpose: form.outbound?.purpose ?? '' });
+    }
+  };
+  const launchBlocking = readiness?.checks.filter((c) => c.required && !c.ok && c.id !== 'active') ?? [];
 
   return (
     <>
-      <PageHeader title={form.name} crumb="Voice agents" actions={
+      <PageHeader title={form.name} crumb="AI agents" actions={
         <div className="flex items-center gap-2">
           <Badge tone={form.status === 'active' ? 'brand' : form.status === 'draft' ? 'amber' : 'slate'} dot>{form.status}</Badge>
           {canManage && form.status !== 'archived' && <Button className="h-9" onClick={() => void lifecycle('archive')}><Archive className="size-4" />Archive</Button>}
@@ -96,140 +124,236 @@ export default function AgentBuilderPage() {
 
       <Card>
         {step === 0 && (
-          <div className="space-y-3">
-            <h2 className="text-[15px] font-semibold text-ink">Which industry is this agent for?</h2>
-            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4" role="radiogroup" aria-label="Industry">
-              {INDUSTRIES.map(([v, l]) => (
-                <button key={v} role="radio" aria-checked={form.industry === v} disabled={ro} onClick={() => set('industry', v)} className={cx('rounded-[10px] border px-3 py-2.5 text-left text-[13px] font-semibold', form.industry === v ? 'border-ink bg-ink text-white' : 'border-line text-ink hover:bg-canvas')}>{l}</button>
-              ))}
-            </div>
-            {err('industry')}
-            <label className="block"><span className={label}>Use case</span><input disabled={ro} className={inputCls} value={form.useCase ?? ''} onChange={(e) => set('useCase', e.target.value)} placeholder="e.g. Phone orders and delivery questions" /></label>
-          </div>
+          <fieldset className="space-y-2">
+            <legend className="mb-2 text-[16px] font-semibold text-ink">What would you like your AI assistant to do?</legend>
+            {PURPOSES.map((p) => (
+              <label key={p.id} className={cx('flex items-start gap-3 rounded-[12px] border p-3 text-[13px]', p.unavailable ? 'border-dashed border-line bg-canvas opacity-75' : 'border-line')}>
+                <input type="checkbox" className="mt-0.5" disabled={ro || Boolean(p.unavailable)} checked={p.id === 'answer' ? true : purposes.includes(p.id)} onChange={(e) => p.id !== 'answer' && togglePurpose(p.id, e.target.checked)} />
+                <span><span className="block font-semibold text-ink">{p.label}{p.unavailable && <span className="ml-2 rounded-full bg-white px-1.5 text-[11px] text-muted ring-1 ring-line">Not available</span>}</span><span className="text-[12.5px] text-body">{p.unavailable ?? p.detail}</span></span>
+              </label>
+            ))}
+          </fieldset>
         )}
 
         {step === 1 && (
           <div className="grid gap-3 lg:grid-cols-2">
-            <label className="block"><span className={label}>Agent name</span><input disabled={ro} className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} />{err('name')}</label>
-            <label className="block"><span className={label}>Description</span><input disabled={ro} className={inputCls} value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} />{err('description')}</label>
-            <label className="block lg:col-span-2"><span className={label}>Instructions and behaviour</span><textarea disabled={ro} rows={8} className={area} value={form.instructions} onChange={(e) => set('instructions', e.target.value)} /><span className="text-[11.5px] text-muted">What it does, what it must never do, how it speaks. Facts belong in the knowledge base.</span>{err('instructions')}</label>
-            <label className="block"><span className={label}>Greeting</span><textarea disabled={ro} rows={2} className={area} value={form.greeting} onChange={(e) => set('greeting', e.target.value)} />{err('greeting')}</label>
-            <label className="block"><span className={label}>Fallback message (when the answer is not known)</span><textarea disabled={ro} rows={2} className={area} value={form.fallbackMessage} onChange={(e) => set('fallbackMessage', e.target.value)} />{err('fallbackMessage')}</label>
-            <fieldset className="lg:col-span-2"><legend className={label}>Languages</legend>
-              <div className="flex gap-3">{[['ta', 'Tamil'], ['en', 'English'], ['tanglish', 'Tanglish']].map(([v, l]) => (
-                <label key={v} className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={form.languages.includes(v)} onChange={(e) => set('languages', e.target.checked ? [...form.languages, v] : form.languages.filter((x) => x !== v))} />{l}</label>
-              ))}</div>{err('languages')}
-            </fieldset>
-            <fieldset className="lg:col-span-2 rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Escalation and handoff</legend>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="block"><span className={label}>Handoff keywords (comma separated)</span><input disabled={ro} className={inputCls} value={(form.escalation?.keywords ?? []).join(', ')} onChange={(e) => set('escalation', { keywords: e.target.value.split(',').map((x) => x.trim()).filter(Boolean), handoffMessage: form.escalation?.handoffMessage ?? '', phone: form.escalation?.phone ?? null })} /></label>
-                <label className="block"><span className={label}>Handoff message</span><input disabled={ro} className={inputCls} value={form.escalation?.handoffMessage ?? ''} onChange={(e) => set('escalation', { keywords: form.escalation?.keywords ?? [], handoffMessage: e.target.value, phone: form.escalation?.phone ?? null })} /></label>
-                <label className="block"><span className={label}>Staff phone (optional)</span><input disabled={ro} className={inputCls} value={form.escalation?.phone ?? ''} onChange={(e) => set('escalation', { keywords: form.escalation?.keywords ?? [], handoffMessage: form.escalation?.handoffMessage ?? '', phone: e.target.value || null })} placeholder="+91…" /></label>
-              </div>{err('escalation')}
-            </fieldset>
-            <fieldset className="lg:col-span-2 rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Business hours</legend>
-              <label className="mb-2 flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.businessHours)} onChange={(e) => set('businessHours', e.target.checked ? { days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '21:00', timezone: 'Asia/Kolkata', afterHoursMessage: '' } : null)} />Only answer as "open" during set hours</label>
+            <div className="rounded-[10px] bg-canvas p-3 text-[13px] lg:col-span-2"><span className="text-muted">Business: </span><span className="font-semibold text-ink">{home?.business.name ?? workspace?.name}</span> · {home?.business.industryLabel ?? ''} <Link href="/settings" className="ml-2 text-[12.5px] font-semibold text-brand-dark underline">Edit business profile</Link></div>
+            <div className="lg:col-span-2">
+              <p className={label}>Industry for this assistant</p>
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4" role="radiogroup" aria-label="Industry">
+                {INDUSTRIES.map(([v, l]) => (
+                  <button key={v} role="radio" aria-checked={form.industry === v} disabled={ro} onClick={() => set('industry', v)} className={cx('rounded-[10px] border px-3 py-2.5 text-left text-[13px] font-semibold', form.industry === v ? 'border-ink bg-ink text-white' : 'border-line text-ink hover:bg-canvas')}>{l}</button>
+                ))}
+              </div>
+              {err('industry')}
+            </div>
+            <label className="block lg:col-span-2"><span className={label}>Business description and service area</span><textarea disabled={ro} rows={3} className={area} value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} placeholder="What you sell, where you deliver or serve, anything callers often ask." />{err('description')}</label>
+            <fieldset className="rounded-[10px] border border-line p-3 lg:col-span-2"><legend className="px-1 text-[12.5px] font-semibold">Working hours</legend>
+              <label className="mb-2 flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.businessHours)} onChange={(e) => set('businessHours', e.target.checked ? { days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '21:00', timezone: 'Asia/Kolkata', afterHoursMessage: '' } : null)} />Tell callers when you are closed</label>
               {form.businessHours && (
                 <div className="grid gap-3 sm:grid-cols-4">
-                  <div className="sm:col-span-4 flex flex-wrap gap-2">{DAYS.map((d, i) => (
+                  <div className="flex flex-wrap gap-2 sm:col-span-4">{DAYS.map((d, i) => (
                     <label key={d} className="flex items-center gap-1 text-[12.5px]"><input type="checkbox" disabled={ro} checked={form.businessHours!.days.includes(i + 1)} onChange={(e) => set('businessHours', { ...form.businessHours!, days: e.target.checked ? [...form.businessHours!.days, i + 1].sort() : form.businessHours!.days.filter((x) => x !== i + 1) })} />{d}</label>
                   ))}</div>
                   <label><span className={label}>Opens</span><input type="time" disabled={ro} className={inputCls} value={form.businessHours.start} onChange={(e) => set('businessHours', { ...form.businessHours!, start: e.target.value })} /></label>
                   <label><span className={label}>Closes</span><input type="time" disabled={ro} className={inputCls} value={form.businessHours.end} onChange={(e) => set('businessHours', { ...form.businessHours!, end: e.target.value })} /></label>
-                  <label className="sm:col-span-2"><span className={label}>After-hours message</span><input disabled={ro} className={inputCls} value={form.businessHours.afterHoursMessage} onChange={(e) => set('businessHours', { ...form.businessHours!, afterHoursMessage: e.target.value })} /></label>
+                  <label className="sm:col-span-2"><span className={label}>Message when closed</span><input disabled={ro} className={inputCls} value={form.businessHours.afterHoursMessage} onChange={(e) => set('businessHours', { ...form.businessHours!, afterHoursMessage: e.target.value })} /></label>
                 </div>
               )}{err('businessHours')}
             </fieldset>
           </div>
         )}
 
-        {step === 2 && <KnowledgeStep agent={form} readOnly={ro} onAttach={async (kbId) => { set('knowledgeBaseId', kbId); try { const u = await api.patch<Agent>(`/voice-agents/${id}`, { knowledgeBaseId: kbId }); setForm(u); await reload(); toast(kbId ? 'Knowledge base attached.' : 'Knowledge base detached.'); } catch (e) { toast(errMsg(e), 'error'); } }} />}
-
-        {step === 3 && (
+        {step === 2 && (
           <div className="grid gap-3 lg:grid-cols-2">
-            <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Voice</legend>
-              <label className="block"><span className={label}>Voice</span><select disabled={ro} className={inputCls} value={form.voice?.speaker ?? 'roopa'} onChange={(e) => set('voice', { speaker: e.target.value, pace: form.voice?.pace ?? 1 })}>{SPEAKERS.map((s) => <option key={s}>{s}</option>)}</select></label>
-              <label className="mt-2 block"><span className={label}>Speaking pace ({(form.voice?.pace ?? 1).toFixed(2)})</span><input type="range" min={0.7} max={1.5} step={0.05} disabled={ro} value={form.voice?.pace ?? 1} onChange={(e) => set('voice', { speaker: form.voice?.speaker ?? 'roopa', pace: Number(e.target.value) })} className="w-full" /></label>{err('voice')}
-            </fieldset>
-            <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Telephony provider</legend>
-              <select disabled={ro} className={inputCls} value={form.telephonyProvider} onChange={(e) => set('telephonyProvider', e.target.value as Agent['telephonyProvider'])}>
-                <option value="plivo">Plivo (our engine speaks with your instructions and knowledge base)</option>
-                <option value="sarvam">Sarvam Voice Agents (agent hosted by Sarvam)</option>
+            <label className="block"><span className={label}>Agent name</span><input disabled={ro} className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} />{err('name')}</label>
+            <label className="block"><span className={label}>Personality and tone</span>
+              <select disabled={ro} className={inputCls} value={toneOf(form.instructions)} onChange={(e) => e.target.value && set('instructions', withTone(form.instructions, e.target.value))}>
+                <option value="">As written in the instructions</option>
+                {TONES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-              {form.telephonyProvider === 'sarvam' && (
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  <label><span className={label}>Sarvam agent (app) id</span><input disabled={ro} className={inputCls} value={form.sarvamAppId ?? ''} onChange={(e) => set('sarvamAppId', e.target.value || null)} />{err('sarvamAppId')}</label>
-                  <label><span className={label}>App version</span><input disabled={ro} type="number" min={1} className={inputCls} value={form.sarvamAppVersion ?? 1} onChange={(e) => set('sarvamAppVersion', Number(e.target.value) || null)} /></label>
-                  <p className="sm:col-span-2 rounded-[8px] bg-amber-50 p-2 text-[12px] text-amber-900">Sarvam runs this call with the agent configured in Sarvam. Copy these instructions and upload the same documents to that Sarvam agent: Sarvam has no documented API to push them from here.</p>
-                </div>
-              )}
+            </label>
+            <fieldset className="lg:col-span-2"><legend className={label}>Languages</legend>
+              <div className="flex gap-3">{[['ta', 'Tamil'], ['en', 'English'], ['tanglish', 'Tanglish']].map(([v, l]) => (
+                <label key={v} className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={form.languages.includes(v)} onChange={(e) => set('languages', e.target.checked ? [...form.languages, v] : form.languages.filter((x) => x !== v))} />{l}</label>
+              ))}</div>{err('languages')}
             </fieldset>
-            <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Inbound calls</legend>
-              <label className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.inbound?.enabled)} onChange={(e) => set('inbound', { enabled: e.target.checked, phoneNumber: form.inbound?.phoneNumber ?? null })} />Answer calls to a number</label>
-              {form.inbound?.enabled && <label className="mt-2 block"><span className={label}>Number customers dial</span><input disabled={ro} className={inputCls} value={form.inbound.phoneNumber ?? ''} onChange={(e) => set('inbound', { enabled: true, phoneNumber: e.target.value })} placeholder="+91 44 1234 5678" /></label>}
-              <p className="mt-2 text-[11.5px] text-muted">A purchased number does not take calls by itself: it must be routed to this organization (Plivo) or assigned to an inbound deployment (Sarvam).</p>{err('inbound')}
-            </fieldset>
-            <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Outbound calls and limits</legend>
-              <label className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.outbound?.enabled)} onChange={(e) => set('outbound', { enabled: e.target.checked, purpose: form.outbound?.purpose ?? '' })} />Allow outbound calls (consenting customers only)</label>
-              {form.outbound?.enabled && <label className="mt-2 block"><span className={label}>Call purpose</span><input disabled={ro} className={inputCls} value={form.outbound.purpose} onChange={(e) => set('outbound', { enabled: true, purpose: e.target.value })} /></label>}
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {([['maxCallSeconds', 'Max call (s)'], ['maxConcurrent', 'Concurrent'], ['dailyLimit', 'Per day']] as const).map(([k, l]) => (
-                  <label key={k}><span className={label}>{l}</span><input type="number" disabled={ro} className={inputCls} value={form.callLimits?.[k] ?? ''} onChange={(e) => set('callLimits', { maxCallSeconds: 300, maxConcurrent: 2, dailyLimit: 50, ...form.callLimits, [k]: Number(e.target.value) })} /></label>
-                ))}
-              </div>{err('callLimits')}
-            </fieldset>
+            <label className="block"><span className={label}>Greeting</span><textarea disabled={ro} rows={2} className={area} value={form.greeting} onChange={(e) => set('greeting', e.target.value)} />{err('greeting')}</label>
+            <label className="block"><span className={label}>When it does not know the answer</span><textarea disabled={ro} rows={2} className={area} value={form.fallbackMessage} onChange={(e) => set('fallbackMessage', e.target.value)} />{err('fallbackMessage')}</label>
+            {form.templateKey && <p className="text-[12.5px] text-muted lg:col-span-2">Started from the <span className="font-semibold">{form.templateKey.replace('_', ' ')}</span> template.</p>}
+            <details className="rounded-[10px] border border-line p-3 lg:col-span-2" open={Boolean(fieldErrs.instructions || fieldErrs.escalation)}>
+              <summary className="cursor-pointer text-[13px] font-semibold text-ink">Advanced settings: instructions, handoff, voice</summary>
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                <label className="block lg:col-span-2"><span className={label}>Instructions and behaviour</span><textarea disabled={ro} rows={8} className={area} value={form.instructions} onChange={(e) => set('instructions', e.target.value)} /><span className="text-[11.5px] text-muted">What it does, what it must never do, how it speaks. Facts belong in the knowledge base.</span>{err('instructions')}</label>
+                <label className="block"><span className={label}>Hand over to a person when the caller says (comma separated)</span><input disabled={ro} className={inputCls} value={(form.escalation?.keywords ?? []).join(', ')} onChange={(e) => set('escalation', { keywords: e.target.value.split(',').map((x) => x.trim()).filter(Boolean), handoffMessage: form.escalation?.handoffMessage ?? '', phone: form.escalation?.phone ?? null })} /></label>
+                <label className="block"><span className={label}>Handover message</span><input disabled={ro} className={inputCls} value={form.escalation?.handoffMessage ?? ''} onChange={(e) => set('escalation', { keywords: form.escalation?.keywords ?? [], handoffMessage: e.target.value, phone: form.escalation?.phone ?? null })} /></label>
+                <label className="block"><span className={label}>Voice</span><select disabled={ro} className={inputCls} value={form.voice?.speaker ?? 'roopa'} onChange={(e) => set('voice', { speaker: e.target.value, pace: form.voice?.pace ?? 1 })}>{SPEAKERS.map((s) => <option key={s}>{s}</option>)}</select></label>
+                <label className="block"><span className={label}>Speaking pace ({(form.voice?.pace ?? 1).toFixed(2)})</span><input type="range" min={0.7} max={1.5} step={0.05} disabled={ro} value={form.voice?.pace ?? 1} onChange={(e) => set('voice', { speaker: form.voice?.speaker ?? 'roopa', pace: Number(e.target.value) })} className="w-full" /></label>
+                {err('escalation')}{err('voice')}
+              </div>
+            </details>
           </div>
         )}
 
+        {step === 3 && <KnowledgeStep agent={form} readOnly={ro} onAttach={async (kbId) => { set('knowledgeBaseId', kbId); try { const u = await api.patch<Agent>(`/voice-agents/${id}`, { knowledgeBaseId: kbId }); setForm(u); await reload(); toast(kbId ? 'Knowledge base attached.' : 'Knowledge base detached.'); } catch (e) { toast(errMsg(e), 'error'); } }} />}
+
         {step === 4 && (
-          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-            <AgentConsole key={form.updatedAt} greeting={form.greeting} examples={['What are your timings?', 'Price evlo?', 'I want to talk to a person']} label="Test mode · nothing is sent" voice={voiceOn}
-              send={(message, history) => api.post<AgentReply>(`/voice-agents/${id}/test`, { message, history }).then((r) => { void reload(); return r; })} />
-            <div className="space-y-2 text-[12.5px] text-body">
-              <p className="font-semibold text-ink">Test before publishing</p>
-              <p>Ask what your customers ask, in Tamil, English and Tanglish. Each answer shows which document it came from, or that the agent used its fallback message.</p>
-              <p>{dirty ? 'You have unsaved changes: they are saved when you leave this step.' : form.lastTestedAt ? <span className="inline-flex items-center gap-1 text-brand-dark"><Check className="size-3.5" />Tested after the latest changes.</span> : 'Not tested since the latest changes.'}</p>
+          <div className="grid gap-4">
+            <ul className="grid gap-2 sm:grid-cols-2" aria-label="Channels">
+              {(home?.channels ?? []).map((c) => (
+                <li key={c.id} className="rounded-[12px] border border-line p-3 text-[13px]">
+                  <p className="flex items-center gap-2 font-semibold text-ink">{c.label}<Badge tone={c.status === 'connected' ? 'brand' : c.status === 'needs_attention' ? 'rose' : c.status === 'incomplete' ? 'amber' : 'slate'}>{c.status === 'connected' ? 'Connected' : c.status === 'needs_attention' ? 'Needs attention' : c.status === 'incomplete' ? 'Configuration incomplete' : 'Not connected'}</Badge></p>
+                  <p className="mt-0.5 text-[12.5px] text-body">{c.detail}</p>
+                  {c.status !== 'connected' && <Link href={c.href} className="mt-1 inline-block text-[12.5px] font-semibold text-brand-dark underline">Set up</Link>}
+                </li>
+              ))}
+            </ul>
+            <p className="text-[12.5px] text-muted">Website chat and voice: always available for testing on this page. Custom agents answer phone calls; WhatsApp is answered by your industry assistant.</p>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Voice provider for this agent</legend>
+                <select disabled={ro} className={inputCls} value={form.telephonyProvider} onChange={(e) => set('telephonyProvider', e.target.value as Agent['telephonyProvider'])} aria-label="Voice provider">
+                  <option value="plivo">Plivo (your instructions and documents answer every call)</option>
+                  <option value="sarvam">Sarvam Voice Agents (the agent you set up in Sarvam answers)</option>
+                </select>
+                {form.telephonyProvider === 'sarvam' && (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label><span className={label}>Sarvam agent (app) id</span><input disabled={ro} className={inputCls} value={form.sarvamAppId ?? ''} onChange={(e) => set('sarvamAppId', e.target.value || null)} />{err('sarvamAppId')}</label>
+                    <label><span className={label}>App version</span><input disabled={ro} type="number" min={1} className={inputCls} value={form.sarvamAppVersion ?? 1} onChange={(e) => set('sarvamAppVersion', Number(e.target.value) || null)} /></label>
+                    <p className="rounded-[8px] bg-amber-50 p-2 text-[12px] text-amber-900 sm:col-span-2">Sarvam answers with the agent configured in Sarvam. Copy these instructions and upload the same documents there: Sarvam has no documented way to push them from here.</p>
+                  </div>
+                )}
+              </fieldset>
+              <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Phone calls</legend>
+                <label className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.inbound?.enabled)} onChange={(e) => set('inbound', { enabled: e.target.checked, phoneNumber: form.inbound?.phoneNumber ?? null })} />Answer calls to a number</label>
+                {form.inbound?.enabled && <label className="mt-2 block"><span className={label}>Number customers dial</span><input disabled={ro} className={inputCls} value={form.inbound.phoneNumber ?? ''} onChange={(e) => set('inbound', { enabled: true, phoneNumber: e.target.value })} placeholder="+91 44 1234 5678" /></label>}
+                <label className="mt-2 flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.outbound?.enabled)} onChange={(e) => set('outbound', { enabled: e.target.checked, purpose: form.outbound?.purpose ?? '' })} />Allow outbound calls (consenting customers only)</label>
+                {form.outbound?.enabled && <label className="mt-2 block"><span className={label}>Call purpose</span><input disabled={ro} className={inputCls} value={form.outbound.purpose} onChange={(e) => set('outbound', { enabled: true, purpose: e.target.value })} /></label>}
+                <p className="mt-2 text-[11.5px] text-muted">A purchased number does not take calls by itself: it must be routed to your workspace (Plivo) or assigned to an inbound deployment (Sarvam).</p>{err('inbound')}
+              </fieldset>
             </div>
           </div>
         )}
 
         {step === 5 && (
-          <dl className="grid gap-x-6 gap-y-2 text-[13px] sm:grid-cols-[180px_1fr]">
-            {[
-              ['Industry / use case', `${form.industry} · ${form.useCase ?? '-'}`],
-              ['Languages', form.languages.join(', ')],
-              ['Greeting', form.greeting],
-              ['Fallback', form.fallbackMessage],
-              ['Knowledge base', form.knowledgeBase?.name ?? 'None (answers only from instructions)'],
-              ['Voice', `${form.voice?.speaker ?? 'roopa'} · pace ${form.voice?.pace ?? 1}`],
-              ['Telephony', form.telephonyProvider === 'sarvam' ? `Sarvam app ${form.sarvamAppId ?? '(missing)'} v${form.sarvamAppVersion ?? 1}` : 'Plivo'],
-              ['Inbound', form.inbound?.enabled ? `+${form.inbound.phoneNumber}` : 'Off'],
-              ['Outbound', form.outbound?.enabled ? `On · ${form.outbound.purpose || 'no purpose given'}` : 'Off'],
-              ['Limits', form.callLimits ? `${form.callLimits.maxCallSeconds}s · ${form.callLimits.maxConcurrent} at once · ${form.callLimits.dailyLimit}/day` : '-'],
-              ['Business hours', form.businessHours ? `${form.businessHours.days.map((d) => DAYS[d - 1]).join(' ')} ${form.businessHours.start}-${form.businessHours.end}` : 'Always'],
-              ['Handoff keywords', form.escalation?.keywords.join(', ') || '-'],
-              ['Last test', form.lastTestedAt ? new Date(form.lastTestedAt).toLocaleString() : 'Not tested since the latest changes'],
-            ].map(([k, v]) => <div key={k} className="contents"><dt className="text-muted">{k}</dt><dd className="text-ink">{v}</dd></div>)}
-          </dl>
+          <div className="grid gap-4">
+            <p className="text-[13.5px] text-body">Before any real call, Tacksharp checks all of this on the server, every time. It cannot be skipped from here.</p>
+            {form.outbound?.enabled && (
+              <div className="grid gap-3 sm:grid-cols-3">
+                {([['maxCallSeconds', 'Longest call (seconds)'], ['maxConcurrent', 'Calls at the same time'], ['dailyLimit', 'Calls per day']] as const).map(([k, l]) => (
+                  <label key={k}><span className={label}>{l}</span><input type="number" disabled={ro} className={inputCls} value={form.callLimits?.[k] ?? ''} onChange={(e) => set('callLimits', { maxCallSeconds: 300, maxConcurrent: 2, dailyLimit: 50, ...form.callLimits, [k]: Number(e.target.value) })} /></label>
+                ))}
+                {err('callLimits')}
+              </div>
+            )}
+            <ReadinessList readiness={readiness} only={['provider', 'sarvam_app', 'inbound_number', 'consent', 'hours', 'limits', 'live']} empty="This agent does not make or take phone calls, so no calling checks apply. Turn calls on under Channels." />
+            <ul className="grid gap-1 text-[12.5px] text-body">
+              <li>• Customers who opted out or asked not to be contacted are never called.</li>
+              <li>• Each call request is placed once. It is never redialled automatically.</li>
+              <li>• Numbers on Tacksharp&apos;s test list are not treated as consent.</li>
+            </ul>
+          </div>
         )}
 
         {step === 6 && (
-          <div className="space-y-3">
-            <p className="text-[13.5px] text-body">Publishing makes the agent active on the channels you enabled. The server checks: a test since your latest changes, every document indexed, a Sarvam agent id when Sarvam places calls, and an inbound number that belongs to this organization.</p>
+          <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
+            <AgentConsole key={form.updatedAt} greeting={form.greeting} examples={['What are your timings?', 'Price evlo?', 'I want to talk to a person']} label="Test mode · nothing is sent" voice={voiceOn}
+              send={(message, history) => api.post<AgentReply>(`/voice-agents/${id}/test`, { message, history }).then((r) => { void reload(); void reloadReadiness(); return r; })} />
+            <div className="space-y-3 text-[12.5px] text-body">
+              <p className="font-semibold text-ink">Test before launching</p>
+              <p>Ask what your customers ask, in Tamil, English and Tanglish. Each answer shows which document it came from, or that the agent used its fallback message.</p>
+              <p>{dirty ? 'You have unsaved changes: they are saved when you leave this step.' : form.lastTestedAt ? <span className="inline-flex items-center gap-1 text-brand-dark"><Check className="size-3.5" />Tested after the latest changes.</span> : 'Not tested since the latest changes.'}</p>
+              {form.outbound?.enabled && <TestCall agent={form} readiness={readiness} />}
+            </div>
+          </div>
+        )}
+
+        {step === 7 && (
+          <div className="space-y-4">
+            {!readiness ? <Skeleton className="h-32" /> : launchBlocking.length === 0 ? (
+              <p className="flex items-center gap-2 rounded-[12px] bg-brand-soft px-4 py-3 text-[15px] font-semibold text-brand-dark" data-testid="launch-verdict"><Check className="size-5" />{form.status === 'active' ? 'Your assistant is live.' : 'Your assistant is ready to launch.'}</p>
+            ) : (
+              <div className="rounded-[12px] bg-amber-50 px-4 py-3 text-amber-950" data-testid="launch-verdict">
+                <p className="text-[15px] font-semibold">Your assistant is not ready yet.</p>
+                <p className="mt-0.5 text-[13px]">Missing: {launchBlocking.map((c) => c.label).join(', ')}.</p>
+              </div>
+            )}
+            <ReadinessList readiness={readiness} />
             {problems.length > 0 && <ul role="alert" className="list-disc space-y-1 rounded-[10px] bg-rose-50 py-2 pr-3 pl-7 text-[13px] text-rose-900">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}
-            {form.status === 'active' ? <p className="inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-brand-dark"><Check className="size-4" />Active since {form.publishedAt ? new Date(form.publishedAt).toLocaleString() : 'now'}.</p> : null}
-            {canManage && form.status !== 'archived' && <Button variant="primary" busy={saving} onClick={() => void lifecycle('publish')}><Rocket className="size-4" />{form.status === 'active' ? 'Re-publish' : 'Publish agent'}</Button>}
+            {readiness?.dryRun && <p className="text-[12.5px] text-muted">Test mode is on for this server: after launch, calls are still checked but not placed until Tacksharp switches live calling on.</p>}
+            {canManage && form.status !== 'archived' && (
+              <Button variant="primary" busy={saving} disabled={launchBlocking.length > 0} onClick={() => void lifecycle('publish')}><Rocket className="size-4" />{form.status === 'active' ? 'Re-publish' : 'Publish agent'}</Button>
+            )}
+            {form.status === 'active' && form.publishedAt && <p className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-dark"><Check className="size-4" />Active since {new Date(form.publishedAt).toLocaleString()}.</p>}
           </div>
         )}
 
         <div className="mt-5 flex items-center gap-2 border-t border-line pt-4">
           <Button disabled={step === 0} onClick={() => void go(step - 1)}><ChevronLeft className="size-4" />Back</Button>
-          {canManage && step !== 2 && step < 4 && <Button disabled={!dirty || ro} busy={saving} onClick={() => void save()}>Save</Button>}
+          {canManage && step !== 3 && step < 6 && <Button disabled={!dirty || ro} busy={saving} onClick={() => void save()}>Save</Button>}
           <span className="flex-1" />
           {step < STEPS.length - 1 && <Button variant="primary" busy={saving} onClick={() => void go(step + 1)}>Next: {STEPS[step + 1]}<ChevronRight className="size-4" /></Button>}
         </div>
       </Card>
     </>
+  );
+}
+
+function ReadinessList({ readiness, only, empty }: { readiness: Readiness | null; only?: string[]; empty?: string }) {
+  if (!readiness) return <Skeleton className="h-24" />;
+  const checks = only ? readiness.checks.filter((c) => only.includes(c.id)) : readiness.checks;
+  if (!checks.length) return <p className="text-[13px] text-muted">{empty}</p>;
+  return (
+    <ul className="divide-y divide-line rounded-[12px] border border-line" aria-label="Readiness checks">
+      {checks.map((c) => (
+        <li key={c.id} className="flex items-start gap-3 px-3 py-2.5" data-testid={`check-${c.id}`} data-ok={c.ok}>
+          {c.ok ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-brand" aria-label="Done" /> : c.required ? <XCircle className="mt-0.5 size-4 shrink-0 text-rose" aria-label="Missing" /> : <CircleDashed className="mt-0.5 size-4 shrink-0 text-amber" aria-label="Note" />}
+          <div className="min-w-0 flex-1"><p className="text-[13px] font-semibold text-ink">{c.label}</p><p className="text-[12.5px] text-body">{c.detail}</p></div>
+          {!c.ok && c.action && <Link href={c.action.href} className="shrink-0 text-[12.5px] font-semibold text-brand-dark underline">{c.action.label}</Link>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type Customer = { id: string; name: string | null; phone: string | null; callingConsent: boolean };
+
+/**
+ * A real test call: never automatic. Shows the destination, explains it is real, needs explicit confirmation, and the
+ * server applies every gate (consent, do-not-contact, hours, limits, dry run, idempotency).
+ */
+function TestCall({ agent, readiness }: { agent: Agent; readiness: Readiness | null }) {
+  const { data } = useApi<{ rows?: Customer[] }>('/customers?consent=calling&pageSize=100', 0);
+  const list = data?.rows ?? [];
+  const [customerId, setCustomerId] = useState('');
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ status: string; failureReason: string | null } | null>(null);
+  const [key, setKey] = useState(() => `ui-test-${crypto.randomUUID()}`);
+  const target = list.find((c) => c.id === customerId);
+  const blockers = readiness?.checks.filter((c) => c.required && !c.ok && ['active', 'provider', 'sarvam_app', 'consent'].includes(c.id)) ?? [];
+  return (
+    <div className="rounded-[12px] border border-line p-3" aria-label="Real test call">
+      <p className="font-semibold text-ink">Real test call</p>
+      {blockers.length > 0 ? (
+        <p className="mt-1 text-amber-900">Not possible yet: {blockers.map((b) => b.label.toLowerCase()).join(', ')}.</p>
+      ) : (
+        <div className="mt-2 grid gap-2">
+          <select className={inputCls} value={customerId} onChange={(e) => { setCustomerId(e.target.value); setResult(null); setConfirm(false); setKey(`ui-test-${crypto.randomUUID()}`); }} aria-label="Who to call">
+            <option value="">Choose a customer who agreed to calls…</option>
+            {list.map((c) => <option key={c.id} value={c.id}>{c.name ?? 'Unnamed'}</option>)}
+          </select>
+          {target && <p className="text-ink">Destination: <span className="font-semibold tabular">+{target.phone}</span></p>}
+          <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={confirm} disabled={!target} onChange={(e) => setConfirm(e.target.checked)} /><span>This places a <b>real phone call</b> to this number{agent.telephonyProvider === 'sarvam' ? ' through Sarvam' : ' through Plivo'} (charged), unless test mode is on.</span></label>
+          <Button disabled={!target || !confirm || busy || Boolean(result)} busy={busy} onClick={async () => {
+            setBusy(true);
+            try { setResult(await api.post('/telephony/calls', { agentId: agent.id, customerId, confirm: true, idempotencyKey: key })); }
+            catch (e) { toast(errMsg(e), 'error'); }
+            finally { setBusy(false); }
+          }}><Phone className="size-4" />Place test call</Button>
+          {result && <p role="status" className={cx('rounded-[8px] px-2.5 py-1.5', result.status === 'dialing' ? 'bg-brand-soft text-brand-dark' : 'bg-amber-50 text-amber-900')}>{result.status === 'dialing' ? 'Calling now.' : `${result.status === 'dry_run' ? 'Checked in test mode, not placed' : 'Not placed'}: ${explainCallReason(result.failureReason)}`}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 

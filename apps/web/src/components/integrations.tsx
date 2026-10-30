@@ -469,6 +469,49 @@ export function UsageCard({ usage }: { usage: Usage }) {
   );
 }
 
+type Business = { label: 'Connected' | 'Not connected' | 'Needs attention' | 'Configuration incomplete' | 'Provided by Tacksharp'; tone: 'brand' | 'slate' | 'rose' | 'amber' | 'sky'; detail: string; action: string };
+
+/**
+ * Plain-language status of one integration, from the server's real state: "Connected" only for this organization's
+ * own tested and enabled account. The platform's account (pre-existing workspaces) is shown as provided by
+ * Tacksharp, never as a verified connection of this workspace.
+ */
+export function businessStatus(i: Integration): Business {
+  const missing = i.saved ? i.fields.filter((f) => f.required && (f.secret ? !i.secrets[f.key] : !i.config[f.key])).map((f) => f.label) : [];
+  if (i.effective.source === 'organization') return { label: 'Connected', tone: 'brand', detail: `Working: last successful test ${when(i.lastSuccessAt)}.`, action: 'Manage' };
+  if (i.status === 'failed') return { label: 'Needs attention', tone: 'rose', detail: 'The last connection test failed. Open it to see why, fix the details and test again.', action: 'Repair' };
+  if (i.saved && missing.length) return { label: 'Configuration incomplete', tone: 'amber', detail: `Missing: ${missing.join(', ')}.`, action: 'Configure' };
+  if (i.saved && i.status === 'untested') return { label: 'Configuration incomplete', tone: 'amber', detail: 'Saved, but not tested yet. A connection test proves it works.', action: 'Test' };
+  if (i.saved && i.status === 'ok' && !i.enabled) return { label: 'Configuration incomplete', tone: 'amber', detail: 'Tested successfully but switched off. Enable it to use it.', action: 'Enable' };
+  if (i.effective.source === 'environment' && !i.effective.reason) return { label: 'Provided by Tacksharp', tone: 'sky', detail: "Uses Tacksharp's account for your workspace. Connect your own account for your own number and billing.", action: 'Connect your own' };
+  return { label: 'Not connected', tone: 'slate', detail: PROVIDER_META[i.provider].blurb, action: 'Connect' };
+}
+
+type ChannelState = { id: string; label: string; status: 'connected' | 'not_connected' | 'needs_attention' | 'incomplete'; detail: string; href: string };
+const CHANNEL_STATUS: Record<ChannelState['status'], { label: string; tone: 'brand' | 'slate' | 'rose' | 'amber' }> = { connected: { label: 'Connected', tone: 'brand' }, not_connected: { label: 'Not connected', tone: 'slate' }, needs_attention: { label: 'Needs attention', tone: 'rose' }, incomplete: { label: 'Configuration incomplete', tone: 'amber' } };
+
+/** What customers can use right now: one line per channel, from GET /home (the same truth as the Home checklist). */
+export function ChannelSummary() {
+  const { data } = useApi<{ channels: ChannelState[]; mode: { dryRun: boolean } }>('/home?range=today', 60_000);
+  if (!data) return <Skeleton className="h-24 rounded-[14px]" />;
+  return (
+    <Card>
+      <CardHeader title="What your customers can use" subtitle={data.mode.dryRun ? 'Test mode is on: messages and calls are checked, not sent.' : 'Live: customers who agreed can be contacted.'} />
+      <ul className="grid gap-2 px-5 pb-5 sm:grid-cols-2" aria-label="Channels">
+        {data.channels.map((c) => (
+          <li key={c.id} className="flex items-start gap-3 rounded-[12px] border border-line p-3" data-testid={`channel-${c.id}`}>
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2 text-[14px] font-semibold text-ink">{c.label}<Badge tone={CHANNEL_STATUS[c.status].tone}>{CHANNEL_STATUS[c.status].label}</Badge></p>
+              <p className="mt-0.5 text-[12.5px] text-body">{c.detail}</p>
+            </div>
+            {c.status !== 'connected' && <Link href={c.href} className="shrink-0 rounded-[8px] bg-ink px-2.5 py-1.5 text-[12.5px] font-semibold text-white">{c.status === 'needs_attention' ? 'Repair' : 'Complete setup'}</Link>}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 /** Settings → Integrations / AI providers overview: one card per provider with its real status. */
 export function ProviderList({ group }: { group: 'Integrations' | 'AI providers' }) {
   const { data, error, reload } = useApi<{ items: Integration[]; deployment: Deployment }>('/integrations', 30_000);
@@ -479,19 +522,23 @@ export function ProviderList({ group }: { group: 'Integrations' | 'AI providers'
     <div className="grid gap-4">
       {!data.deployment.vault.ready && <p role="note" className="flex items-start gap-2 rounded-[12px] bg-amber-50 px-4 py-3 text-[13px] text-amber-900"><AlertTriangle className="mt-0.5 size-4 shrink-0" />{data.deployment.vault.problem}</p>}
       <div className="grid gap-4 md:grid-cols-2">
-        {items.map((i) => (
-          <Link key={i.provider} href={PROVIDER_META[i.provider].href} className="group rounded-[var(--radius-card)] border border-line bg-white p-5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-md focus-visible:outline-2">
-            <div className="flex items-start justify-between gap-3">
-              <div><h2 className="text-[15px] font-semibold text-ink">{PROVIDER_META[i.provider].name}</h2><p className="mt-0.5 text-[12.5px] text-muted">{PROVIDER_META[i.provider].blurb}</p></div>
-              <StatusBadge status={i.status} />
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2"><SourceBadge effective={i.effective} />{i.enabled && <Badge tone="brand">Enabled</Badge>}</div>
-            <p className="mt-3 text-[12px] text-muted">Last successful test: {when(i.lastSuccessAt)}</p>
-            <span className="mt-3 inline-block text-[13px] font-semibold text-brand group-hover:underline">Configure →</span>
-          </Link>
-        ))}
+        {items.map((i) => {
+          const b = businessStatus(i);
+          return (
+            <Link key={i.provider} href={PROVIDER_META[i.provider].href} className="group flex flex-col rounded-[var(--radius-card)] border border-line bg-white p-5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-md focus-visible:outline-2" data-testid={`integration-${i.provider}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div><h2 className="text-[15px] font-semibold text-ink">{PROVIDER_META[i.provider].name}</h2><p className="mt-0.5 text-[12.5px] text-muted">{PROVIDER_META[i.provider].blurb}</p></div>
+                <Badge tone={b.tone}>{b.label}</Badge>
+              </div>
+              <p className="mt-3 text-[13px] text-body">{b.detail}</p>
+              {i.lastError && i.status === 'failed' && <p className="mt-1 line-clamp-2 text-[12px] text-rose-700">{i.lastError}</p>}
+              <p className="mt-2 text-[12px] text-muted">Last successful test: {when(i.lastSuccessAt)}</p>
+              <span className="mt-auto pt-3 text-[13px] font-semibold text-brand group-hover:underline">{b.action} →</span>
+            </Link>
+          );
+        })}
       </div>
-      <p className="text-[12px] text-muted">Mode on this server: {data.deployment.mode.dryRun ? 'dry run (nothing is sent, no call is placed)' : `live (${data.deployment.mode.liveTestRecipients} approved test number(s))`}.</p>
+      <p className="text-[12px] text-muted">Sending mode on this server: {data.deployment.mode.dryRun ? 'test mode (nothing is sent, no call is placed)' : `live (${data.deployment.mode.liveTestRecipients} approved test number(s))`}.</p>
     </div>
   );
 }

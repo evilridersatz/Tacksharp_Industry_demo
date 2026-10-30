@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useMemo, useState } from 'react';
 import { Bot, Clock3, Headset, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Sparkles } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
+import { explainCallReason } from '@/lib/call-reasons';
 import type { Call, Message, Summary } from '@/lib/types';
 import { callBadge, dateTime, displayName, duration, formatPhone, languageLabel, minutesSeconds, pct, requirement, timeAgo } from '@/lib/format';
 import { PageHeader } from '@/components/shell';
@@ -163,7 +164,7 @@ function CallPanel({ detail, onCalled }: { detail: { call: Call; transcript: Mes
     setNote(null);
     try {
       const r = await api.post<{ started: boolean; reason?: string }>('/voice/call', { leadId: call.leadId, customerId: call.customerId, confirm: true });
-      setNote(r.started ? 'Calling now…' : `Not started: ${r.reason}`);
+      setNote(r.started ? 'Calling now…' : `Not started. ${explainCallReason(r.reason)}`);
       onCalled();
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
@@ -213,6 +214,14 @@ function CallPanel({ detail, onCalled }: { detail: { call: Call; transcript: Mes
             <Sparkles className="size-3.5" /> What happened
           </p>
           <p className="mt-0.5 text-ink">{call.summary ?? OUTCOME_TEXT[outcomeKey]}</p>
+        </div>
+      )}
+
+      {['failed', 'no_answer', 'busy'].includes(call.status) && (
+        <div className="mt-3 rounded-[12px] bg-slate-50 px-3.5 py-3 text-[12.5px]">
+          <p className="font-semibold text-ink">Why it did not connect</p>
+          <p className="mt-0.5 text-body">{explainCallReason(call.status === 'failed' ? (call.hangupCause ?? call.endReason ?? 'failed') : call.status)}</p>
+          {(call.hangupCause || call.endReason) && <details className="mt-1 text-muted"><summary className="cursor-pointer">Technical details</summary><p className="mt-1 break-words">{[call.hangupCause, call.endReason].filter(Boolean).join(' · ')}</p></details>}
         </div>
       )}
 
