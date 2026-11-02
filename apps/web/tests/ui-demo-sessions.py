@@ -1,6 +1,6 @@
 """
-Shared WhatsApp / Plivo number across industry workspaces, end to end through the real dashboard + API + worker +
-MySQL (TEST database only), DRY_RUN=true: nothing reaches Meta or Plivo.
+Shared WhatsApp / voice number across industry workspaces, end to end through the real dashboard + API + worker +
+MySQL (TEST database only), DRY_RUN=true: nothing reaches Meta or Sarvam.
 
   Needs: API on :3000 with DB_NAME=<test db> DRY_RUN=true RUN_WORKERS=true LIVE_TEST_RECIPIENTS=919800011122
          WHATSAPP_PHONE_NUMBER_ID=PNID_LOCAL (identifier only) and no META_APP_SECRET (local signature check off),
@@ -57,7 +57,8 @@ with sync_playwright() as p:
         pg.get_by_role('button', name='Check connections').click(); pg.wait_for_timeout(9000)
         body_txt = pg.locator('body').inner_text()
         probed = re.findall(r'(Connected|Authentication failed|Provider unavailable)', body_txt)
-        check('connection check reports the real provider result (placeholders cannot be "Connected")', len(probed) >= 2 and 'Connected' not in probed, ', '.join(probed))
+        # WhatsApp is probed for real; Sarvam voice agents have no read-only check, so voice stays "not checked" (Plivo removed).
+        check('connection check reports the real provider result (placeholders cannot be "Connected"); voice is never claimed', len(probed) >= 1 and 'Connected' not in probed and 'Configured · not checked' in body_txt, ', '.join(probed))
 
         # start without confirmation -> refused; with -> session
         pg.get_by_label('Approved test number').select_option(TESTER)
