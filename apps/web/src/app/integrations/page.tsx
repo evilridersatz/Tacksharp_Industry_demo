@@ -26,7 +26,7 @@ type Integrations = {
       orderReadyTemplateSet: boolean;
       webhookUrl: string;
     };
-    voice: { connected: boolean; missing: string[]; callingHours: string; answerUrl: string; note: string; signatureCheck?: boolean };
+    voice: { provider: string; inboundAgent: string; toolsEndpoint: string; callingHours: string; note: string };
     website: { keyConfigured: boolean; endpoint: string };
   };
   pos: { status: string; note: string };
@@ -83,22 +83,16 @@ export default function IntegrationsPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Order-ready calls" subtitle="Tamil voice call when staff mark an order Ready" action={<Status ok={d.channels.voice.connected} label={d.channels.voice.connected ? 'On' : 'Off'} />} />
+            <CardHeader title="Phone calls (Sarvam)" subtitle="Customers call the shop number; the Sarvam agent answers from your live menu" action={<Status ok={null} neutral label="Sarvam" />} />
             <div className="px-5 pb-4 text-[13px]">
               <p className="text-body">{d.channels.voice.note}</p>
-              {d.channels.voice.missing.length > 0 && (
-                <p className="mt-2 text-[12.5px] text-[#b45309]">
-                  Missing: <span className="font-mono">{d.channels.voice.missing.join(', ')}</span>
-                </p>
-              )}
+              <Field label="Phone agent">{d.channels.voice.inboundAgent}</Field>
+              <Field label="Menu and order tools"><span className="break-all font-mono text-[12px]">{d.channels.voice.toolsEndpoint}</span></Field>
               <Field label="Calling hours">{d.channels.voice.callingHours}</Field>
-              {d.channels.voice.signatureCheck !== undefined && (
-                <Field label="Plivo signature check">{d.channels.voice.signatureCheck ? 'On' : <span className="text-[#b45309]">Off — PLIVO_VALIDATE_SIGNATURE</span>}</Field>
-              )}
               {d.routing
                 ?.filter((r) => r.configured)
                 .map((r) => (
-                  <Field key={r.kind} label={r.kind === 'plivo_number' ? 'Calls to the Plivo number go to' : 'WhatsApp number goes to'}>
+                  <Field key={r.kind} label="WhatsApp number goes to">
                     {r.toThisBusiness ? (
                       `This business${r.via === 'default_fallback' ? ' (default organization)' : ''}`
                     ) : (
@@ -111,8 +105,6 @@ export default function IntegrationsPage() {
                   {d.mode.dryRun ? 'Dry run — nothing is sent, no call is placed' : d.mode.liveAllowAll ? 'Live — all consenting customers' : `Live — ${d.mode.liveTestRecipients} approved test number(s) only`}
                 </Field>
               )}
-              <p className="mt-2 text-[12px] text-muted">Plivo answer URL (set automatically per call):</p>
-              <p className="break-all font-mono text-[12px] text-ink">{d.channels.voice.answerUrl}</p>
             </div>
           </Card>
 

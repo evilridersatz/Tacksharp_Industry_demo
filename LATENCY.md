@@ -1,5 +1,7 @@
 # Call and WhatsApp latency: where the time goes and how to cut it
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 ## What was measured (local, October 29, 2026)
 
 A real webhook was posted to the running API with the test database and `DRY_RUN=true`. It went through the queue

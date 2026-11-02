@@ -35,7 +35,7 @@ function hostOnly(url: string | undefined) {
 
 const dryRun = env.DRY_RUN !== 'false';
 const whatsappLive = set('WHATSAPP_ACCESS_TOKEN');
-const voiceLive = set('PLIVO_AUTH_ID');
+const voiceLive = set('SARVAM_AGENTS_API_KEY');
 
 // Core
 row('Core', 'PUBLIC_BASE_URL', set('PUBLIC_BASE_URL') ? (env.PUBLIC_BASE_URL!.startsWith('https://') ? 'OK' : 'WARN') : 'MISSING', set('PUBLIC_BASE_URL') ? `${hostOnly(env.PUBLIC_BASE_URL)}${env.PUBLIC_BASE_URL!.startsWith('https://') ? '' : ' — Plivo and Meta need HTTPS'}` : 'missing — webhooks and call audio need it');
@@ -74,11 +74,7 @@ row('Restaurant templates', 'Offer template', 'INFO', 'set per offer campaign in
 row('Real-estate templates', 'WHATSAPP_TEMPLATE_NAME', set('WHATSAPP_TEMPLATE_NAME') ? 'OK' : 'INFO', set('WHATSAPP_TEMPLATE_NAME') ? 'set' : 'missing — only affects real-estate lead first contact, not GR Chicken');
 
 // Voice
-secret('Voice (Plivo)', 'PLIVO_AUTH_ID', false, 'no calls');
-secret('Voice (Plivo)', 'PLIVO_AUTH_TOKEN', voiceLive);
-secret('Voice (Plivo)', 'PLIVO_FROM_NUMBER', voiceLive);
-row('Voice (Plivo)', 'PLIVO_VALIDATE_SIGNATURE', env.PLIVO_VALIDATE_SIGNATURE === 'true' ? 'OK' : voiceLive ? 'WARN' : 'INFO', env.PLIVO_VALIDATE_SIGNATURE === 'true' ? 'true' : 'not true — callbacks are not signature-checked');
-shown('Voice (Plivo)', 'VOICE_MODE', 'record', 'record = Plivo <Record> turns; stream = real-time audio stream');
+if (set('PLIVO_AUTH_ID') || set('PLIVO_AUTH_TOKEN') || set('PLIVO_FROM_NUMBER')) row('Voice', 'PLIVO_*', 'WARN', 'Plivo was removed: these settings are ignored; delete them');
 secret('Voice (Sarvam)', 'SARVAM_API_KEY', voiceLive, 'speech-to-text / text-to-speech for calls');
 
 // Stock alerts (optional)

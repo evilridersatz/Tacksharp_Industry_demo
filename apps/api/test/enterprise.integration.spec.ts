@@ -5,6 +5,7 @@
  * MOCKED here: this proves our handling, not live connectivity), and platform-admin enforcement.
  */
 import { randomBytes } from 'node:crypto';
+import { pcmToWav } from '../src/sarvam/wav.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const enabled = Boolean(process.env.TEST_DB_NAME);
@@ -89,7 +90,7 @@ describe.skipIf(!enabled)('enterprise platform (integration)', () => {
   });
 
   it('a self-service organization never inherits the platform environment accounts; a legacy one keeps them', async () => {
-    for (const p of ['plivo', 'whatsapp', 'sarvam', 'openai']) {
+    for (const p of ['whatsapp', 'sarvam', 'openai']) {
       expect((await creds.resolve(a.organization.id, p)).source).toBe('none');
       expect((await creds.resolve(LEGACY, p)).source).toBe('environment');
     }
@@ -97,33 +98,33 @@ describe.skipIf(!enabled)('enterprise platform (integration)', () => {
 
   it('saves secrets encrypted, returns masked hints only, and does not treat a save as a working connection', async () => {
     const actor = { sub: a.user.id, org: a.organization.id };
-    const view = await integrations.save(actor, 'plivo', { authId: 'MAAAAAAAAAAAAAAAAAAA', authToken: 'plivo-secret-token-AAAA', fromNumber: '914400000001' });
-    expect(JSON.stringify(view)).not.toContain('plivo-secret-token-AAAA');
-    expect(view.secrets.authToken).toBe('••••AAAA');
+    const view = await integrations.save(actor, 'sarvam', { apiKey: 'sarvam-secret-key-AAAA' });
+    expect(JSON.stringify(view)).not.toContain('sarvam-secret-key-AAAA');
+    expect(view.secrets.apiKey).toBe('••••AAAA');
     expect(view).toMatchObject({ status: 'untested', enabled: false });
-    const row = await prisma.integrationCredential.findUnique({ where: { organizationId_provider: { organizationId: a.organization.id, provider: 'plivo' } } });
-    expect(row.secretCiphertext).not.toContain('plivo-secret');
-    await expect(integrations.setEnabled(actor, 'plivo', true)).rejects.toMatchObject({ status: 400 });
-    expect((await creds.resolve(a.organization.id, 'plivo')).source).toBe('none');
+    const row = await prisma.integrationCredential.findUnique({ where: { organizationId_provider: { organizationId: a.organization.id, provider: 'sarvam' } } });
+    expect(row.secretCiphertext).not.toContain('sarvam-secret');
+    await expect(integrations.setEnabled(actor, 'sarvam', true)).rejects.toMatchObject({ status: 400 });
+    expect((await creds.resolve(a.organization.id, 'sarvam')).source).toBe('none');
   });
 
   it('a passed (mocked) connection test allows enabling; then the organization uses ITS OWN credentials', async () => {
     const actor = { sub: a.user.id, org: a.organization.id };
     const seen: string[] = [];
     integrations.fetchImpl = async (url: string, init: any) => {
-      seen.push(`${url} ${init?.headers?.Authorization ?? ''}`);
-      return new Response(JSON.stringify({ name: 'Ent A', account_type: 'standard' }), { status: 200 });
+      seen.push(`${url} ${init?.headers?.['api-subscription-key'] ?? ''}`);
+      return new Response(JSON.stringify({ audios: [pcmToWav(new Int16Array(3200).fill(1000), 8000).toString('base64')] }), { status: 200 });
     };
-    const t = await integrations.test(actor, 'plivo', 'connection', {});
+    const t = await integrations.test(actor, 'sarvam', 'connection', {});
     expect(t.result.ok).toBe(true);
-    expect(seen.every((s) => s.includes('/Account/MAAAAAAAAAAAAAAAAAAA/'))).toBe(true);
-    const en = await integrations.setEnabled(actor, 'plivo', true);
+    expect(seen.every((s) => s.includes('/text-to-speech') && s.endsWith('sarvam-secret-key-AAAA'))).toBe(true);
+    const en = await integrations.setEnabled(actor, 'sarvam', true);
     expect(en).toMatchObject({ enabled: true, status: 'ok', effective: { source: 'organization' } });
-    const r = await creds.resolve(a.organization.id, 'plivo');
-    expect(r.secrets.authToken).toBe('plivo-secret-token-AAAA');
+    const r = await creds.resolve(a.organization.id, 'sarvam');
+    expect(r.secrets.apiKey).toBe('sarvam-secret-key-AAAA');
     // Organization B is untouched by A's credentials.
-    expect((await creds.resolve(b.organization.id, 'plivo')).source).toBe('none');
-    expect((await integrations.get(b.organization.id, 'plivo')).saved).toBe(false);
+    expect((await creds.resolve(b.organization.id, 'sarvam')).source).toBe('none');
+    expect((await integrations.get(b.organization.id, 'sarvam')).saved).toBe(false);
   });
 
   it('a failed test records a sanitized error and blocks use', async () => {
@@ -140,18 +141,15 @@ describe.skipIf(!enabled)('enterprise platform (integration)', () => {
 
   it('a test call is refused while the organization is pending, in dry run, or to an unapproved number', async () => {
     const actor = { sub: a.user.id, org: a.organization.id };
-    await expect(integrations.test(actor, 'plivo', 'call', { to: '919800011122', confirm: true })).rejects.toMatchObject({ status: 403 });
+    await integrations.save(actor, 'sarvam_telephony', { apiKey: 'sk_sarvam_agents_AAAA', orgId: 'org1', workspaceId: 'ws1', connectionId: 'conn1', agentPhoneNumber: '918064269808' });
+    await expect(integrations.test(actor, 'sarvam_telephony', 'call', { to: '919800011122', confirm: true, appId: 'app-1' })).rejects.toMatchObject({ status: 403 });
   });
 
-  it('number routing needs the number verified on the organization\'s own account and is first-come only', async () => {
+  it('Plivo is no longer an integration: it cannot be saved or tested, and it is not listed', async () => {
     const actor = { sub: a.user.id, org: a.organization.id };
-    integrations.fetchImpl = async () => new Response('{}', { status: 404 });
-    await expect(integrations.mapPlivoNumber(actor, '914400000777')).rejects.toMatchObject({ status: 400 });
-    await prisma.organizationChannel.create({ data: { organizationId: LEGACY, kind: 'plivo_number', externalId: '914400000888' } });
-    await expect(integrations.mapPlivoNumber(actor, '914400000888')).rejects.toMatchObject({ status: 409 });
-    integrations.fetchImpl = async () => new Response(JSON.stringify({ voice_enabled: true }), { status: 200 });
-    const ok = await integrations.mapPlivoNumber(actor, '+91 44 0000 0777');
-    expect(ok.numbers.map((n: any) => n.externalId)).toContain('914400000777');
+    await expect(integrations.save(actor, 'plivo', { authId: 'MA1', authToken: 'x', fromNumber: '914400000001' })).rejects.toMatchObject({ status: 404 });
+    await expect(integrations.test(actor, 'plivo', 'connection', {})).rejects.toMatchObject({ status: 404 });
+    expect((await integrations.list(a.organization.id)).items.map((i: any) => i.provider)).not.toContain('plivo');
   });
 
   it('platform routes are refused to organization admins; activation and suspension take effect at once', async () => {
@@ -170,7 +168,7 @@ describe.skipIf(!enabled)('enterprise platform (integration)', () => {
     const detail = await platform.organization(a.organization.id);
     // Platform admins see integration STATUS, never secrets or masked hints.
     expect(JSON.stringify(detail)).not.toContain('AAAA');
-    expect(detail.integrations.find((i: any) => i.provider === 'plivo')).toMatchObject({ enabled: true, status: 'ok' });
+    expect(detail.integrations.find((i: any) => i.provider === 'sarvam')).toMatchObject({ enabled: true, status: 'ok' });
   });
 
   it('forgot-password answers the same for unknown emails and records a request for real ones', async () => {

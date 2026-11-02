@@ -11,6 +11,7 @@ import { Badge, Button, Card, CardHeader, Empty, ErrorBanner, Skeleton, cx } fro
 import { Dialog, inputCls } from '@/components/textile';
 import { toast } from '@/components/toast';
 import { explainCallReason } from '@/lib/call-reasons';
+import { SarvamConfigPack } from '@/components/sarvam-config-pack';
 
 export type Agent = {
   id: string; name: string; description: string | null; industry: string; useCase: string | null; templateKey: string | null; instructions: string;
@@ -20,11 +21,11 @@ export type Agent = {
   businessHours: { days: number[]; start: string; end: string; timezone: string; afterHoursMessage: string } | null;
   escalation: { keywords: string[]; handoffMessage: string; phone: string | null } | null;
   callLimits: { maxCallSeconds: number; maxConcurrent: number; dailyLimit: number } | null;
-  status: 'draft' | 'active' | 'archived'; telephonyProvider: 'plivo' | 'sarvam'; sarvamAppId: string | null; sarvamAppVersion: number | null;
+  status: 'draft' | 'active' | 'archived'; telephonyProvider: string; sarvamAppId: string | null; sarvamAppVersion: number | null;
   lastTestedAt: string | null; publishedAt: string | null; updatedAt: string;
 };
 type Caps = { provider: string; configured: boolean; outbound: boolean; inbound: boolean; conversation: string; instructionsSource: string; knowledgeSource: string; webhookAuth: string; realtimeAudio: string; numberProvisioning: string; pricing: string; limits: string; verifiedFrom: string[]; notes: string[] };
-type Overview = { defaultProvider: 'plivo' | 'sarvam'; dryRun: boolean; providers: { plivo: Caps; sarvam: Caps }; sarvamInboundWebhooks: Array<{ agentId: string; agentName: string; url: string | null }> };
+type Overview = { defaultProvider: 'sarvam'; dryRun: boolean; providers: { sarvam: Caps }; systemAgentId: string | null; sarvamOrgInboundWebhook: string | null; sarvamInboundWebhooks: Array<{ agentId: string; agentName: string; url: string | null }> };
 type CallRow = { requestId: string; agentId: string | null; to: string; provider: string; status: string; failureReason: string | null; durationSec: number | null; createdAt: string };
 
 const STATUS_TONE = { draft: 'amber', active: 'brand', archived: 'slate' } as const;
@@ -49,9 +50,9 @@ export default function VoiceAgentsPage() {
       router.push(`/voice-agents/${a.id}`);
     } catch (e) { toast(errMsg(e), 'error'); setBusy(null); }
   }
-  async function setProvider(p: 'plivo' | 'sarvam') {
-    setBusy('prov');
-    try { await api.put('/telephony/settings', { provider: p }); toast(`Default telephony provider: ${p === 'sarvam' ? 'Sarvam' : 'Plivo'}.`); await reloadTel(); } catch (e) { toast(errMsg(e), 'error'); } finally { setBusy(null); }
+  async function setSystemAgent(agentId: string) {
+    setBusy('sys');
+    try { await api.put('/telephony/system-agent', { agentId: agentId || null }); toast('Agent for automatic calls saved.'); await reloadTel(); } catch (e) { toast(errMsg(e), 'error'); } finally { setBusy(null); }
   }
 
   return (
@@ -78,7 +79,7 @@ export default function VoiceAgentsPage() {
               </div>
               <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[12.5px]">
                 <dt className="text-muted">Knowledge</dt><dd className="truncate text-ink">{a.knowledgeBase?.name ?? 'None'}</dd>
-                <dt className="text-muted">Calls via</dt><dd className="text-ink">{a.telephonyProvider === 'sarvam' ? 'Sarvam' : 'Plivo'}</dd>
+                <dt className="text-muted">Calls via</dt><dd className="text-ink">Sarvam{a.sarvamAppId ? '' : ' (agent id missing)'}</dd>
                 <dt className="text-muted">Inbound</dt><dd className="text-ink">{a.inbound?.enabled ? `+${a.inbound.phoneNumber}` : 'Off'}</dd>
                 <dt className="text-muted">Outbound</dt><dd className="text-ink">{a.outbound?.enabled ? 'On' : 'Off'}</dd>
               </dl>
@@ -94,42 +95,37 @@ export default function VoiceAgentsPage() {
 
       <div className="mt-6 grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Telephony provider" subtitle="Which provider places and answers calls. Each agent can override it." />
+          <CardHeader title="Phone calls (Sarvam)" subtitle="Calls are answered and placed by Sarvam voice agents. Plivo has been removed." />
           {!tel ? <Skeleton className="h-40" /> : (
             <div className="space-y-3">
-              <div className="flex gap-2" role="radiogroup" aria-label="Default telephony provider">
-                {(['plivo', 'sarvam'] as const).map((p) => (
-                  <button key={p} role="radio" aria-checked={tel.defaultProvider === p} disabled={!canManage || busy === 'prov'} onClick={() => void setProvider(p)} className={cx('flex-1 rounded-[10px] border px-3 py-2 text-left text-[13px]', tel.defaultProvider === p ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:bg-canvas')}>
-                    <span className="block font-semibold">{p === 'plivo' ? 'Plivo' : 'Sarvam Voice Agents'}</span>
-                    <span className={cx('text-[12px]', tel.defaultProvider === p ? 'text-white/70' : 'text-muted')}>{tel.providers[p].configured ? 'Configured' : 'Not configured'}</span>
-                  </button>
-                ))}
-              </div>
-              {(['plivo', 'sarvam'] as const).map((p) => {
-                const c = tel.providers[p];
-                return (
-                  <details key={p} className="rounded-[10px] border border-line px-3 py-2 text-[12.5px]">
-                    <summary className="cursor-pointer font-semibold text-ink">{p === 'plivo' ? 'Plivo' : 'Sarvam'}: what works (verified)</summary>
-                    <ul className="mt-2 space-y-1 text-body">
-                      <li>Conversation: {c.conversation === 'our_engine' ? 'our engine (your instructions and knowledge base, live)' : 'agent hosted by Sarvam (configure it in Sarvam)'}</li>
-                      <li>Audio: {c.realtimeAudio}</li>
-                      <li>Numbers: {c.numberProvisioning}</li>
-                      <li>Pricing: {c.pricing}</li>
-                      <li>Limits: {c.limits}</li>
-                      <li>Webhooks: {c.webhookAuth === 'provider_signature' ? 'provider signature verified' : 'HMAC token in our webhook URL (the provider does not sign)'}</li>
-                      {c.notes.map((n) => <li key={n} className="text-amber-900">{n}</li>)}
-                      {c.verifiedFrom.filter((u) => u.startsWith('http')).map((u) => <li key={u}><a href={u} target="_blank" rel="noreferrer" className="text-brand-dark underline">{u.replace('https://', '')}</a></li>)}
-                    </ul>
-                  </details>
-                );
-              })}
+              <p className="text-[13px]"><Badge tone={tel.providers.sarvam.configured ? 'brand' : 'amber'}>{tel.providers.sarvam.configured ? 'Connected' : 'Not set up'}</Badge> <span className="ml-1 text-muted">{tel.dryRun ? 'Test mode: calls are checked but not placed.' : 'Live for allowed numbers.'}</span></p>
+              <label className="block text-[12.5px]">
+                <span className="font-semibold text-ink">Agent for automatic calls</span>
+                <span className="block text-muted">Feedback calls, follow-up calls and the customer "test call" use this Sarvam agent.</span>
+                <select className={cx(inputCls, 'mt-1')} aria-label="Agent for automatic calls" disabled={!canManage || busy === 'sys'} value={tel.systemAgentId ?? ''} onChange={(e) => void setSystemAgent(e.target.value)}>
+                  <option value="">Choose automatically (the only active outbound Sarvam agent)</option>
+                  {(agents ?? []).filter((a) => a.sarvamAppId && a.status !== 'archived').map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+              <details className="rounded-[10px] border border-line px-3 py-2 text-[12.5px]">
+                <summary className="cursor-pointer font-semibold text-ink">Sarvam: what works (verified)</summary>
+                <ul className="mt-2 space-y-1 text-body">
+                  <li>Audio: {tel.providers.sarvam.realtimeAudio}</li>
+                  <li>Numbers: {tel.providers.sarvam.numberProvisioning}</li>
+                  <li>Pricing: {tel.providers.sarvam.pricing}</li>
+                  <li>Limits: {tel.providers.sarvam.limits}</li>
+                  <li>Webhooks: HMAC token in our webhook URL (Sarvam does not sign)</li>
+                  {tel.providers.sarvam.notes.map((n) => <li key={n} className="text-amber-900">{n}</li>)}
+                  {tel.providers.sarvam.verifiedFrom.filter((u) => u.startsWith('http')).map((u) => <li key={u}><a href={u} target="_blank" rel="noreferrer" className="text-brand-dark underline">{u.replace('https://', '')}</a></li>)}
+                </ul>
+              </details>
               {tel.sarvamInboundWebhooks.length > 0 && (
                 <div className="rounded-[10px] bg-canvas p-3 text-[12px]">
                   <p className="font-semibold text-ink">Sarvam inbound deployments: result webhook per agent</p>
                   {tel.sarvamInboundWebhooks.map((w) => <p key={w.agentId} className="mt-1 break-all text-body"><span className="font-semibold">{w.agentName}:</span> {w.url ?? 'Set TELEPHONY_WEBHOOK_SECRET on the server first.'}</p>)}
                 </div>
               )}
-              <p className="text-[12px] text-muted">Credentials: <Link className="font-semibold text-brand-dark underline" href="/settings/integrations/plivo">Plivo</Link> · <Link className="font-semibold text-brand-dark underline" href="/settings/integrations/sarvam-telephony">Sarvam Voice Agents</Link></p>
+              <p className="text-[12px] text-muted">Credentials: <Link className="font-semibold text-brand-dark underline" href="/settings/integrations/sarvam-telephony">Sarvam Voice Agents</Link></p>
             </div>
           )}
         </Card>
@@ -149,6 +145,7 @@ export default function VoiceAgentsPage() {
             </ul>
           )}
         </Card>
+        {canManage && <div className="xl:col-span-2"><SarvamConfigPack canReveal={!workspace?.role || workspace.role === 'admin'} /></div>}
       </div>
       {callFor && <CallDialog agent={callFor} onClose={() => { setCallFor(null); void reloadCalls(); }} />}
     </>
@@ -183,7 +180,7 @@ function CallDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
             {list.map((c) => <option key={c.id} value={c.id}>{c.name ?? 'Unnamed'} · ••••{(c.phone ?? '').slice(-4)}{c.callingConsent ? '' : ' (no calling consent)'}</option>)}
           </select>
         </label>
-        <label className="flex items-start gap-2"><input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} className="mt-0.5" /><span>Place a real phone call now (charged by {agent.telephonyProvider === 'sarvam' ? 'Sarvam' : 'Plivo'} unless the server is in dry run). The customer has agreed to be called.</span></label>
+        <label className="flex items-start gap-2"><input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} className="mt-0.5" /><span>Place a real phone call now (charged by Sarvam unless the server is in dry run). The customer has agreed to be called.</span></label>
         <p className="flex items-center gap-1.5 text-[12px] text-muted"><ShieldCheck className="size-3.5" />Checked on the server: consent, do-not-contact, calling hours, limits, duplicates. No automatic redial.</p>
         {result && (
           <p role="status" className={cx('rounded-[10px] px-3 py-2', result.status === 'dialing' ? 'bg-brand-soft text-brand-dark' : 'bg-amber-50 text-amber-900')}>

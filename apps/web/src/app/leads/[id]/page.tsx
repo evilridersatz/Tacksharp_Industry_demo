@@ -302,7 +302,7 @@ const CALL_BLOCKED: Record<string, string> = {
   do_not_contact: 'This customer opted out, so the AI will not call them.',
   call_already_in_progress: 'A call to this customer is already in progress.',
   customer_has_no_phone: 'This lead has no phone number.',
-  'PLIVO_FROM_NUMBER missing': 'Calling is not set up yet: add PLIVO_FROM_NUMBER to the API .env.',
+  no_sarvam_agent: 'Calling is not set up yet: choose the Sarvam agent for automatic calls on the Voice agents page.',
 };
 
 type JourneyItem = { at: string; icon: ReactNode; tone: 'brand' | 'violet' | 'sky' | 'rose' | 'amber' | 'slate'; title: string; body?: ReactNode; stage: string };

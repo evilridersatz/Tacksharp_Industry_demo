@@ -40,7 +40,7 @@ describe.skipIf(!enabled)('voice agents, knowledge base, telephony (integration)
     agents = new VoiceAgentsService(prisma, kb);
     const voiceStub: any = { startOutboundCall: vi.fn(async () => ({ started: false, reason: 'stub' })) };
     const followUps: any = { settingsFor: async () => ({ calling: { windowStartHour: 0, windowEndHour: 24 } }) };
-    tel = new TelephonyService(prisma, voiceStub, followUps);
+    tel = new TelephonyService(prisma, followUps);
     sarvamFetch = vi.fn(async () => new Response(JSON.stringify({ attempt_id: `att-${run}` }), { status: 200 }));
     tel.sarvam.fetchImpl = sarvamFetch;
     for (const id of [A, B]) await prisma.organization.create({ data: { id, name: id, vertical: 'real_estate' } });
@@ -91,6 +91,9 @@ describe.skipIf(!enabled)('voice agents, knowledge base, telephony (integration)
 
   it('agent builder: draft -> test (real retrieval) -> publish gates -> active -> archive / restore', async () => {
     agentA = await agents.create(actorA, { name: 'Order desk', industry: 'restaurant', instructions: 'Take chicken orders and answer price questions.', greeting: 'Vanakkam!', fallbackMessage: 'Team-kitta check panren.', knowledgeBaseId: baseA.id, outbound: { enabled: true } });
+    // A call agent runs on Sarvam (only provider): publishing requires the Sarvam agent (app) id.
+    await expect(agents.publish(actorA, agentA.id)).rejects.toMatchObject({ response: { problems: expect.arrayContaining([expect.stringMatching(/Sarvam agent \(app\) id/)]) } });
+    await prisma.voiceAgent.update({ where: { id: agentA.id }, data: { sarvamAppId: 'app-test', sarvamAppVersion: 1 } });
     expect(agentA.status).toBe('draft');
     await expect(agents.publish(actorA, agentA.id)).rejects.toMatchObject({ response: { problems: [expect.stringMatching(/Test the agent/)] } });
     const t = await agents.test(actorA, agentA.id, { message: 'broiler price per kg?' });

@@ -12,7 +12,7 @@ COMPANY
 WHAT IT DOES
 - WhatsApp assistant on the business's own WhatsApp Business number: answers in Tamil, English or mixed; voice notes
   are transcribed; prices, stock and slots come from the business's records, never invented.
-- Voice calls through the business's own Plivo number with Sarvam voices: calls leads back, confirms visits, tells
+- Voice calls through Sarvam voice agents (Tamil and English, never Hindi): calls leads back, confirms visits, tells
   customers an order is ready. Respects calling hours and opt-outs.
 - Back-office agents (sales, operations, marketing, finance): draft quotations, reserve stock, prepare campaigns and
   payment reminders. Anything that commits money or reaches many customers waits for a person's approval.
@@ -20,7 +20,7 @@ WHAT IT DOES
 - Team & access: invite people by link with admin, manager, operator or read-only roles; remove access instantly;
   roles are checked by the server on every request.
 - Each organization sees only its own data.
-- Customers connect their OWN WhatsApp, Plivo, Sarvam and OpenAI accounts; keys are encrypted at rest, masked on
+- Customers connect their OWN WhatsApp, Sarvam and OpenAI accounts; keys are encrypted at rest, masked on
   screen and tested before use. Usage and errors are shown per provider.
 - Approvals and audit: discounts, campaigns, invoices and stock corrections go through an approval queue; sign-ins,
   changes and approvals are recorded.
@@ -46,14 +46,14 @@ INDUSTRIES
 PRICING
 - Plans: Pilot (one team, one channel), Growth (daily use: voice calls, back-office agents, campaigns), Enterprise
   (groups and multi-site operators). Prices are quoted when the organization is activated; no list price is
-  published. WhatsApp, Plivo, Sarvam and OpenAI bill the customer directly for usage; no markup.
+  published. WhatsApp, Sarvam and OpenAI bill the customer directly for usage; no markup.
 
 GETTING STARTED
 1. Create the organization at /signup (organization name, your name, business email, password of 12+ characters,
    industry). You become the admin; the dashboard opens at once.
 2. Tacksharp reviews and activates the organization (email verification is not set up yet).
 3. Connect WhatsApp in Settings > Integrations > WhatsApp; test, enable, route the number.
-4. Optional: Plivo calls, Sarvam voices, OpenAI in Settings > Integrations / AI providers.
+4. Optional: Sarvam voice calls, OpenAI in Settings > Integrations / AI providers.
 5. Invite the team in Team & access.
 6. Add customers with consent and go live after testing with your own numbers.
 - Demos: /demo lists the industry demo workspaces (sample data, never messages real people); opening one needs a login
@@ -73,9 +73,9 @@ export const FAQ: Array<{ keys: RegExp; answer: Record<Style, string> }> = [
   {
     keys: /price|pricing|cost|plan|vilai|evlo|எவ்வளவு|விலை|கட்டணம்/i,
     answer: {
-      en: 'We have three plans: Pilot, Growth and Enterprise. Prices are quoted when we activate your organization, and WhatsApp, Plivo, Sarvam and OpenAI bill you directly for usage, with no markup. 💡',
-      ta: 'Pilot, Growth, Enterprise என்று மூன்று plans இருக்கு. உங்க organization activate ஆகும்போது விலை சொல்லுவோம். WhatsApp, Plivo, Sarvam, OpenAI usage-க்கு அவங்களே நேரடியா bill பண்ணுவாங்க. 💡',
-      tanglish: 'Pilot, Growth, Enterprise nu moonu plans irukku. Unga organization activate aagumbodhu price solluvom. WhatsApp, Plivo, Sarvam, OpenAI usage-ku avangale directa bill pannuvanga. 💡',
+      en: 'We have three plans: Pilot, Growth and Enterprise. Prices are quoted when we activate your organization, and WhatsApp, Sarvam and OpenAI bill you directly for usage, with no markup. 💡',
+      ta: 'Pilot, Growth, Enterprise என்று மூன்று plans இருக்கு. உங்க organization activate ஆகும்போது விலை சொல்லுவோம். WhatsApp, Sarvam, OpenAI usage-க்கு அவங்களே நேரடியா bill பண்ணுவாங்க. 💡',
+      tanglish: 'Pilot, Growth, Enterprise nu moonu plans irukku. Unga organization activate aagumbodhu price solluvom. WhatsApp, Sarvam, OpenAI usage-ku avangale directa bill pannuvanga. 💡',
     },
   },
   {
@@ -95,11 +95,11 @@ export const FAQ: Array<{ keys: RegExp; answer: Record<Style, string> }> = [
     },
   },
   {
-    keys: /call|voice|phone|plivo|sarvam|அழைப்பு|கால்/i,
+    keys: /call|voice|phone|sarvam|அழைப்பு|கால்/i,
     answer: {
-      en: 'Voice calls go through your own Plivo number with natural Sarvam voices in Tamil and English 📞 The AI calls leads back, confirms visits and tells customers when an order is ready, within your calling hours.',
-      ta: 'உங்க சொந்த Plivo number மூலமா, Sarvam-ன் இயல்பான தமிழ், English குரல்ல calls போகும் 📞 Leads-க்கு திரும்ப call பண்ணும், visit confirm பண்ணும், order ready ஆனதை சொல்லும், உங்க calling hours-க்குள்ள மட்டும்.',
-      tanglish: 'Unga own Plivo number vazhiya, Sarvam-oda natural Tamil, English voice-la calls pogum 📞 Leads-ku thirumba call pannum, visit confirm pannum, order ready aanadha sollum, unga calling hours-kulla mattum.',
+      en: 'Voice calls run on Sarvam voice agents with natural Tamil and English voices 📞 The AI calls leads back, confirms visits and tells customers when an order is ready, within your calling hours.',
+      ta: 'Sarvam voice agents மூலமா, இயல்பான தமிழ், English குரல்ல calls போகும் 📞 Leads-க்கு திரும்ப call பண்ணும், visit confirm பண்ணும், order ready ஆனதை சொல்லும், உங்க calling hours-க்குள்ள மட்டும்.',
+      tanglish: 'Sarvam voice agents vazhiya, natural Tamil, English voice-la calls pogum 📞 Leads-ku thirumba call pannum, visit confirm pannum, order ready aanadha sollum, unga calling hours-kulla mattum.',
     },
   },
   {

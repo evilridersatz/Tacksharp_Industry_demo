@@ -558,9 +558,8 @@ export class RestaurantController {
       this.offers.activeCampaign(organizationId),
     ]);
     const waMapped = channels.some((c) => c.kind === 'whatsapp_phone_number_id') || (organizationId === config.defaultOrganizationId && Boolean(config.whatsapp.phoneNumberId));
-    const voice = this.ready.voiceStatus();
     const fu = followUpConfig();
-    // Where this deployment's WhatsApp / Plivo numbers are routed: an unmapped number reaches DEFAULT_ORGANIZATION_ID.
+    // Where this deployment's WhatsApp numbers are routed: an unmapped number reaches DEFAULT_ORGANIZATION_ID.
     const routing = (await this.tenancy.mappingReport().catch(() => [])).map((r) => ({
       kind: r.kind,
       configured: r.configured,
@@ -591,12 +590,11 @@ export class RestaurantController {
           webhookUrl: `${config.publicBaseUrl}/webhooks/whatsapp`,
         },
         voice: {
-          connected: voice.ready,
-          missing: voice.missing,
+          provider: 'sarvam',
+          inboundAgent: 'Hosted on Sarvam (configure it with the Sarvam configuration pack on the Voice agents page).',
+          toolsEndpoint: `${config.publicBaseUrl}/telephony/sarvam/tools`,
           callingHours: `${config.voice.callWindowStartHour}:00–${config.voice.callWindowEndHour}:00 IST`,
-          answerUrl: `${config.publicBaseUrl}/voice/ready/answer`,
-          signatureCheck: config.plivo.validateSignature,
-          note: voice.ready ? 'The assistant calls the customer in Tamil when staff mark an order Ready; WhatsApp if unanswered.' : 'Ready calls are off until these are set; the ready message goes on WhatsApp instead.',
+          note: 'Ready notices go on WhatsApp. Automatic ready / feedback calls use the Sarvam agent chosen for automatic calls.',
         },
         website: { keyConfigured: channels.some((c) => c.kind === 'website_api_key'), endpoint: `${config.publicBaseUrl}/public/offers` },
       },

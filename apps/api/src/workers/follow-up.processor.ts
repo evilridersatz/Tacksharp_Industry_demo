@@ -7,7 +7,7 @@ import { LeadsService } from '../leads/leads.service.js';
 import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
 import { DEFAULT_SETTINGS, effectiveCallWindow, type TenantSettings } from '../settings/tenant-settings.js';
 import { istHour } from '../common/time.js';
-import { VoiceService } from '../voice/voice.service.js';
+import { TelephonyService } from '../telephony/telephony.service.js';
 import { WhatsAppPermanentError, WhatsAppSenderService, WhatsAppWindowClosedError } from '../whatsapp/whatsapp-sender.service.js';
 import { describeRequirement, firstName, sequenceMessage } from '../whatsapp/message-templates.js';
 import { teamAlert, visitMessage, visitTimeLabel } from '../automation/automation-messages.js';
@@ -31,7 +31,7 @@ export class FollowUpProcessor {
     private readonly prisma: PrismaService,
     private readonly conversations: ConversationsService,
     private readonly leads: LeadsService,
-    private readonly voice: VoiceService,
+    private readonly telephony: TelephonyService,
     private readonly whatsapp: WhatsAppSenderService,
     @Optional() private readonly followUps?: FollowUpsService,
     @Optional() private readonly collections?: CollectionsService,
@@ -215,19 +215,21 @@ export class FollowUpProcessor {
       }
     }
 
-    const result = await this.voice.startOutboundCall({
+    // Sarvam outbound with the organization's automatic-call agent (Plivo removed). Every gate runs in TelephonyService.
+    const result = await this.telephony.placeSystemCall({
       organizationId: followUp.organizationId,
       customerId: followUp.customerId,
-      leadId: lead.id,
-      followUpId: followUp.id,
+      purpose: 'lead_followup',
+      idempotencyKey: followUp.id,
+      variables: { lead_id: lead.id },
     });
 
     if (result.started) {
       await this.complete(followUp.id);
-      return { callId: result.callId };
+      return { requestId: result.requestId, dryRun: result.dryRun };
     }
 
-    if (result.reason === 'outside_call_window' || result.reason === 'call_already_in_progress') {
+    if (result.reason === 'outside_calling_hours' || result.reason === 'call_already_in_progress' || result.reason === 'concurrency_limit') {
       const at = result.retryAt ?? new Date(Date.now() + 15 * 60_000);
       await this.reschedule(followUp.id, at, result.reason);
       return { rescheduled: at.toISOString(), reason: result.reason };

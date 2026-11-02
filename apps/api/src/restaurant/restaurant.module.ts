@@ -9,16 +9,16 @@ import { OrderingEngine } from './ordering-engine.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
 import { RestaurantController } from './restaurant.controller.js';
 import { PublicOffersController } from './public-offers.controller.js';
-import { ReadyCallController } from './ready-call.controller.js';
+import { TelephonyModule } from '../telephony/telephony.module.js';
 import { FeedbackService } from './feedback.service.js';
 import { OrderFollowUpService } from './order-followup.service.js';
 import { InventoryService } from './inventory.service.js';
 import { StockAlertService } from './stock-alerts.service.js';
 
-/** Restaurant vertical (GR Chicken): products, shops, ₹50 WhatsApp offer, pickup orders, ready calls, dashboard API. */
+/** Restaurant vertical (GR Chicken): products, shops, ₹50 WhatsApp offer, pickup orders, ready notices, dashboard API. */
 @Module({
-  imports: [ConversationsModule],
-  controllers: [RestaurantController, PublicOffersController, ReadyCallController],
+  imports: [ConversationsModule, TelephonyModule],
+  controllers: [RestaurantController, PublicOffersController],
   providers: [CatalogService, InventoryService, StockAlertService, OrdersService, OffersService, OrderSessionStore, OrderingEngine, ReadyNoticeService, FeedbackService, OrderFollowUpService, LlmRunner],
   exports: [OrderingEngine, CatalogService, InventoryService, StockAlertService, OrdersService, OffersService, ReadyNoticeService, FeedbackService, OrderFollowUpService],
 })

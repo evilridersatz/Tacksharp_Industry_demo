@@ -1,5 +1,7 @@
 # Tacksharp launch runbook
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 This release adds secure per-workspace sharing and the shared-number demo sessions, and patches Next.js. The steps
 below were **not** run from the build workspace, which has no access to the AWS host. The repository has no CI
 workflow; deployment is the manual PM2 release-directory procedure.

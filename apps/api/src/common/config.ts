@@ -136,18 +136,6 @@ export const config = {
     pageId: process.env.META_PAGE_ID ?? '',
   },
 
-  plivo: {
-    authId: process.env.PLIVO_AUTH_ID ?? '',
-    authToken: process.env.PLIVO_AUTH_TOKEN ?? '',
-    fromNumber: process.env.PLIVO_FROM_NUMBER ?? '',
-    ringTimeoutSec: num('PLIVO_RING_TIMEOUT', 30),
-    maxCallSec: num('PLIVO_MAX_CALL_SECONDS', 600),
-    /** Seconds of silence that ends the customer's turn. 2 is snappier, 3 is safer for slow speakers. */
-    silenceTimeoutSec: num('VOICE_SILENCE_TIMEOUT', 2),
-    maxTurnSec: num('VOICE_MAX_TURN_SECONDS', 25),
-    validateSignature: process.env.PLIVO_VALIDATE_SIGNATURE === 'true',
-  },
-
   sarvam: {
     apiKey: process.env.SARVAM_API_KEY ?? '',
     sttModel: process.env.SARVAM_STT_MODEL ?? 'saaras:v3',
@@ -221,7 +209,6 @@ export function productionProblems(env: NodeJS.ProcessEnv = process.env): string
 
   if (!env.AUTH_SECRET || env.AUTH_SECRET.length < 32) problems.push('AUTH_SECRET must be set to a random string of 32+ characters');
   if (!env.META_APP_SECRET) problems.push('META_APP_SECRET must be set (Meta webhook signature check)');
-  if (env.PLIVO_VALIDATE_SIGNATURE !== 'true') problems.push('PLIVO_VALIDATE_SIGNATURE must be true');
   const base = env.PUBLIC_BASE_URL ?? '';
   if (!base.startsWith('https://')) problems.push('PUBLIC_BASE_URL must be your https:// domain');
   if (base.includes('ngrok')) problems.push('PUBLIC_BASE_URL must be your own domain, not ngrok');
@@ -229,7 +216,7 @@ export function productionProblems(env: NodeJS.ProcessEnv = process.env): string
   if (!env.DB_PASSWORD || env.DB_PASSWORD === 'password') problems.push('DB_PASSWORD must be a real password');
 
   // Providers the product cannot work without. Names only - values are never printed.
-  const keys = missing('OPENAI_API_KEY', 'SARVAM_API_KEY', 'PLIVO_AUTH_ID', 'PLIVO_AUTH_TOKEN', 'PLIVO_FROM_NUMBER', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VERIFY_TOKEN');
+  const keys = missing('OPENAI_API_KEY', 'SARVAM_API_KEY', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VERIFY_TOKEN');
   if (keys.length) problems.push(`Missing required settings: ${keys.join(', ')}`);
 
   // Test-only knobs must not be active against real customers.
@@ -242,6 +229,9 @@ export function productionProblems(env: NodeJS.ProcessEnv = process.env): string
 export function productionWarnings(env: NodeJS.ProcessEnv = process.env): string[] {
   if (env.NODE_ENV !== 'production') return [];
   const warnings: string[] = [];
+  // Sarvam telephony: webhook and voice-tool URLs are HMAC-signed with this secret; without it calls cannot be recorded.
+  if (!env.TELEPHONY_WEBHOOK_SECRET || env.TELEPHONY_WEBHOOK_SECRET.length < 32) warnings.push('TELEPHONY_WEBHOOK_SECRET is missing or shorter than 32 characters: Sarvam call webhooks and voice-agent tools are refused');
+  if (env.PLIVO_AUTH_ID || env.PLIVO_AUTH_TOKEN || env.PLIVO_FROM_NUMBER) warnings.push('PLIVO_* settings are present but Plivo was removed: they are ignored and can be deleted from the environment');
   if (!env.WHATSAPP_TEMPLATE_NAME && !env.WHATSAPP_TEMPLATE_FIRST_CONTACT) warnings.push('No approved WhatsApp template is configured: first contact with a new lead (outside the 24h window) cannot be sent');
   if ((env.VOICE_AUDIO_DIR ?? '/tmp/tacksharp-voice').startsWith('/tmp')) warnings.push('VOICE_AUDIO_DIR is under /tmp; use a persistent directory so cached prompt audio survives reboots');
   if (!env.META_PAGE_ID) warnings.push('META_PAGE_ID is not set: lead-ad webhooks are accepted from any page while no page mapping exists (single-tenant mode)');
@@ -258,9 +248,6 @@ export function productionWarnings(env: NodeJS.ProcessEnv = process.env): string
  */
 export function configWarnings(env: NodeJS.ProcessEnv = process.env): string[] {
   const warnings: string[] = [];
-  if (env.PLIVO_AUTH_ID && env.PLIVO_AUTH_TOKEN && env.PLIVO_VALIDATE_SIGNATURE !== 'true') {
-    warnings.push('PLIVO_VALIDATE_SIGNATURE is not true: Plivo callbacks (/voice/*) are accepted without a signature check. Set it to true once PUBLIC_BASE_URL is the HTTPS URL Plivo calls.');
-  }
   if (env.WHATSAPP_ACCESS_TOKEN && !env.META_APP_SECRET) {
     warnings.push('META_APP_SECRET is not set: WhatsApp webhook signatures (x-hub-signature-256) are not verified.');
   }

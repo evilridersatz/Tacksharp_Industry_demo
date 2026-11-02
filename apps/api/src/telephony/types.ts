@@ -7,7 +7,7 @@
  *    Inbound calls are answered by a Sarvam inbound deployment configured in Sarvam's console; we receive the
  *    post-call webhook. Sarvam does not document webhook signing, so our webhook URLs carry an HMAC token.
  */
-export type ProviderId = 'plivo' | 'sarvam';
+export type ProviderId = 'sarvam';
 
 export type Capabilities = {
   provider: ProviderId;

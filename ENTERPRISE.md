@@ -1,5 +1,7 @@
 # Enterprise SaaS platform: audit, what was built, what remains
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 **Branch:** `enterprise-saas-20261029`. It is based on the verified release `531e3d4` (`security-deps-20261028`).
 
 **Not deployed.** The build workspace has no SSH key, no AWS credentials and no network route to the Tacksharp

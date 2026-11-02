@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classify, findOrderNumber, findPhone, formatQty, parseItems, parsePayment, parsePickup, type Product } from './chicken-parse.js';
 import { filterUnverifiedPrices } from './ordering-engine.service.js';
-import { readCallReply } from './ready-notice.service.js';
 import { isOpen, newOrderNumber, TRANSITIONS } from './orders.service.js';
 
 const P: Product[] = [
@@ -147,13 +146,6 @@ describe('helpers', () => {
     expect(TRANSITIONS.ready).toContain('completed');
   });
 
-  it('reads the reply on the order-ready call', () => {
-    expect(readCallReply('சரி, பத்து நிமிஷத்துல வரேன்')).toBe('coming');
-    expect(readCallReply('ok sari varen')).toBe('coming');
-    expect(readCallReply('நாளைக்கு வரேன்')).toBe('later');
-    expect(readCallReply('venam cancel pannunga')).toBe('cancel');
-    expect(readCallReply('')).toBe('unclear');
-  });
 
   it('drops model sentences with prices that are not in the catalogue', () => {
     const prices = new Set([220, 50]);

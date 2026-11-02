@@ -81,14 +81,10 @@ describe('production start-up check', () => {
     NODE_ENV: 'production',
     AUTH_SECRET: 'x'.repeat(40),
     META_APP_SECRET: 'm',
-    PLIVO_VALIDATE_SIGNATURE: 'true',
     PUBLIC_BASE_URL: 'https://app.tacksharp.ai/api',
     DB_PASSWORD: 'strong-db-password',
     OPENAI_API_KEY: 'k',
     SARVAM_API_KEY: 'k',
-    PLIVO_AUTH_ID: 'k',
-    PLIVO_AUTH_TOKEN: 'k',
-    PLIVO_FROM_NUMBER: '914400000000',
     WHATSAPP_ACCESS_TOKEN: 'k',
     WHATSAPP_PHONE_NUMBER_ID: '1',
     WHATSAPP_VERIFY_TOKEN: 'k',
@@ -100,13 +96,14 @@ describe('production start-up check', () => {
   it('refuses unsafe settings', () => {
     expect(productionProblems({ ...good, AUTH_SECRET: 'short' })).toHaveLength(1);
     expect(productionProblems({ ...good, META_APP_SECRET: '' })).toHaveLength(1);
-    expect(productionProblems({ ...good, PLIVO_VALIDATE_SIGNATURE: 'false' })).toHaveLength(1);
     expect(productionProblems({ ...good, PUBLIC_BASE_URL: 'https://abc.ngrok-free.app' })).toHaveLength(1);
     expect(productionProblems({ ...good, DB_PASSWORD: 'password' })).toHaveLength(1);
   });
   it('also refuses a missing provider key, a local base URL and accelerated follow-ups', () => {
     expect(productionProblems({ ...good, OPENAI_API_KEY: '' })[0]).toContain('OPENAI_API_KEY');
-    expect(productionProblems({ ...good, PLIVO_FROM_NUMBER: undefined })[0]).toContain('PLIVO_FROM_NUMBER');
+    expect(productionProblems({ ...good, WHATSAPP_ACCESS_TOKEN: undefined })[0]).toContain('WHATSAPP_ACCESS_TOKEN');
+    // Plivo was removed: its settings are no longer required (only warned about when still present).
+    expect(productionProblems({ ...good, PLIVO_AUTH_ID: undefined })).toEqual([]);
     expect(productionProblems({ ...good, PUBLIC_BASE_URL: 'https://localhost:3000' })).toHaveLength(1);
     expect(productionProblems({ ...good, PUBLIC_BASE_URL: 'https://192.168.1.5' })).toHaveLength(1);
     expect(productionProblems({ ...good, FOLLOWUP_TIME_SCALE: '0.01' })).toHaveLength(1);

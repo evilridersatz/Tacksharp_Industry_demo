@@ -24,6 +24,13 @@ export class TelephonyController {
     return this.svc.setDefaultProvider({ sub: u.sub, org: u.org }, body?.provider);
   }
 
+  /** The Sarvam agent used for automatic calls (feedback, follow-ups, "test call"); null = choose automatically. */
+  @Put('system-agent')
+  setSystemAgent(@CurrentUser() u: SessionClaims, @Body() body: { agentId?: unknown }) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.setSystemAgent({ sub: u.sub, org: u.org }, body?.agentId ?? null);
+  }
+
   /** Launch checklist for one agent (plain English, from real configuration). */
   @Get('agents/:id/readiness')
   readiness(@Org() org: string, @CurrentUser() u: SessionClaims, @Param('id') id: string) {

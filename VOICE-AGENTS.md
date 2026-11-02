@@ -1,5 +1,7 @@
 # Voice agents, knowledge bases and telephony (Sarvam + Plivo)
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 This covers the Agent Builder, knowledge bases, the ten voice agent demos, telephony provider routing (Sarvam Voice
 Agents and Plivo), and Tara's continuous voice and video conversation. Everything here runs with `DRY_RUN=true` until an
 operator switches it off (see GO-LIVE.md).

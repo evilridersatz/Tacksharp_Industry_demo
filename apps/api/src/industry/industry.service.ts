@@ -91,7 +91,7 @@ export class IndustryService {
     const set = (...v: string[]) => v.every((x) => Boolean(x));
     return {
       whatsapp: set(config.whatsapp.accessToken, config.whatsapp.phoneNumberId),
-      voice: set(config.plivo.authId, config.plivo.authToken, config.plivo.fromNumber),
+      voice: set(process.env.SARVAM_AGENTS_API_KEY ?? '', process.env.SARVAM_AGENTS_ORG_ID ?? '', process.env.SARVAM_AGENTS_WORKSPACE_ID ?? '', process.env.SARVAM_AGENTS_CONNECTION_ID ?? ''),
       ai: Boolean(process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL),
       dryRun: process.env.DRY_RUN !== 'false',
     };
@@ -375,7 +375,7 @@ export class IndustryService {
       if (ws.isDemo) return { status: 'demo', note: 'Demo workspace: test it in the playground; nothing is sent.' };
       const needVoice = a.channels.length === 1 && a.channels[0] === 'voice';
       const ok = needVoice ? ws.integrations.voice : ws.integrations.whatsapp || ws.integrations.voice;
-      if (!ok) return { status: 'needs_setup', note: needVoice ? 'Voice (Plivo) is not configured.' : 'WhatsApp is not configured.' };
+      if (!ok) return { status: 'needs_setup', note: needVoice ? 'Voice (Sarvam) is not configured.' : 'WhatsApp is not configured.' };
       return { status: 'active', note: ws.integrations.dryRun ? 'Configured. DRY_RUN is on: replies are not sent to customers.' : 'Live.' };
     }
     return ws.isDemo ? { status: 'demo', note: 'Demo workspace: sample records.' } : { status: 'active', note: rt.type === 'workflow' ? rt.note : 'Reporting view from your records.' };

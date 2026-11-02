@@ -7,7 +7,7 @@ const STEPS: Array<{ t: string; d: React.ReactNode }> = [
   { t: 'Create your organization', d: <>Sign up at <Link href="/signup" className="font-semibold underline">Create an account</Link> with your organization name, your name, business email, a password of at least 12 characters and your industry. You become the organization admin. The dashboard opens immediately.</> },
   { t: 'Wait for activation', d: 'Tacksharp reviews new organizations (this replaces email verification, which is not set up yet). Until then you can configure everything; test calls and messages to customers stay off.' },
   { t: 'Connect WhatsApp', d: <>In <b>Settings → Integrations → WhatsApp</b>, enter your system-user access token, phone number ID and WhatsApp Business Account ID. Press <b>Test connection</b>: Tacksharp asks Meta for the number and your templates. Enable the integration, then <b>Route this number here</b> so incoming messages reach your organization. Set the callback URL shown on that page in your Meta app.</> },
-  { t: 'Connect calls (optional)', d: <>In <b>Settings → Integrations → Plivo</b>, enter your Auth ID, Auth Token and a caller ID that belongs to your Plivo account. Test, enable, then route your inbound numbers: each is verified against your Plivo account first. A test call can be placed only to an approved test number once the server is out of dry-run mode.</> },
+  { t: 'Connect calls (optional)', d: <>In <b>Settings → Integrations → Sarvam Voice Agents</b>, enter your Voice Agents API key, org, workspace, connection and agent phone number. Then open <b>Voice agents → Sarvam phone agent setup</b> and copy the languages (Tamil and English only), instructions and live menu tools into your Sarvam agent. A test call can be placed only to an approved test number once the server is out of dry-run mode.</> },
   { t: 'Connect AI providers (optional)', d: <>In <b>Settings → AI providers</b>, add your Sarvam key (choose the speech models, language and voice, then generate and recognise a test sample) and your OpenAI key (choose a supported model; the test checks the model is available to your key and reports token usage).</> },
   { t: 'Invite your team', d: <>In <b>Setup → Team & access</b>, create an invitation link with a role: admin, manager, operator, a department role or read-only viewer. Send the link privately; it works once and expires. Removing someone ends their sessions at once.</> },
   { t: 'Add your data and go live', d: 'Add or import customers with their consent, set your products, menu or properties, and review automation in Settings. Turn on live sending only after testing with your own numbers.' },
@@ -21,7 +21,7 @@ const ENDPOINTS: Array<[string, string, string]> = [
   ['GET · PUT · DELETE', '/integrations/:provider', 'Read status, save configuration (secrets encrypted), delete it.'],
   ['POST', '/integrations/:provider/test/:op', 'Run a real provider test: connection, tts, stt or call.'],
   ['POST', '/integrations/:provider/enable', 'Enable or disable; enabling needs a passed test.'],
-  ['POST · DELETE', '/integrations/plivo/numbers', 'Route a verified Plivo number to your organization, or remove it.'],
+  ['GET', '/telephony/sarvam/tools/config', 'Sarvam phone agent setup: languages, instructions, tools (admins can reveal the tool key).'],
   ['POST', '/integrations/whatsapp/route', 'Route your verified WhatsApp number to your organization.'],
   ['GET', '/team · POST /team/invitations', 'People with access, invitation links.'],
 ];

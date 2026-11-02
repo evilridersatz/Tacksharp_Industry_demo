@@ -11,10 +11,7 @@ const enabled = Boolean(process.env.TEST_DB_NAME);
 if (enabled) {
   process.env.DB_NAME = process.env.TEST_DB_NAME;
   process.env.DB_HOST ??= '127.0.0.1';
-  process.env.PLIVO_AUTH_ID = 'test';
-  process.env.PLIVO_AUTH_TOKEN = 'test';
-  process.env.PLIVO_FROM_NUMBER = '914400000000';
-  process.env.PUBLIC_BASE_URL = 'https://example.test';
+    process.env.PUBLIC_BASE_URL = 'https://example.test';
   process.env.VOICE_CALL_WINDOW_START = '0';
   process.env.VOICE_CALL_WINDOW_END = '24';
   // These tests drive the real-provider code paths against fakes (sender / dialer are stubs).
@@ -79,15 +76,13 @@ describe.skipIf(!enabled)('GR Chicken offer + pickup orders (integration)', () =
     store.useRedis(null);
     const llmFake = { run: vi.fn(async () => ({ text: '', failed: true, aborted: false, usage: {} })) };
     sarvam = { enabled: true, textToSpeechUrl: vi.fn(async () => 'https://example.test/voice/audio/x.wav'), speechToText: vi.fn(async () => ({ transcript: '' })) };
-    ready = new ReadyNoticeService(prisma, orders, conversations, sarvam, sender);
+    ready = new ReadyNoticeService(prisma, orders, conversations, sender);
     const { FeedbackService } = await import('../src/restaurant/feedback.service.js');
     const { OrderFollowUpService } = await import('../src/restaurant/order-followup.service.js');
     const feedback = new FeedbackService(prisma);
     const followUps = new OrderFollowUpService(prisma, conversations, sender as any, ready, sarvam as any, feedback);
     followUps.queue = { add: vi.fn(async () => undefined) };
     engine = new OrderingEngine(prisma, conversations, catalog, orders, offers, feedback, followUps, store, llmFake as any);
-    ready.dialer = vi.fn(async () => ({ requestUuid: 'req-1' }));
-    ready.fetchRecording = vi.fn(async () => Buffer.alloc(100));
     publicOffers = new PublicOffersController(prisma, offers);
     await seedOrg(ORG);
     await seedOrg(ORG_B);
@@ -274,73 +269,44 @@ describe.skipIf(!enabled)('GR Chicken offer + pickup orders (integration)', () =
     expect(ok).toMatchObject({ ok: true, subtotal: 330, total: 330 });
   });
 
-  it('staff mark Ready → Tamil call → customer says they are coming → noted on the order', async () => {
-    const say = wa(phone());
+  it('staff mark Ready → ready message on WhatsApp (no Plivo call); outside 24 h without template → staff told to call', async () => {
+    const p = phone();
+    const say = wa(p);
     await say('Hi');
     await say(`rendu kilo broiler curry cut, cash la tharen, ${hhmm(later(3))} manikku varen`);
     const { order: placed } = await say('sari');
     expect((await orders.getOrder(ORG, placed.id)).language).toBe('tanglish');
+    await prisma.customer.updateMany({ where: { organizationId: ORG, phone: `91${p}` }, data: { lastInboundAt: new Date() } });
     const staff = { sub: 'staff-1', role: 'admin' };
     for (const s of ['confirmed', 'preparing']) await orders.updateStatus(ORG, placed.id, { status: s }, staff);
     const { changedTo } = await orders.updateStatus(ORG, placed.id, { status: 'ready' }, staff);
     expect(changedTo).toBe('ready');
+    sender.sendText.mockClear();
     await ready.notify(ORG, placed.id);
-    expect(ready.dialer).toHaveBeenCalledWith('914400000000', expect.any(String), expect.stringContaining('/voice/ready/answer?callId='), expect.stringContaining('/voice/ready/hangup?callId='));
     let order = await orders.getOrder(ORG, placed.id);
-    expect(order.readyNotice).toBe('calling');
+    expect(order.readyNotice).toBe('whatsapp_sent');
+    expect(order.readyCallId).toBeNull();
+    expect(sender.sendText).toHaveBeenCalledWith(`91${p}`, expect.stringContaining(placed.orderNumber));
+    expect(await prisma.call.count({ where: { organizationId: ORG, customerId: order.customerId } })).toBe(0);
+    // Idempotent: a second notify does nothing.
+    await ready.notify(ORG, placed.id);
+    expect(sender.sendText).toHaveBeenCalledTimes(1);
 
-    const xml = await ready.answer(order.readyCallId, { CallUUID: 'cu-1' });
-    expect(xml).toContain('<Play>https://example.test/voice/audio/x.wav</Play>');
-    expect(xml).toContain('/voice/ready/turn?callId=');
-    const spoken = sarvam.textToSpeechUrl.mock.calls.at(-1)[0];
-    expect(spoken).toContain('நீங்க சொன்ன மாதிரி 2 கிலோ Broiler Chicken Curry cut எல்லாம் ready-ஆ இருக்கு');
-
-    sarvam.speechToText.mockResolvedValueOnce({ transcript: 'சரி, பத்து நிமிஷத்துல வரேன்' });
-    const turn = await ready.turn(order.readyCallId, { RecordUrl: 'https://plivo.test/rec.wav' });
-    expect(turn).toContain('<Hangup/>');
-    await ready.hangup(order.readyCallId, { Duration: '24', HangupCause: 'NORMAL_HANGUP' });
-    order = await orders.getOrder(ORG, placed.id);
-    expect(order.readyNotice).toBe('answered');
-    expect(order.readyNoticeNote).toContain('பத்து நிமிஷத்துல வரேன்');
-    expect(order.readyNoticeNote).toContain('(coming)');
-    const call = await prisma.call.findUnique({ where: { id: order.readyCallId } });
-    expect(call).toMatchObject({ status: 'completed', durationSec: 24 });
-    // The call is readable in the inbox.
-    const voiceConv = await prisma.conversation.findFirst({ where: { organizationId: ORG, channel: 'voice', customerId: order.customerId }, include: { Message: true } });
-    expect(voiceConv.Message.map((m: any) => m.role)).toEqual(['assistant', 'user', 'assistant']);
-
-    // Customer collects.
+    // 24 h window closed and no approved template: nothing is sent, staff are asked to call (recorded on the order).
+    await prisma.customer.updateMany({ where: { organizationId: ORG, phone: `91${p}` }, data: { lastInboundAt: new Date(Date.now() - 3 * 86_400_000) } });
+    const { config } = await import('../src/common/config.js');
+    const tpl = config.whatsapp.stepTemplates.order_ready;
+    config.whatsapp.stepTemplates.order_ready = '';
+    try {
+      await ready.notify(ORG, placed.id, { force: true });
+      order = await orders.getOrder(ORG, placed.id);
+      expect(order.readyNotice).toBe('not_sent');
+      expect(order.readyNoticeNote).toContain('Please call the customer');
+    } finally {
+      config.whatsapp.stepTemplates.order_ready = tpl;
+    }
     const done = await orders.updateStatus(ORG, placed.id, { status: 'completed' }, staff);
     expect(done.order.status).toBe('completed');
-  });
-
-  it('unanswered ready call → WhatsApp ready message; no calling setup → straight to WhatsApp', async () => {
-    const p = phone();
-    const say = wa(p);
-    await say('Hi');
-    await say(`1 kg boneless, upi, ${hhmm(later(2))}`);
-    const { order: placed } = await say('sari');
-    // The WhatsApp webhook records the customer's last message (24h window); the engine is called after it.
-    await prisma.customer.updateMany({ where: { organizationId: ORG, phone: `91${p}` }, data: { lastInboundAt: new Date() } });
-    const staff = { sub: 's', role: 'admin' };
-    await orders.updateStatus(ORG, placed.id, { status: 'confirmed' }, staff);
-    await orders.updateStatus(ORG, placed.id, { status: 'ready' }, staff);
-    await ready.notify(ORG, placed.id);
-    let order = await orders.getOrder(ORG, placed.id);
-    await ready.hangup(order.readyCallId, { HangupCause: 'NO_ANSWER' });
-    order = await orders.getOrder(ORG, placed.id);
-    expect(order.readyNotice).toBe('whatsapp_sent');
-    expect(sender.sendText).toHaveBeenCalledWith(`91${p}`, expect.stringContaining(placed.orderNumber));
-    expect((await prisma.call.findUnique({ where: { id: order.readyCallId } })).status).toBe('no_answer');
-
-    // Calling not configured (e.g. Sarvam key missing): WhatsApp at once, reason recorded.
-    sarvam.enabled = false;
-    sender.sendText.mockClear();
-    await ready.notify(ORG, placed.id, { force: true });
-    order = await orders.getOrder(ORG, placed.id);
-    expect(order.readyNoticeNote).toContain('SARVAM_API_KEY');
-    expect(sender.sendText).toHaveBeenCalledTimes(1);
-    sarvam.enabled = true;
   });
 
   it('cancelling an order gives the offer back; viewers cannot change orders; tenants are isolated', async () => {

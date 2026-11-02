@@ -1,5 +1,7 @@
 # One WhatsApp number and one Plivo number for all ten industry demos
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 ## How it works
 
 The platform already runs every industry as its own workspace (organization) with its own dashboard, AI agent,

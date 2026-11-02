@@ -1,5 +1,7 @@
 # Integrations, signup and platform administration: reference
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 All endpoints need a session cookie (or `Authorization: Bearer`) unless marked **public**. The organization always
 comes from the session (or, for webhooks, from the provider's identifiers), **never** from a request body or query.
 

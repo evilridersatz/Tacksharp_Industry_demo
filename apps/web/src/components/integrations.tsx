@@ -9,7 +9,7 @@ import { Badge, Button, Card, CardHeader, ErrorBanner, Skeleton, cx } from './ui
 import { Dialog, inputCls } from './textile';
 import { toast } from './toast';
 
-export type ProviderId = 'plivo' | 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony';
+export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony';
 type Field = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: string[] };
 type Usage = {
   days: number; total: number; failed: number; costEstimate: number | null; costNote: string;
@@ -20,7 +20,7 @@ type Usage = {
 type Deployment = {
   publicBaseUrl: string;
   vault: { ready: boolean; problem: string | null; keyVersion: string | null };
-  plivo: { answerUrl: string; inboundUrl: string; hangupUrl: string; signatureValidation: boolean };
+  sarvamVoice?: { toolsUrl: string; webhookUrl: string; secretSet: boolean };
   whatsapp: { webhookUrl: string; verifyTokenSet: boolean; appSecretSet: boolean };
   mode: { dryRun: boolean; liveTestRecipients: number };
 };
@@ -37,7 +37,6 @@ export type Integration = {
 type TestResult = { ok: boolean; latencyMs: number; errorCode?: string; message: string; details?: Record<string, unknown>; audioBase64?: string; transcript?: string; templates?: Array<{ name: string; status: string; language: string; category: string }>; inputTokens?: number; outputTokens?: number; costEstimate: number | null };
 
 export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrations' | 'AI providers'; href: string; blurb: string }> = {
-  plivo: { name: 'Plivo voice', group: 'Integrations', href: '/settings/integrations/plivo', blurb: 'Outbound and inbound phone calls, caller ID and number routing.' },
   whatsapp: { name: 'WhatsApp Cloud API', group: 'Integrations', href: '/settings/integrations/whatsapp', blurb: 'Your WhatsApp Business number, templates and delivery receipts.' },
   sarvam: { name: 'Sarvam AI', group: 'AI providers', href: '/settings/ai-providers/sarvam', blurb: 'Speech recognition and Tamil / English voices for calls.' },
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
@@ -237,7 +236,6 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
           </form>
         </Card>
 
-        {provider === 'plivo' && <PlivoExtras data={data} canManage={canManage} reload={reload} />}
         {provider === 'whatsapp' && <WhatsAppExtras data={data} canManage={canManage} reload={reload} />}
       </div>
 
@@ -268,7 +266,6 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
           </div>
         </Card>
 
-        {provider === 'plivo' && <TestCall data={data} canManage={canManage} busy={busy} test={test} />}
         {provider === 'sarvam_telephony' && <SarvamTestCall data={data} canManage={canManage} busy={busy} test={test} />}
         <UsageCard usage={data.usage} />
       </div>
@@ -318,65 +315,6 @@ function SarvamTests({ canManage, busy, test }: { canManage: boolean; busy: stri
   );
 }
 
-function PlivoExtras({ data, canManage, reload }: { data: Integration; canManage: boolean; reload: () => Promise<void> }) {
-  const [num, setNum] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
-  const run = async (key: string, fn: () => Promise<unknown>, ok: string) => {
-    setBusy(key);
-    try { await fn(); await reload(); toast(ok); setNum(''); } catch (e) { toast(errText(e), 'error'); } finally { setBusy(null); }
-  };
-  return (
-    <>
-      <Card>
-        <CardHeader title="Webhooks" subtitle="Set these in your Plivo application so calls reach this platform." />
-        <div className="grid gap-3 px-5 pb-5">
-          <CopyLine label="Answer URL (inbound calls)" value={data.deployment.plivo.inboundUrl} />
-          <CopyLine label="Hangup URL" value={data.deployment.plivo.hangupUrl} />
-          <Row k="Signature validation">{data.deployment.plivo.signatureValidation ? 'On for every Plivo callback' : <span className="text-amber-800">Off on this server for the shared account; always on for organizations with their own account</span>}</Row>
-        </div>
-      </Card>
-      <Card>
-        <CardHeader title="Inbound number routing" subtitle="Calls to these numbers reach this organization. A number is added only after Plivo confirms it is on your own account." />
-        <div className="grid gap-3 px-5 pb-5">
-          {(data.numbers ?? []).length === 0 ? <p className="text-[12.5px] text-muted">No numbers routed to this organization yet.</p> : (
-            <ul className="grid gap-1.5">
-              {data.numbers!.map((n) => (
-                <li key={n.externalId} className="flex items-center gap-2 text-[13px]"><Phone className="size-4 text-muted" /><span className="font-mono">+{n.externalId}</span>
-                  <Button className="ml-auto" variant="ghost" disabled={!canManage} busy={busy === n.externalId} onClick={() => void run(n.externalId, () => api.delete(`/integrations/plivo/numbers/${n.externalId}`), 'Number removed from this organization.')}>Remove</Button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); void run('map', () => api.post('/integrations/plivo/numbers', { number: num }), 'Number verified on your Plivo account and routed here.'); }}>
-            <label htmlFor="map-num" className="sr-only">Number to route</label>
-            <input id="map-num" className={cx(inputCls, 'min-w-0 flex-1')} placeholder="e.g. 914412345678" value={num} onChange={(e) => setNum(e.target.value)} disabled={!canManage || data.effective.source !== 'organization'} />
-            <Button type="submit" busy={busy === 'map'} disabled={!canManage || !num.trim() || data.effective.source !== 'organization'}>Verify and route</Button>
-          </form>
-          {data.effective.source !== 'organization' && <p className="text-[12px] text-muted">Available once your own Plivo credentials are tested and enabled.</p>}
-        </div>
-      </Card>
-    </>
-  );
-}
-
-function TestCall({ data, canManage, busy, test }: { data: Integration; canManage: boolean; busy: string | null; test: (op: string, body?: Record<string, unknown>) => Promise<void> }) {
-  const [to, setTo] = useState('');
-  const [confirm, setConfirm] = useState(false);
-  const blocked = data.deployment.mode.dryRun ? 'This server is in dry-run mode: no real call can be placed.' : data.status !== 'ok' ? 'Pass a connection test first.' : null;
-  return (
-    <Card>
-      <CardHeader title="Test outbound call" subtitle="Places one REAL call from your caller ID (charged by Plivo). Only to numbers on the approved test list." />
-      <form className="grid gap-2 px-5 pb-5" onSubmit={(e) => { e.preventDefault(); void test('call', { to, confirm }); }}>
-        <label htmlFor="call-to" className="text-[12.5px] font-semibold text-body">Approved test number</label>
-        <input id="call-to" className={inputCls} placeholder="e.g. 919800011122" value={to} onChange={(e) => setTo(e.target.value)} disabled={!canManage || Boolean(blocked)} />
-        <label className="flex items-start gap-2 text-[12.5px] text-body"><input type="checkbox" className="mt-0.5" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} disabled={!canManage || Boolean(blocked)} /> I understand a real phone call will be placed.</label>
-        <Button type="submit" busy={busy === 'test-call'} disabled={!canManage || Boolean(blocked) || !to.trim() || !confirm}><Phone className="size-4" /> Place test call</Button>
-        {blocked && <p className="text-[12px] text-amber-800">{blocked}</p>}
-        <p className="text-[12px] text-muted">Whether the call rang and was answered appears in Usage below once Plivo reports the hangup.</p>
-      </form>
-    </Card>
-  );
-}
 
 function SarvamTestCall({ data, canManage, busy, test }: { data: Integration; canManage: boolean; busy: string | null; test: (op: string, body?: Record<string, unknown>) => Promise<void> }) {
   const [to, setTo] = useState('');

@@ -87,7 +87,7 @@ export default function Welcome() {
             </div>
             <ul className="mt-8 grid max-w-lg gap-2 text-[14px] text-[#16183d]/75">
               <li className="flex items-start gap-2"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#0f9f6e]" aria-hidden />Each organization sees only its own data, checked on the server for every request.</li>
-              <li className="flex items-start gap-2"><Lock className="mt-0.5 size-4 shrink-0 text-[#0f9f6e]" aria-hidden />Your WhatsApp, Plivo, Sarvam and OpenAI keys are encrypted and never shown again.</li>
+              <li className="flex items-start gap-2"><Lock className="mt-0.5 size-4 shrink-0 text-[#0f9f6e]" aria-hidden />Your WhatsApp, Sarvam and OpenAI keys are encrypted and never shown again.</li>
             </ul>
           </div>
 
@@ -192,7 +192,7 @@ export default function Welcome() {
           <ul className="grid gap-4 text-[14.5px]">
             {[
               ['Roles that hold on the server', 'Admin, manager, operator and read-only access are enforced by the API, not by hidden buttons.'],
-              ['Your accounts, your bills', 'Bring your own WhatsApp, Plivo, Sarvam and OpenAI accounts. Keys are encrypted at rest and masked on screen.'],
+              ['Your accounts, your bills', 'Bring your own WhatsApp, Sarvam and OpenAI accounts. Keys are encrypted at rest and masked on screen.'],
               ['Delivery you can trust', 'A message counts as delivered only when WhatsApp says so, never because a request was accepted.'],
               ['A full audit trail', 'Sign-ins, role changes, approvals and integration changes are recorded with who and when.'],
             ].map(([t, d]) => (

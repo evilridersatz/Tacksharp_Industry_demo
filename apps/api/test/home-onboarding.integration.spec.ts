@@ -42,7 +42,7 @@ describe.skipIf(!enabled)('home and onboarding (integration)', () => {
     home = new HomeService(prisma, settings, creds);
     settingsCtl = new SettingsController(settings, prisma, new TenancyService(prisma));
     catalog = new CatalogService(prisma);
-    tel = new TelephonyService(prisma, {} as any, { settingsFor: async () => ({ calling: { windowStartHour: 9, windowEndHour: 20 } }) } as any);
+    tel = new TelephonyService(prisma, { settingsFor: async () => ({ calling: { windowStartHour: 9, windowEndHour: 20 } }) } as any);
   }, 60_000);
 
   afterAll(async () => {
@@ -164,7 +164,7 @@ describe.skipIf(!enabled)('home and onboarding (integration)', () => {
     expect(by.consent.ok).toBe(true);
     expect(by.hours.detail).toMatch(/between 09:00 and 20:00/);
     expect(by.live).toMatchObject({ ok: false, required: false });
-    expect(r.missing).toEqual(expect.arrayContaining(['Tested after the latest changes', 'Agent published', 'Voice provider (Plivo)']));
+    expect(r.missing).toEqual(expect.arrayContaining(['Tested after the latest changes', 'Agent published', 'Voice provider (Sarvam)']));
     await expect(tel.agentReadiness(created[0], agent.id)).rejects.toMatchObject({ status: 404 });
   });
 });

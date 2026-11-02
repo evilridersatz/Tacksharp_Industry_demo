@@ -106,7 +106,7 @@ export default function PlatformOrganization() {
             <Card>
               <CardHeader title="Integrations" subtitle="Status only. Platform staff never see customer secrets." />
               <ul className="grid gap-2 px-5 pb-4 text-[13px]">
-                {o.integrations.map((i) => <li key={i.provider} className="flex items-center justify-between gap-2"><span className="font-semibold">{({ plivo: 'Plivo', sarvam: 'Sarvam', openai: 'OpenAI', whatsapp: 'WhatsApp' } as Record<string, string>)[i.provider] ?? i.provider}</span><span className="flex gap-1.5"><Badge tone={i.status === 'ok' ? 'brand' : i.status === 'failed' ? 'rose' : 'slate'}>{i.status.replace('_', ' ')}</Badge>{i.enabled && <Badge tone="brand">enabled</Badge>}</span></li>)}
+                {o.integrations.map((i) => <li key={i.provider} className="flex items-center justify-between gap-2"><span className="font-semibold">{({ plivo: 'Plivo (removed)', sarvam: 'Sarvam', sarvam_telephony: 'Sarvam voice agents', openai: 'OpenAI', whatsapp: 'WhatsApp' } as Record<string, string>)[i.provider] ?? i.provider}</span><span className="flex gap-1.5"><Badge tone={i.status === 'ok' ? 'brand' : i.status === 'failed' ? 'rose' : 'slate'}>{i.status.replace('_', ' ')}</Badge>{i.enabled && <Badge tone="brand">enabled</Badge>}</span></li>)}
               </ul>
               <p className="px-5 pb-4 text-[12px] text-muted">Routed channels: {o.channels.length ? o.channels.map((c) => `${c.kind} ${c.id}`).join(', ') : 'none'}</p>
             </Card>

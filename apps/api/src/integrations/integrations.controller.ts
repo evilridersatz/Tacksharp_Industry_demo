@@ -5,7 +5,6 @@ import type { SessionClaims } from '../auth/token.js';
 import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
 import { config } from '../common/config.js';
 import { log } from '../common/logger.js';
-import { checkPlivoSignature } from '../voice/plivo-signature.js';
 import { IntegrationsService } from './integrations.service.js';
 
 /**
@@ -22,52 +21,11 @@ export class IntegrationsController {
     return this.svc.list(u.org);
   }
 
-  // ---- Plivo number routing (specific routes before /:provider)
-  @Post('plivo/numbers')
-  @HttpCode(200)
-  mapNumber(@CurrentUser() u: SessionClaims, @Body() body: { number?: unknown }) {
-    requirePermission(u, PERMISSIONS.integrationsManage);
-    return this.svc.mapPlivoNumber(u, body?.number);
-  }
-
-  @Delete('plivo/numbers/:number')
-  unmapNumber(@CurrentUser() u: SessionClaims, @Param('number') number: string) {
-    requirePermission(u, PERMISSIONS.integrationsManage);
-    return this.svc.unmapPlivoNumber(u, number);
-  }
-
   @Post('whatsapp/route')
   @HttpCode(200)
   routeWhatsapp(@CurrentUser() u: SessionClaims) {
     requirePermission(u, PERMISSIONS.integrationsManage);
     return this.svc.mapWhatsappNumber(u);
-  }
-
-  // ---- Plivo test-call callbacks (public; Plivo signature checked with THIS organization's saved token)
-  @Public()
-  @Post('plivo/test-call/answer')
-  async testCallAnswer(@Query('org') org: string, @Req() req: Request, @Res() res: Response, @Body() raw: Record<string, string> | undefined) {
-    await this.verifyPlivo(org, req, raw ?? {});
-    res.status(200).type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?>\n<Response><Speak voice="WOMAN" language="en-IN">This is a test call from Tacksharp. Your Plivo connection is working. Goodbye.</Speak><Hangup/></Response>');
-  }
-
-  @Public()
-  @Post('plivo/test-call/hangup')
-  @HttpCode(200)
-  async testCallHangup(@Query('org') org: string, @Query('ev') ev: string, @Req() req: Request, @Body() raw: Record<string, string> | undefined) {
-    await this.verifyPlivo(org, req, raw ?? {});
-    await this.svc.recordTestCallHangup(org, String(ev ?? ''), raw ?? {});
-    return { ok: true };
-  }
-
-  private async verifyPlivo(org: string, req: Request, body: Record<string, string>) {
-    const token = org ? await this.svc.plivoTokenOf(String(org)) : null;
-    // Always enforced for these callbacks, whatever PLIVO_VALIDATE_SIGNATURE says.
-    const check = checkPlivoSignature(req, body, { enabled: true, authToken: token ?? '', publicBaseUrl: config.publicBaseUrl });
-    if (!check.ok) {
-      log.warn('integrations.test_call_signature_invalid', { reason: check.reason });
-      throw new ForbiddenException('Invalid Plivo signature');
-    }
   }
 
   // ---- per provider

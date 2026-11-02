@@ -124,13 +124,13 @@ export class TenancyService implements OnApplicationBootstrap {
   }
 
   /**
-   * Where this deployment's own WhatsApp number and Plivo number are routed, and how: by a channel row (explicit)
+   * Where this deployment's own WhatsApp number is routed, and how: by a channel row (explicit)
    * or by the DEFAULT_ORGANIZATION_ID fallback. Shown on startup and on the dashboard so an unmapped GR Chicken
    * number (customers reaching the real-estate assistant) is visible. Identifiers are masked.
    */
   async mappingReport(): Promise<Array<{ kind: ChannelKind; configured: boolean; masked?: string; organizationId?: string; via?: 'channel' | 'default_fallback'; vertical?: Vertical | 'unknown' }>> {
     const out = [];
-    for (const kind of ['whatsapp_phone_number_id', 'plivo_number'] as const) {
+    for (const kind of ['whatsapp_phone_number_id'] as const) {
       const id = this.configured(kind);
       if (!id) {
         out.push({ kind, configured: false });
@@ -159,7 +159,6 @@ export class TenancyService implements OnApplicationBootstrap {
 
   private configured(kind: ChannelKind): string | undefined {
     if (kind === 'whatsapp_phone_number_id') return config.whatsapp.phoneNumberId || undefined;
-    if (kind === 'plivo_number') return normalizePhone(config.plivo.fromNumber);
     if (kind === 'meta_page_id') return config.meta.pageId || undefined;
     return undefined;
   }

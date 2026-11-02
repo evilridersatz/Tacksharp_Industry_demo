@@ -211,7 +211,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     const url = new URL(SarvamTelephonyProvider.webhookUrl(ORG, 'inbound')!);
     const query = Object.fromEntries(url.searchParams);
     const body = {
-      interaction_id: `int-${Date.now()}`, status: 'completed', duration: 95, channel_info: { user_phone_number: `+${PHONE}` },
+      interaction_id: `int-${Date.now()}`, status: 'connected', duration: 95, channel_info: { user_phone_number: `+${PHONE}` },
       interaction_transcript: [{ role: 'user', content: 'rendu kilo broiler curry cut venum' }, { role: 'assistant', content: 'சரி, 440 ரூபாய்.' }],
     };
     const bad = await provider.handleWebhook({ query: { ...query, t: '0'.repeat(64) }, body, headers: {} });
@@ -220,6 +220,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(r.accepted).toBe(true);
     const call = await prisma.call.findFirst({ where: { organizationId: ORG, providerCallId: body.interaction_id } });
     expect(call.direction).toBe('inbound');
+    expect(call.status).toBe('completed');
     expect(call.durationSec).toBe(95);
     expect(call.summary).toMatch(/rendu kilo broiler/);
     expect(call.summary).toMatch(/Order GR-.* placed on the call \(₹440\)/);

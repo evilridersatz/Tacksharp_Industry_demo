@@ -80,9 +80,9 @@ export function LiveDemoSession() {
       {status.error && !s ? <div className="p-4"><ErrorBanner message={status.error} onRetry={status.reload} /></div> : !s ? <Skeleton className="m-4 h-32" /> : (
         <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
           <div className="grid content-start gap-2 text-[12.5px]">
-            {([['WhatsApp Cloud API', s.whatsapp, s.whatsapp.number], ['Plivo voice', s.voice, s.voice.number]] as const).map(([name, p, num]) => (
+            {([['WhatsApp Cloud API', s.whatsapp, s.whatsapp.number], ['Sarvam voice', s.voice, s.voice.number]] as const).map(([name, p, num]) => (
               <div key={name} className="flex flex-wrap items-center gap-2 rounded-[10px] border border-line px-3 py-2">
-                {name.startsWith('Plivo') ? <Phone className="size-4 text-muted" aria-hidden /> : <Smartphone className="size-4 text-muted" aria-hidden />}
+                {name.startsWith('Sarvam') ? <Phone className="size-4 text-muted" aria-hidden /> : <Smartphone className="size-4 text-muted" aria-hidden />}
                 <span className="font-semibold text-ink">{name}</span>
                 <span className="text-muted">{num ?? 'no number'}</span>
                 <Pill tone={PROBE[p.status].tone} className="ml-auto">{PROBE[p.status].label}</Pill>
@@ -90,7 +90,7 @@ export function LiveDemoSession() {
               </div>
             ))}
             <p className="text-muted">Approved WhatsApp template: <b className="text-ink">{s.whatsapp.templateConfigured ? 'configured' : 'not configured'}</b> (needed to start a chat outside the 24-hour window). Unbound senders on the shared number: <b className="text-ink">{s.strictRouting ? 'not answered (strict routing)' : `answered by the number's owner workspace`}</b>.</p>
-            <p className="flex items-start gap-1.5 text-muted"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden />Only numbers on the approved test-recipient list can be bound. “Check connections” makes read-only requests to Meta and Plivo; it sends nothing.</p>
+            <p className="flex items-start gap-1.5 text-muted"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden />Only numbers on the approved test-recipient list can be bound. “Check connections” makes read-only requests to Meta (Sarvam has no read-only check); it sends nothing.</p>
           </div>
 
           <form onSubmit={start} noValidate className="grid content-start gap-3">

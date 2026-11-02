@@ -1,5 +1,7 @@
 # Going live: switching off dry run
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 Every dashboard button and menu calls the real API. What keeps messages and calls from reaching real customers is
 one server setting, `DRY_RUN`, plus two safety lists. The code ships with dry run **on** by default, so a fresh or
 misconfigured server can never message customers by accident. You switch it off on the server, not in the code.

@@ -4,7 +4,7 @@ import type { Provider } from './providers.js';
 
 /**
  * Which organization the current unit of work belongs to, so provider calls deep inside shared services (the WhatsApp
- * sender, Sarvam speech, Plivo calls) use THAT organization's credentials without threading an id through every call.
+ * sender, Sarvam speech, Sarvam calls) use THAT organization's credentials without threading an id through every call.
  *
  *  - HTTP requests: set from the authenticated session by ProviderScopeInterceptor.
  *  - Webhooks / queue jobs: set with bindOrganization() as soon as the tenant is resolved (never from a request body).
@@ -56,8 +56,6 @@ export function environmentCredentials(provider: Provider): ResolvedCredentials 
   const env = (secrets: Record<string, string>, cfg: Record<string, string>, needed: string[]): ResolvedCredentials =>
     needed.every((k) => secrets[k] || cfg[k]) ? { source: 'environment', secrets, config: cfg } : { source: 'environment', secrets, config: cfg, reason: 'The server has no account configured for this provider' };
   switch (provider) {
-    case 'plivo':
-      return env({ authId: config.plivo.authId, authToken: config.plivo.authToken }, { fromNumber: config.plivo.fromNumber }, ['authId', 'authToken']);
     case 'sarvam':
       return env({ apiKey: config.sarvam.apiKey }, { sttModel: config.sarvam.sttModel, sttMode: config.sarvam.sttMode, sttLanguage: config.sarvam.sttLanguage, ttsModel: config.sarvam.ttsModel, ttsSpeaker: config.sarvam.ttsSpeaker }, ['apiKey']);
     case 'openai':

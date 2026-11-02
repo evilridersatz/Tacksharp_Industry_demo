@@ -21,7 +21,7 @@ export default function TermsPage() {
           <li>Automated replies can be wrong. Prices, discounts and commitments come from your records and approval settings; review them before relying on them.</li>
         </ul>
         <h2>4. Your provider accounts</h2>
-        <p>When you connect your own WhatsApp, Plivo, Sarvam or OpenAI account, that provider&apos;s terms apply and it bills you directly. You are responsible for those charges. We store your keys encrypted and use them only for your organization.</p>
+        <p>When you connect your own WhatsApp, Sarvam or OpenAI account, that provider&apos;s terms apply and it bills you directly. You are responsible for those charges. We store your keys encrypted and use them only for your organization.</p>
         <h2>5. Acceptable use</h2>
         <p>Do not use the service for spam, harassment, deceptive or illegal content, or to collect data you are not allowed to collect. Do not try to access another organization&apos;s data or bypass security controls.</p>
         <h2>6. Availability and changes</h2>

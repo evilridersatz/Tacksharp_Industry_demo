@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
  * Provider definitions: which fields are SECRET (encrypted, never returned) and which are plain configuration
  * (returned as-is), with validation. The backend decides what is allowed; the browser only renders it.
  */
-export const PROVIDERS = ['plivo', 'sarvam', 'openai', 'whatsapp', 'sarvam_telephony'] as const;
+export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
@@ -22,11 +22,6 @@ export const SARVAM_STT_MODES = ['codemix', 'transcribe', 'translit'] as const;
 export type FieldDef = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: readonly string[] };
 
 export const FIELDS: Record<Provider, FieldDef[]> = {
-  plivo: [
-    { key: 'authId', label: 'Auth ID', secret: true, required: true, help: 'Plivo console → Account → API keys.' },
-    { key: 'authToken', label: 'Auth Token', secret: true, required: true },
-    { key: 'fromNumber', label: 'Outbound caller ID', secret: false, required: true, help: 'A number on THIS Plivo account, with country code (e.g. 914412345678).' },
-  ],
   sarvam: [
     { key: 'apiKey', label: 'API key', secret: true, required: true, help: 'Sarvam dashboard → API keys.' },
     { key: 'sttModel', label: 'Speech-to-text model', secret: false, required: true, options: SARVAM_STT_MODELS },
@@ -56,7 +51,6 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
 };
 
 export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
-  plivo: {},
   sarvam: { sttModel: 'saaras:v3', sttMode: 'codemix', sttLanguage: 'unknown', ttsModel: 'bulbul:v3', ttsLanguage: 'ta-IN', ttsSpeaker: 'roopa' },
   openai: { model: 'gpt-5.4-mini' },
   whatsapp: {},
@@ -88,10 +82,6 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
       if (typeof raw !== 'string') { errors[f.key] = 'Must be text.'; continue; }
       let v = raw.trim();
       if (f.options && v && !f.options.includes(v)) { errors[f.key] = `Choose one of: ${f.options.join(', ')}.`; continue; }
-      if (provider === 'plivo' && f.key === 'fromNumber' && v) {
-        v = digits(v);
-        if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }
-      }
       if (provider === 'sarvam_telephony' && f.key === 'agentPhoneNumber' && v) {
         v = digits(v);
         if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }

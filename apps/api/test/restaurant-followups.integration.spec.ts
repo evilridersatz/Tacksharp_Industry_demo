@@ -14,17 +14,14 @@ if (enabled) {
   process.env.DB_HOST ??= '127.0.0.1';
   process.env.GR_ORGANIZATION_ID = ORG;
   process.env.PUBLIC_BASE_URL = 'https://example.test';
-  process.env.PLIVO_AUTH_ID = 'test';
-  process.env.PLIVO_AUTH_TOKEN = 'test';
-  process.env.PLIVO_FROM_NUMBER = '914400000000';
-  process.env.VOICE_CALL_WINDOW_START = '0';
+    process.env.VOICE_CALL_WINDOW_START = '0';
   process.env.VOICE_CALL_WINDOW_END = '24';
 }
 
 const REAL_TEST_PHONE = '919999900001';
 
 describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
-  let prisma: any, fu: any, feedback: any, sender: any, ready: any, conversations: any, seedDemo: any, demoPhone: any;
+  let telephony: any, prisma: any, fu: any, feedback: any, sender: any, ready: any, conversations: any, seedDemo: any, demoPhone: any;
 
   async function setupOrg(id: string) {
     await prisma.organization.upsert({ where: { id }, create: { id, name: 'GR Chicken', vertical: 'restaurant' }, update: { vertical: 'restaurant' } });
@@ -74,10 +71,10 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     const orders = new OrdersService(prisma);
     sender = { sendText: vi.fn(async () => 'wamid.real'), sendNamedTemplate: vi.fn(async () => 'wamid.real.t') };
     const sarvam = { enabled: true, textToSpeechUrl: vi.fn(async () => 'https://example.test/a.wav'), speechToText: vi.fn(async () => ({ transcript: '' })) };
-    ready = new ReadyNoticeService(prisma, orders, conversations, sarvam as any, sender);
-    ready.dialer = vi.fn(async () => ({ requestUuid: 'plivo-req' }));
+    ready = new ReadyNoticeService(prisma, orders, conversations, sender);
+    telephony = { placeSystemCall: vi.fn(async () => ({ started: true, requestId: 'sarvam-req-1' })) };
     feedback = new FeedbackService(prisma);
-    fu = new OrderFollowUpService(prisma, conversations, sender, ready, sarvam as any, feedback);
+    fu = new OrderFollowUpService(prisma, conversations, sender, ready, sarvam as any, feedback, telephony);
     fu.queue = { add: vi.fn(async () => undefined) };
     await setupOrg(ORG);
     await setupOrg(ORG_B);
@@ -95,7 +92,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     }
     sender.sendText.mockClear();
     sender.sendNamedTemplate.mockClear();
-    ready.dialer.mockClear();
+    telephony.placeSystemCall.mockClear();
     fu.queue.add.mockClear();
     fu.mockWhatsApp.sent.length = 0;
     fu.mockVoice.dialed.length = 0;
@@ -163,7 +160,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(fu.mockWhatsApp.sent[1]).toMatchObject({ type: 'template', template: { name: 'gr_feedback_v1', components: [{ type: 'body', parameters: [{ type: 'text', text: order2.orderNumber }] }] } });
   });
 
-  it('dry-run (the default) never calls the real WhatsApp sender or the Plivo dialer', async () => {
+  it('dry-run (the default) never calls the real WhatsApp sender or Sarvam', async () => {
     const order = await collectedOrder({ phone: REAL_TEST_PHONE, scenario: 'call_happy' });
     await fu.onStatusChanged(ORG, order.id, 'completed');
     for (const r of await followUpsOf(order.id)) await fu.process(r.id, new Date(Date.now() + 3 * 3600_000));
@@ -171,7 +168,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(fu.mockVoice.dialed).toHaveLength(1);
     expect(sender.sendText).not.toHaveBeenCalled();
     expect(sender.sendNamedTemplate).not.toHaveBeenCalled();
-    expect(ready.dialer).not.toHaveBeenCalled();
+    expect(telephony.placeSystemCall).not.toHaveBeenCalled();
     // A real (non-demo) customer is never given invented feedback: the simulated call is "no answer".
     expect((await due(order.id, 'feedback_call')).status).toBe('scheduled'); // retry 1 of 2
     expect((await prisma.order.findUnique({ where: { id: order.id } })).feedbackRating).toBeNull();
@@ -190,6 +187,27 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(sender.sendText.mock.calls[0][0]).toBe(REAL_TEST_PHONE);
     expect((await prisma.orderFollowUp.findUnique({ where: { id: ids.other } })).lastError).toContain('not an approved test recipient');
     expect((await prisma.orderFollowUp.findUnique({ where: { id: ids.demo } })).lastError).toContain('demo customer');
+  });
+
+  it('live feedback call goes to Sarvam (TelephonyService) for an approved number only; no Plivo', async () => {
+    process.env.DRY_RUN = 'false';
+    process.env.LIVE_TEST_RECIPIENTS = `+${REAL_TEST_PHONE}`;
+    const order = await collectedOrder({ phone: REAL_TEST_PHONE });
+    const row = (await fu.schedule({ organizationId: ORG, orderId: order.id, kind: 'feedback_call', at: new Date(), dedupeKey: `live-call-${order.id}` })).row;
+    await fu.process(row.id);
+    expect(telephony.placeSystemCall).toHaveBeenCalledTimes(1);
+    expect(telephony.placeSystemCall).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG, customerId: order.customerId, purpose: 'order_feedback', variables: expect.objectContaining({ order_number: order.orderNumber }) }));
+    const after = await prisma.orderFollowUp.findUnique({ where: { id: row.id } });
+    expect(after.status).toBe('completed');
+    expect(after.result).toMatchObject({ provider: 'sarvam', requestId: 'sarvam-req-1' });
+    // Not placed (no agent / gate refused): skipped with the reason, never reported as a call.
+    telephony.placeSystemCall.mockResolvedValueOnce({ started: false, reason: 'no_sarvam_agent' });
+    const order2 = await collectedOrder({ phone: REAL_TEST_PHONE });
+    const row2 = (await fu.schedule({ organizationId: ORG, orderId: order2.id, kind: 'feedback_call', at: new Date(), dedupeKey: `live-call-${order2.id}` })).row;
+    await fu.process(row2.id);
+    const after2 = await prisma.orderFollowUp.findUnique({ where: { id: row2.id } });
+    expect(after2.status).toBe('skipped');
+    expect(after2.lastError).toContain('no_sarvam_agent');
   });
 
   it('duplicate prevention: same dedupe key = one row; processing twice or concurrently sends once', async () => {
@@ -288,7 +306,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(await prisma.orderFollowUp.findUnique({ where: { id: row.id } })).toMatchObject({ status: 'no_answer', attempts: 2 });
     const calls = await prisma.call.findMany({ where: { organizationId: ORG, customerId: order.customerId } });
     expect(calls.map((c: any) => c.status)).toEqual(['no_answer', 'no_answer']);
-    expect(ready.dialer).not.toHaveBeenCalled();
+    expect(telephony.placeSystemCall).not.toHaveBeenCalled();
   });
 
   it('complaint escalation from a call: rating 2 + complaint words -> complaint open, chat flagged for staff, audit event', async () => {
@@ -387,7 +405,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     expect(rows.map((r: any) => [r.kind, r.status])).toEqual([['feedback_request', 'sent'], ['feedback_call', 'completed']]);
     expect(await prisma.order.findUnique({ where: { id: order.id } })).toMatchObject({ feedbackRating: 5, feedbackChannel: 'voice', complaintStatus: null });
     expect(sender.sendText).not.toHaveBeenCalled();
-    expect(ready.dialer).not.toHaveBeenCalled();
+    expect(telephony.placeSystemCall).not.toHaveBeenCalled();
     await expect(fu.runDemo(ORG, { orderId: (await collectedOrder({ phone: '919999900080' })).id, scenario: 'call_happy' })).rejects.toThrow('only on demo orders');
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Customer records of a workspace (add / edit / search / history) and the consent-gated contact tests
  * (WhatsApp test message, test call), plus the DRY_RUN / demo guard on every outbound call.
- * Real database (TEST_DB_NAME); FAKE: the WhatsApp sender and voice service recorded, never a real provider.
+ * Real database (TEST_DB_NAME); FAKE: the WhatsApp sender and the Sarvam HTTP call recorded, never a real provider.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -20,7 +20,7 @@ const ME = { sub: 'user_cust_test', role: 'admin' };
 describe.skipIf(!enabled)('customers (integration)', () => {
   let prisma: any, svc: any, conversations: any, perms: any, config: any;
   const sender = { sendText: vi.fn(async () => 'wamid.TEST1'), sendTemplate: vi.fn(async () => 'wamid.TEMPLATE1'), templateConfigured: vi.fn(() => false), templateFor: vi.fn(() => '') };
-  const voice = { startOutboundCall: vi.fn(async () => ({ started: true, callId: 'call_test_1' })) };
+  const voice = { placeSystemCall: vi.fn(async () => ({ started: true, requestId: 'req_test_1' })), systemAgentId: vi.fn(async () => 'agent_test') };
   const saved = { dry: process.env.DRY_RUN, rcpt: process.env.LIVE_TEST_RECIPIENTS };
 
   async function wipe() {
@@ -48,7 +48,6 @@ describe.skipIf(!enabled)('customers (integration)', () => {
     // Pretend the providers are configured so the live gate (not missing configuration) decides.
     config.whatsapp.accessToken ||= 'test-token';
     config.whatsapp.phoneNumberId ||= 'test-phone-id';
-    config.plivo.fromNumber ||= '910000000099';
   }, 60_000);
 
   afterAll(async () => {
@@ -137,7 +136,7 @@ describe.skipIf(!enabled)('customers (integration)', () => {
   });
 
   it('a demo workspace is never live, even with DRY_RUN off and the number approved', async () => {
-    sender.sendText.mockClear(); sender.sendTemplate.mockClear(); voice.startOutboundCall.mockClear();
+    sender.sendText.mockClear(); sender.sendTemplate.mockClear(); voice.placeSystemCall.mockClear();
     const d = await svc.create(DEMO, ME, { name: 'Demo Person', phone: '9100000000', messagingConsent: true, callingConsent: true, consentSource: 'other' });
     expect(d.isDemo).toBe(true);
     process.env.DRY_RUN = 'false';
@@ -147,7 +146,7 @@ describe.skipIf(!enabled)('customers (integration)', () => {
     expect(await svc.testCall(DEMO, ME, d.id, { confirm: true })).toMatchObject({ status: 'not_placed' });
     expect(sender.sendText).not.toHaveBeenCalled();
     expect(sender.sendTemplate).not.toHaveBeenCalled();
-    expect(voice.startOutboundCall).not.toHaveBeenCalled();
+    expect(voice.placeSystemCall).not.toHaveBeenCalled();
     process.env.DRY_RUN = 'true';
   });
 
@@ -158,30 +157,35 @@ describe.skipIf(!enabled)('customers (integration)', () => {
     expect(await svc.testCall(A, ME, none.id, { confirm: true })).toMatchObject({ status: 'blocked', reasons: expect.arrayContaining(['No calling consent recorded.']) });
     process.env.DRY_RUN = 'true';
     expect(await svc.testCall(A, ME, c.id, { confirm: true })).toMatchObject({ status: 'not_placed', reason: 'DRY_RUN is on' });
-    expect(voice.startOutboundCall).not.toHaveBeenCalled();
+    expect(voice.placeSystemCall).not.toHaveBeenCalled();
     process.env.DRY_RUN = 'false';
     process.env.LIVE_TEST_RECIPIENTS = c.phone;
-    expect(await svc.testCall(A, ME, c.id, { confirm: true })).toMatchObject({ status: 'started', callId: 'call_test_1' });
-    expect(voice.startOutboundCall).toHaveBeenCalledWith(expect.objectContaining({ organizationId: A, customerId: c.id, ignoreCallWindow: false }));
+    expect(await svc.testCall(A, ME, c.id, { confirm: true })).toMatchObject({ status: 'started', requestId: 'req_test_1' });
+    expect(voice.placeSystemCall).toHaveBeenCalledWith(expect.objectContaining({ organizationId: A, customerId: c.id, purpose: 'test_call' }));
     process.env.DRY_RUN = 'true';
   });
 
-  it('the voice service itself never dials under DRY_RUN or a demo customer, for any business type', async () => {
-    const { VoiceService } = await import('../src/voice/voice.service.js');
-    const { TenancyService } = await import('../src/tenancy/tenancy.service.js');
-    const v = new VoiceService(prisma, {} as never, conversations, {} as never, { settingsFor: async () => ({}) } as never, {} as never, new TenancyService(prisma));
-    const create = vi.fn(async () => ({ requestUuid: 'should-not-happen' }));
-    (v as any).plivo = () => ({ calls: { create } });
+  it('Sarvam telephony itself never dials under DRY_RUN or a demo customer, for any business type', async () => {
+    const { TelephonyService } = await import('../src/telephony/telephony.service.js');
+    const tel = new TelephonyService(prisma, { settingsFor: async () => ({ calling: { windowStartHour: 0, windowEndHour: 24 } }) } as never);
+    const sarvamFetch = vi.fn(async () => new Response('{}', { status: 200 }));
+    tel.sarvam.fetchImpl = sarvamFetch as never;
+    const agentData = (org: string) => ({ organizationId: org, name: 'Auto caller', industry: 'general', instructions: 'Call customers politely about their request.', languages: ['ta', 'en'], greeting: 'Vanakkam', fallbackMessage: 'Sorry', status: 'active', telephonyProvider: 'sarvam', sarvamAppId: 'app-test', sarvamAppVersion: 1, outbound: { enabled: true } });
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: { in: [A, DEMO] }, name: 'Auto caller' } });
+    await prisma.voiceAgent.create({ data: agentData(A) as never });
+    await prisma.voiceAgent.create({ data: agentData(DEMO) as never });
     const real = (await svc.list(A, { q: 'Customer 6' })).rows.find((r: any) => r.name === 'Customer 6');
     process.env.DRY_RUN = 'true';
-    expect(await v.startOutboundCall({ organizationId: A, customerId: real.id, ignoreCallWindow: true })).toMatchObject({ started: false, reason: expect.stringMatching(/DRY_RUN/) });
+    const r1 = await tel.placeSystemCall({ organizationId: A, customerId: real.id, purpose: 'test', idempotencyKey: `dry-${Date.now()}`, ignoreCallWindow: true });
+    expect(r1).toMatchObject({ started: false, dryRun: true, reason: expect.stringMatching(/DRY_RUN/) });
     const demo = (await svc.list(DEMO, {})).rows[0];
+    await prisma.customer.update({ where: { id: demo.id }, data: { callingConsent: true } });
     process.env.DRY_RUN = 'false';
-    expect(await v.startOutboundCall({ organizationId: DEMO, customerId: demo.id, ignoreCallWindow: true })).toMatchObject({ started: false, reason: expect.stringMatching(/demo/) });
+    const r2 = await tel.placeSystemCall({ organizationId: DEMO, customerId: demo.id, purpose: 'test', idempotencyKey: `demo-${Date.now()}`, ignoreCallWindow: true });
+    expect(r2).toMatchObject({ started: false, reason: expect.stringMatching(/demo/) });
     process.env.DRY_RUN = 'true';
-    expect(create).not.toHaveBeenCalled();
-    (v as any).onModuleDestroy?.();
-    clearInterval((v as any).sweeper);
+    expect(sarvamFetch).not.toHaveBeenCalled();
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: { in: [A, DEMO] }, name: 'Auto caller' } });
   });
 
   it('permissions: viewing, editing and live contact tests are separate', () => {

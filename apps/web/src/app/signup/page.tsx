@@ -85,7 +85,7 @@ export default function SignupPage() {
             {[
               'Your dashboard opens straight away, shaped for the industry you choose.',
               'Tacksharp reviews the registration and activates it. Email verification is not set up yet, so this review is the verification step.',
-              'Connect your WhatsApp number and, if you want calls and AI replies, Plivo, Sarvam and OpenAI. Each connection is tested before it is used.',
+              'Connect your WhatsApp number and, if you want calls and AI replies, Sarvam and OpenAI. Each connection is tested before it is used.',
               'Invite your team with read-only, operator, manager or admin access.',
             ].map((t, i) => (
               <li key={t} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#ebeaf6] text-[12px] font-bold" aria-hidden>{i + 1}</span>{t}</li>

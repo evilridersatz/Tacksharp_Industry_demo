@@ -121,13 +121,3 @@ describe('P0 test 5: real Tanglish speech still extracts', () => {
   });
 });
 
-describe('startup audio warm-up', () => {
-  it('only ~10 short lines are synthesized at startup (it used to be 100+, which earned Sarvam 429s)', async () => {
-    const { startupAudioLines } = await import('../voice/voice.service.js');
-    const lines = startupAudioLines();
-    expect(lines.length).toBeGreaterThanOrEqual(8);
-    expect(lines.length).toBeLessThanOrEqual(14);
-    expect(lines).toContain('சரிங்க.');
-    expect(lines.every((l) => l.length <= 80)).toBe(true); // acks, wait lines, "didn't hear" prompts
-  });
-});

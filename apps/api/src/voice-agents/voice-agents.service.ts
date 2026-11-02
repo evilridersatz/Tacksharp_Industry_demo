@@ -176,15 +176,11 @@ export class VoiceAgentsService {
       if (r.failed) problems.push(`${r.failed} document(s) failed: retry or remove them.`);
       if (!r.indexed) problems.push('The knowledge base has no indexed document.');
     }
-    if (a.telephonyProvider === 'sarvam' && ((a.inbound as { enabled?: boolean } | null)?.enabled || (a.outbound as { enabled?: boolean } | null)?.enabled) && !a.sarvamAppId) {
+    if (((a.inbound as { enabled?: boolean } | null)?.enabled || (a.outbound as { enabled?: boolean } | null)?.enabled) && !a.sarvamAppId) {
       problems.push('Calls through Sarvam need the Sarvam agent (app) id.');
     }
     const inbound = a.inbound as { enabled?: boolean; phoneNumber?: string } | null;
     if (inbound?.enabled && inbound.phoneNumber) {
-      if (a.telephonyProvider === 'plivo' && this.tenancy) {
-        const owner = await this.tenancy.resolve('plivo_number', inbound.phoneNumber).catch(() => undefined);
-        if (owner !== actor.org) problems.push('The inbound number is not routed to this organization (Settings → Integrations → Plivo → Numbers).');
-      }
       const clash = await this.prisma.voiceAgent.findFirst({ where: { organizationId: actor.org, status: 'active', id: { not: id }, inbound: { path: '$.phoneNumber', equals: inbound.phoneNumber } } });
       if (clash) problems.push(`Another active agent (${clash.name}) already answers ${inbound.phoneNumber}.`);
     }

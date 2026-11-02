@@ -16,7 +16,6 @@ const who = (a: Actor) => `user:${a.sub}`;
 
 /** Test operations per provider (anything else is refused). */
 export const OPERATIONS: Record<Provider, string[]> = {
-  plivo: ['connection', 'call'],
   sarvam: ['connection', 'tts', 'stt'],
   openai: ['connection'],
   whatsapp: ['connection'],
@@ -70,7 +69,7 @@ export class IntegrationsService {
     return {
       publicBaseUrl: base,
       vault: { ready: !this.creds.vaultProblem, problem: this.creds.vaultProblem ? 'Credential encryption is not configured on this server (CREDENTIALS_KEYS). Saving secrets is disabled until an operator sets it.' : null, keyVersion: this.creds.activeKeyVersion },
-      plivo: { answerUrl: `${base}/voice/answer`, inboundUrl: `${base}/voice/inbound`, hangupUrl: `${base}/voice/hangup`, signatureValidation: config.plivo.validateSignature },
+      sarvamVoice: { toolsUrl: `${base}/telephony/sarvam/tools`, webhookUrl: `${base}/telephony/sarvam/webhook`, secretSet: Boolean(process.env.TELEPHONY_WEBHOOK_SECRET && process.env.TELEPHONY_WEBHOOK_SECRET.length >= 32) },
       whatsapp: { webhookUrl: `${base}/webhooks/whatsapp`, verifyTokenSet: Boolean(config.whatsapp.verifyToken), appSecretSet: Boolean(process.env.META_APP_SECRET) },
       mode: { dryRun: followUpConfig().dryRun, liveTestRecipients: followUpConfig().liveTestRecipients.length },
     };
@@ -109,7 +108,6 @@ export class IntegrationsService {
     const row = await this.creds.row(org, provider);
     const eff = await this.creds.resolve(org, provider);
     const extra: Record<string, unknown> = {};
-    if (provider === 'plivo') extra.numbers = await this.numbers(org);
     if (provider === 'whatsapp') {
       extra.routing = await this.prisma.organizationChannel.findMany({ where: { organizationId: org, kind: 'whatsapp_phone_number_id' }, select: { externalId: true, createdAt: true } });
       extra.delivery = await this.delivery(org);
@@ -189,16 +187,6 @@ export class IntegrationsService {
     let result: ProviderResult & Record<string, unknown>;
     let cost: number | null = null;
     switch (`${provider}:${op}`) {
-      case 'plivo:connection': {
-        const acct = await clients.plivoAccount(this.fetchImpl, { authId: secrets.authId, authToken: secrets.authToken });
-        if (!acct.ok || !cfg.fromNumber) { result = acct; break; }
-        const num = await clients.plivoNumber(this.fetchImpl, { authId: secrets.authId, authToken: secrets.authToken }, cfg.fromNumber);
-        result = num.ok ? { ...acct, latencyMs: acct.latencyMs + num.latencyMs, message: `${acct.message} ${num.message}`, details: { ...acct.details, callerId: num.details } } : { ...num, latencyMs: acct.latencyMs + num.latencyMs, message: `Credentials work, but the caller ID failed: ${num.message}` };
-        break;
-      }
-      case 'plivo:call':
-        result = await this.testCall(actor, row, secrets, cfg, body);
-        break;
       case 'sarvam:connection':
       case 'sarvam:tts': {
         const text = op === 'tts' && typeof body?.text === 'string' && body.text.trim() ? body.text.trim().slice(0, 300) : SAMPLE_TEXT[cfg.ttsLanguage] ?? SAMPLE_TEXT['en-IN'];
@@ -264,30 +252,7 @@ export class IntegrationsService {
   }
 
   /**
-   * A REAL outbound test call from this organization's Plivo account. Gates, in order: an organization admin (checked
-   * by the controller), an ACTIVE organization, explicit confirmation, DRY_RUN off, the destination on the approved
-   * LIVE_TEST_RECIPIENTS list, a passed connection test. Nothing here can call an arbitrary number.
-   */
-  private async testCall(actor: Actor, row: { id: string; status: string }, secrets: Record<string, string>, cfg: Record<string, string>, body: Record<string, unknown>) {
-    const org = await this.prisma.organization.findUnique({ where: { id: actor.org }, select: { status: true } });
-    if (org?.status !== 'active') throw new ForbiddenException('Test calls are available once Tacksharp has activated this organization.');
-    if (body?.confirm !== true) throw new BadRequestException('Confirm that a real phone call should be placed (it is charged by Plivo).');
-    const live = followUpConfig();
-    if (live.dryRun) throw new ForbiddenException('This server runs in dry-run mode (DRY_RUN=true): no real call is placed. An operator must switch it off for live tests.');
-    const to = normalizePhone(String(body?.to ?? ''));
-    if (!to || !live.liveTestRecipients.includes(to)) throw new ForbiddenException('Test calls go only to numbers on the approved test-recipient list (LIVE_TEST_RECIPIENTS).');
-    if (row.status !== 'ok') throw new BadRequestException('Run a successful connection test first.');
-    const ev = await this.prisma.integrationEvent.create({ data: { organizationId: actor.org, provider: 'plivo', kind: 'call', ok: false, message: 'Requested', source: 'organization' } });
-    const base = config.publicBaseUrl;
-    const q = `org=${encodeURIComponent(actor.org)}&ev=${encodeURIComponent(ev.id)}`;
-    const r = await clients.plivoCall(this.fetchImpl, { authId: secrets.authId, authToken: secrets.authToken }, { from: cfg.fromNumber, to, answerUrl: `${base}/integrations/plivo/test-call/answer?${q}`, hangupUrl: `${base}/integrations/plivo/test-call/hangup?${q}` });
-    await this.prisma.integrationEvent.update({ where: { id: ev.id }, data: { ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: r.ok ? 'Call requested; waiting for the hangup report.' : r.message.slice(0, 500), units: r.units ?? null, unitType: r.unitType ?? null } });
-    return { ...r, details: { ...(r.details ?? {}), eventId: ev.id, to: `••••${to.slice(-4)}` } };
-  }
-
-  /**
-   * A REAL test call through Sarvam Voice Agents (proves the API key, ids, connection and caller number). Same gates as
-   * the Plivo test call: an active organization, explicit confirmation, DRY_RUN off, an approved test recipient, and
+   * A REAL test call through Sarvam Voice Agents (proves the API key, ids, connection and caller number). Gates: an active organization, explicit confirmation, DRY_RUN off, an approved test recipient, and
    * the Sarvam agent (app) id to answer it.
    */
   private async testSarvamCall(actor: Actor, secrets: Record<string, string>, cfg: Record<string, string>, body: Record<string, unknown>) {
@@ -302,64 +267,6 @@ export class IntegrationsService {
     const appVersion = Number(body?.appVersion ?? 1);
     if (!/^[\w-]{3,100}$/.test(appId) || !Number.isInteger(appVersion) || appVersion < 1) throw new BadRequestException('Give the Sarvam agent (app) id and version that should answer the test call.');
     return clients.sarvamOutboundCall(this.fetchImpl, { apiKey: secrets.apiKey, orgId: cfg.orgId, workspaceId: cfg.workspaceId, connectionId: cfg.connectionId, agentPhoneNumber: cfg.agentPhoneNumber }, { appId, appVersion, to });
-  }
-
-  /** Plivo hangup callback for a test call (signature already verified with THIS organization's token). */
-  async recordTestCallHangup(org: string, eventId: string, body: Record<string, string>) {
-    const ev = await this.prisma.integrationEvent.findFirst({ where: { id: eventId, organizationId: org, provider: 'plivo', kind: 'call' } });
-    if (!ev) return;
-    const answered = body.CallStatus === 'completed' && Number(body.BillDuration ?? body.Duration ?? 0) > 0;
-    const cost = Number(body.TotalCost);
-    await this.prisma.integrationEvent.update({
-      where: { id: ev.id },
-      data: { ok: answered, errorCode: answered ? null : (body.HangupCause ?? body.CallStatus ?? 'not_answered').slice(0, 60), message: `Call ${body.CallStatus ?? 'ended'} (${body.HangupCause ?? 'no cause given'}), ${body.Duration ?? 0} s.`.slice(0, 500), units: Number(body.BillDuration ?? 0) || null, unitType: 'seconds', costEstimate: Number.isFinite(cost) ? new Prisma.Decimal(cost.toFixed(4)) : null },
-    });
-  }
-
-  /** Saved Plivo auth token of this organization (signature checks for its own callbacks), or null. */
-  async plivoTokenOf(org: string): Promise<string | null> {
-    const row = await this.creds.row(org, 'plivo');
-    if (!row) return null;
-    try {
-      return this.creds.secretsOf(row).authToken ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  // ------------------------------------------------------------------------------------------------ routing
-
-  async numbers(org: string) {
-    return this.prisma.organizationChannel.findMany({ where: { organizationId: org, kind: 'plivo_number' }, select: { externalId: true, createdAt: true }, orderBy: { createdAt: 'asc' } });
-  }
-
-  /**
-   * Route calls to a Plivo number to this organization. Allowed only when the number is verified (live, read-only API
-   * request) to be on THIS organization's own Plivo account, and no other organization already owns the mapping.
-   */
-  async mapPlivoNumber(actor: Actor, raw: unknown) {
-    const number = normalizePhone(String(raw ?? ''));
-    if (!number) throw new BadRequestException('Enter the number with country code.');
-    const eff = await this.creds.resolve(actor.org, 'plivo');
-    if (eff.source !== 'organization') throw new BadRequestException('Save, test and enable your own Plivo credentials first: a number can only be routed after Plivo confirms it is on your account.');
-    const existing = await this.prisma.organizationChannel.findUnique({ where: { kind_externalId: { kind: 'plivo_number', externalId: number } } });
-    if (existing && existing.organizationId !== actor.org) throw new ConflictException('This number is already routed to another organization. Contact Tacksharp support if it is yours.');
-    if (existing) return { ok: true, numbers: await this.numbers(actor.org) };
-    const check = await clients.plivoNumber(this.fetchImpl, { authId: eff.secrets.authId, authToken: eff.secrets.authToken }, number);
-    await this.event(actor.org, 'plivo', 'config', check, 'organization');
-    if (!check.ok) throw new BadRequestException(check.message);
-    await this.prisma.organizationChannel.create({ data: { organizationId: actor.org, kind: 'plivo_number', externalId: number } });
-    await this.audit(actor.org, who(actor), 'plivo', 'integration.number_mapped', { number: `••••${number.slice(-4)}` });
-    return { ok: true, numbers: await this.numbers(actor.org) };
-  }
-
-  async unmapPlivoNumber(actor: Actor, raw: string) {
-    const number = normalizePhone(raw);
-    const row = number ? await this.prisma.organizationChannel.findUnique({ where: { kind_externalId: { kind: 'plivo_number', externalId: number } } }) : null;
-    if (!row || row.organizationId !== actor.org) throw new NotFoundException('That number is not routed to this organization.');
-    await this.prisma.organizationChannel.delete({ where: { id: row.id } });
-    await this.audit(actor.org, who(actor), 'plivo', 'integration.number_unmapped', { number: `••••${number!.slice(-4)}` });
-    return { ok: true, numbers: await this.numbers(actor.org) };
   }
 
   /** Route this organization's WhatsApp number (verified with its own token) to it. */

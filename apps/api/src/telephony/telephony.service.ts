@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { VoiceService } from '../voice/voice.service.js';
 import { FollowUpsService } from '../follow-ups/follow-ups.service.js';
 import { effectiveCallWindow } from '../settings/tenant-settings.js';
 import { nextAllowedCallTime } from '../common/time.js';
@@ -9,7 +8,6 @@ import { log } from '../common/logger.js';
 import { mask } from '../whatsapp/whatsapp-sender.service.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 import { e164 } from '../voice-agents/agent-validation.js';
-import { PlivoTelephonyProvider } from './plivo.provider.js';
 import { SarvamTelephonyProvider } from './sarvam.provider.js';
 import type { ProviderId, TelephonyProvider } from './types.js';
 
@@ -35,10 +33,10 @@ export class TelephonyService {
 
   constructor(
     private readonly prisma: PrismaService,
-    voice: VoiceService,
     private readonly followUps: FollowUpsService,
   ) {
-    this.providers = { plivo: new PlivoTelephonyProvider(prisma, voice), sarvam: new SarvamTelephonyProvider(prisma) };
+    // Sarvam is the only telephony provider. Plivo was removed (2026-11); historical Plivo call rows stay as records.
+    this.providers = { sarvam: new SarvamTelephonyProvider(prisma) };
   }
 
   get sarvam() {
@@ -47,14 +45,12 @@ export class TelephonyService {
 
   // -------------------------------------------------------------------------------------------- settings / routing
 
-  async defaultProvider(organizationId: string): Promise<ProviderId> {
-    const s = await this.prisma.organizationSettings.findUnique({ where: { organizationId } });
-    const p = (s?.data as { telephony?: { provider?: string } } | null)?.telephony?.provider;
-    return p === 'sarvam' ? 'sarvam' : 'plivo';
+  async defaultProvider(_organizationId?: string): Promise<ProviderId> {
+    return 'sarvam';
   }
 
   async setDefaultProvider(actor: Actor, provider: unknown) {
-    if (provider !== 'plivo' && provider !== 'sarvam') throw new BadRequestException('provider must be plivo or sarvam.');
+    if (provider !== 'sarvam') throw new BadRequestException('Sarvam is the only voice provider (Plivo was removed).');
     const row = await this.prisma.organizationSettings.findUnique({ where: { organizationId: actor.org } });
     const data = { ...((row?.data as Record<string, unknown>) ?? {}), telephony: { provider } };
     await this.prisma.organizationSettings.upsert({ where: { organizationId: actor.org }, update: { data: data as Prisma.InputJsonValue }, create: { organizationId: actor.org, data: data as Prisma.InputJsonValue } });
@@ -63,15 +59,15 @@ export class TelephonyService {
   }
 
   async overview(organizationId: string, showWebhookUrls = true) {
-    const [def, plivo, sarvam, agents] = await Promise.all([
+    const [def, sarvam, agents] = await Promise.all([
       this.defaultProvider(organizationId),
-      this.providers.plivo.getCapabilities(organizationId),
       this.providers.sarvam.getCapabilities(organizationId),
       this.prisma.voiceAgent.findMany({ where: { organizationId, telephonyProvider: 'sarvam', status: { not: 'archived' } }, select: { id: true, name: true } }),
     ]);
     return {
       defaultProvider: def,
-      providers: { plivo, sarvam },
+      providers: { sarvam },
+      systemAgentId: await this.systemAgentId(organizationId),
       dryRun: followUpConfig().dryRun,
       // Inbound result webhooks to paste into each Sarvam inbound deployment (one per agent).
       /** The organization's Sarvam-hosted agent (configured in the Sarvam console). */
@@ -95,7 +91,7 @@ export class TelephonyService {
     const add = (c: Check) => checks.push(c);
     const inbound = agent.inbound as { enabled?: boolean; phoneNumber?: string | null } | null;
     const outbound = agent.outbound as { enabled?: boolean } | null;
-    const provider: ProviderId = agent.telephonyProvider === 'sarvam' ? 'sarvam' : 'plivo';
+    const provider: ProviderId = 'sarvam';
     const self = `/voice-agents/${agent.id}`;
 
     add({ id: 'instructions', label: 'Instructions and greeting', ok: agent.instructions.length >= 20 && agent.greeting.length >= 2, required: true, detail: 'The assistant knows what to do and how to greet callers.', action: { label: 'Edit', href: self } });
@@ -110,12 +106,11 @@ export class TelephonyService {
 
     if (inbound?.enabled || outbound?.enabled) {
       const caps = await this.providers[provider].getCapabilities(organizationId);
-      add({ id: 'provider', label: `Voice provider (${provider === 'sarvam' ? 'Sarvam' : 'Plivo'})`, ok: caps.configured, required: true, detail: caps.configured ? 'Connected for this workspace.' : provider === 'sarvam' ? 'Sarvam Voice Agents is not set up (account details and a passed test call), or the server has no webhook secret.' : 'Plivo is not connected for this workspace.', action: { label: 'Set up', href: provider === 'sarvam' ? '/settings/integrations/sarvam-telephony' : '/settings/integrations/plivo' } });
-      if (provider === 'sarvam') add({ id: 'sarvam_app', label: 'Sarvam agent id', ok: Boolean(agent.sarvamAppId), required: true, detail: agent.sarvamAppId ? `Calls are answered by Sarvam agent ${agent.sarvamAppId} v${agent.sarvamAppVersion ?? 1}.` : 'Enter the id of the agent you created in Sarvam.', action: { label: 'Add it', href: self } });
+      add({ id: 'provider', label: 'Voice provider (Sarvam)', ok: caps.configured, required: true, detail: caps.configured ? 'Connected for this workspace.' : 'Sarvam Voice Agents is not set up (account details and a passed test call), or the server has no webhook secret.', action: { label: 'Set up', href: '/settings/integrations/sarvam-telephony' } });
+      add({ id: 'sarvam_app', label: 'Sarvam agent id', ok: Boolean(agent.sarvamAppId), required: true, detail: agent.sarvamAppId ? `Calls are answered by Sarvam agent ${agent.sarvamAppId} v${agent.sarvamAppVersion ?? 1}.` : 'Enter the id of the agent you created in Sarvam.', action: { label: 'Add it', href: self } });
     }
     if (inbound?.enabled) {
-      const owner = inbound.phoneNumber ? await this.prisma.organizationChannel.findUnique({ where: { kind_externalId: { kind: 'plivo_number', externalId: inbound.phoneNumber } } }) : null;
-      add({ id: 'inbound_number', label: 'Number customers call', ok: provider === 'sarvam' ? Boolean(inbound.phoneNumber) : owner?.organizationId === organizationId, required: true, detail: provider === 'sarvam' ? 'Assign this number to an inbound deployment in Sarvam and paste the webhook URL shown on the Voice agents page.' : owner?.organizationId === organizationId ? `+${inbound.phoneNumber} rings this agent.` : `+${inbound.phoneNumber ?? '?'} is not routed to your workspace yet.`, action: { label: 'Route number', href: '/settings/integrations/plivo' } });
+      add({ id: 'inbound_number', label: 'Number customers call', ok: Boolean(inbound.phoneNumber), required: true, detail: 'Assign this number to an inbound deployment in Sarvam and paste the webhook URL shown on the Voice agents page.', action: { label: 'Add number', href: self } });
     }
     if (outbound?.enabled) {
       const consenting = await this.prisma.customer.count({ where: { organizationId, callingConsent: true, optedOutAt: null, doNotContact: false } });
@@ -158,18 +153,71 @@ export class TelephonyService {
     const toNumber = to ?? customer?.phone ?? '';
     if (customerIdIn && !customer) throw new NotFoundException('Customer not found.');
     if (customer && to && customer.phone !== to) throw new BadRequestException('That number does not belong to this customer.');
-    const provider: ProviderId = agent.telephonyProvider === 'sarvam' ? 'sarvam' : 'plivo';
+    return this.dial(actor, key, agent, customer, toNumber, { ignoreCallWindow: body.ignoreCallWindow === true, requestedBy: `user:${actor.sub}` });
+  }
+
+  /**
+   * A call the system places (feedback / ready / follow-up / "test call" button): same gates, same idempotency and
+   * same Sarvam path as placeCall, with the organization's system agent (settings.telephony.systemAgentId, or the
+   * only active outbound Sarvam agent). Never throws for a business reason: returns { started:false, reason }.
+   */
+  async placeSystemCall(input: { organizationId: string; customerId: string; purpose: string; idempotencyKey: string; ignoreCallWindow?: boolean; variables?: Record<string, string> }): Promise<{ started: boolean; requestId?: string; reason?: string; retryAt?: Date; dryRun?: boolean }> {
+    const actor = { sub: `system:${input.purpose}`, org: input.organizationId };
+    const key = `${input.purpose}:${input.idempotencyKey}`.replace(/[^\w.:-]/g, '_').slice(0, 100);
+    const prior = await this.prisma.telephonyCallRequest.findUnique({ where: { organizationId_idempotencyKey: { organizationId: actor.org, idempotencyKey: key } } });
+    if (prior) return systemResult(view(prior));
+    const agentId = await this.systemAgentId(actor.org);
+    if (!agentId) return { started: false, reason: 'no_sarvam_agent: choose the Sarvam agent for automatic calls (Voice agents)' };
+    const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId: actor.org } });
+    const customer = await this.prisma.customer.findFirst({ where: { id: input.customerId, organizationId: actor.org } });
+    if (!agent || !customer) return { started: false, reason: !agent ? 'no_sarvam_agent' : 'customer_not_found' };
+    const r = await this.dial(actor, key, agent, customer, customer.phone ?? '', { ignoreCallWindow: input.ignoreCallWindow === true, requestedBy: actor.sub, variables: { ...(input.variables ?? {}), call_purpose: input.purpose } });
+    return systemResult(r);
+  }
+
+  /** The agent used for automatic calls: settings.telephony.systemAgentId, else the only active outbound Sarvam agent. */
+  async systemAgentId(organizationId: string): Promise<string | null> {
+    const st = await this.prisma.organizationSettings.findUnique({ where: { organizationId } });
+    const chosen = (st?.data as { telephony?: { systemAgentId?: string } } | null)?.telephony?.systemAgentId;
+    if (chosen) return chosen;
+    const agents = await this.prisma.voiceAgent.findMany({ where: { organizationId, status: 'active', sarvamAppId: { not: null } }, select: { id: true, outbound: true }, take: 5 });
+    const outbound = agents.filter((a) => (a.outbound as { enabled?: boolean } | null)?.enabled);
+    return outbound.length === 1 ? outbound[0].id : null;
+  }
+
+  async setSystemAgent(actor: Actor, agentId: unknown) {
+    const id = typeof agentId === 'string' && agentId ? agentId : null;
+    if (id && !(await this.prisma.voiceAgent.findFirst({ where: { id, organizationId: actor.org } }))) throw new NotFoundException('Agent not found.');
+    const row = await this.prisma.organizationSettings.findUnique({ where: { organizationId: actor.org } });
+    const prev = (row?.data as Record<string, unknown>) ?? {};
+    const data = { ...prev, telephony: { ...((prev.telephony as Record<string, unknown>) ?? {}), provider: 'sarvam', systemAgentId: id } };
+    await this.prisma.organizationSettings.upsert({ where: { organizationId: actor.org }, update: { data: data as Prisma.InputJsonValue }, create: { organizationId: actor.org, data: data as Prisma.InputJsonValue } });
+    await this.audit(actor, actor.org, 'telephony.system_agent_set', { agentId: id });
+    return this.overview(actor.org, true);
+  }
+
+  /** Every outbound gate, then Sarvam. Shared by placeCall (a person) and placeSystemCall (automation). */
+  private async dial(
+    actor: Actor,
+    key: string,
+    agent: { id: string; name: string; status: string; outbound: unknown; callLimits: unknown; sarvamAppId: string | null; sarvamAppVersion: number | null },
+    customer: { id: string; name: string | null; phone: string | null; callingConsent: boolean; doNotContact: boolean; optedOutAt: Date | null; isDemo: boolean } | null,
+    toNumber: string,
+    opts: { ignoreCallWindow: boolean; requestedBy: string; variables?: Record<string, string> },
+  ) {
+    const provider: ProviderId = 'sarvam';
 
     const reject = (reason: string, extra: Record<string, unknown> = {}) => this.record(actor, key, { agentId: agent.id, customerId: customer?.id ?? null, toNumber, provider, status: 'rejected', failureReason: reason }, extra);
 
     if (agent.status !== 'active') return reject('agent_not_active: publish the agent first');
     if (!(agent.outbound as { enabled?: boolean } | null)?.enabled) return reject('agent_outbound_disabled');
     if (!customer) return reject('unknown_number: add the customer and record their calling consent first');
-    if (!customer.callingConsent) return reject('no_calling_consent');
-    if (customer.doNotContact) return reject('do_not_contact');
+    // Opt-out and do-not-contact first: they are the customer's explicit "no" and the clearest reason to show.
     if (customer.optedOutAt) return reject('opted_out');
+    if (customer.doNotContact) return reject('do_not_contact');
+    if (!customer.callingConsent) return reject('no_calling_consent');
 
-    if (body.ignoreCallWindow !== true) {
+    if (!opts.ignoreCallWindow) {
       const w = effectiveCallWindow(await this.followUps.settingsFor(actor.org));
       const allowedAt = nextAllowedCallTime(new Date(), w.start, w.end);
       if (allowedAt.getTime() > Date.now() + 60_000) return reject('outside_calling_hours', { retryAt: allowedAt });
@@ -190,7 +238,7 @@ export class TelephonyService {
     const live = await this.prisma.telephonyCallRequest.findFirst({ where: { organizationId: actor.org, customerId: customer.id, status: { in: IN_FLIGHT }, createdAt: { gt: recent } } });
     if (live) return reject('call_already_in_progress');
 
-    const gate = liveGate(followUpConfig(), customer);
+    const gate = liveGate(followUpConfig(), customer as Parameters<typeof liveGate>[1]);
     if (!gate.live) {
       // Dry run: everything above was really checked; no provider is contacted and nothing is billed.
       return this.record(actor, key, { agentId: agent.id, customerId: customer.id, toNumber, provider, status: 'dry_run', failureReason: `not_live: ${gate.reason}` });
@@ -201,7 +249,7 @@ export class TelephonyService {
     // Claim the key first (unique index): two concurrent requests with the same key cannot both dial.
     let row;
     try {
-      row = await this.prisma.telephonyCallRequest.create({ data: { organizationId: actor.org, idempotencyKey: key, agentId: agent.id, customerId: customer.id, toNumber, provider, status: 'accepted', requestedBy: `user:${actor.sub}` } });
+      row = await this.prisma.telephonyCallRequest.create({ data: { organizationId: actor.org, idempotencyKey: key, agentId: agent.id, customerId: customer.id, toNumber, provider, status: 'accepted', requestedBy: opts.requestedBy } });
     } catch (e) {
       if ((e as { code?: string }).code === 'P2002') {
         const again = await this.prisma.telephonyCallRequest.findUnique({ where: { organizationId_idempotencyKey: { organizationId: actor.org, idempotencyKey: key } } });
@@ -209,7 +257,7 @@ export class TelephonyService {
       }
       throw e;
     }
-    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: customer.name ? { customer_name: customer.name } : undefined };
+    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: { ...(customer.name ? { customer_name: customer.name } : {}), ...(opts.variables ?? {}) } };
     let result = await this.providers[provider].initiateOutboundCall(req);
     // One retry, only when the provider certainly did NOT place the call (rate-limited / connection never made).
     if (!result.ok && result.retryable) {
@@ -227,7 +275,7 @@ export class TelephonyService {
 
   private async record(actor: Actor, key: string, data: { agentId: string; customerId: string | null; toNumber: string; provider: string; status: string; failureReason: string }, extra: Record<string, unknown> = {}) {
     try {
-      const row = await this.prisma.telephonyCallRequest.create({ data: { organizationId: actor.org, idempotencyKey: key, requestedBy: `user:${actor.sub}`, ...data, failureReason: data.failureReason.slice(0, 190) } });
+      const row = await this.prisma.telephonyCallRequest.create({ data: { organizationId: actor.org, idempotencyKey: key, requestedBy: actor.sub.includes(':') ? actor.sub : `user:${actor.sub}`, ...data, failureReason: data.failureReason.slice(0, 190) } });
       await this.audit(actor, row.id, `telephony.call_${data.status}`, { reason: data.failureReason, provider: data.provider });
       return { ...view(row), ...extra };
     } catch (e) {
@@ -242,7 +290,7 @@ export class TelephonyService {
   async status(organizationId: string, requestId: string) {
     const r = await this.prisma.telephonyCallRequest.findFirst({ where: { id: requestId, organizationId } });
     if (!r) throw new NotFoundException('Call request not found');
-    const live = await this.providers[r.provider === 'sarvam' ? 'sarvam' : 'plivo'].getCallStatus(organizationId, requestId);
+    const live = r.provider === 'sarvam' ? await this.providers.sarvam.getCallStatus(organizationId, requestId) : null; // historical Plivo rows: record only
     return { ...view(r), live };
   }
 
@@ -252,8 +300,14 @@ export class TelephonyService {
   }
 
   private audit(actor: Actor, entityId: string, action: string, data: Record<string, unknown>) {
-    return this.prisma.auditEvent.create({ data: { organizationId: actor.org, actor: `user:${actor.sub}`, entityType: 'telephony_call', entityId, action, data: data as Prisma.InputJsonValue } });
+    return this.prisma.auditEvent.create({ data: { organizationId: actor.org, actor: actor.sub.includes(':') ? actor.sub : `user:${actor.sub}`, entityType: 'telephony_call', entityId, action, data: data as Prisma.InputJsonValue } });
   }
+}
+
+function systemResult(v: { requestId: string; status: string; failureReason: string | null; retryAt?: Date }) {
+  // dry_run is NOT started: every gate passed but nobody was called (DRY_RUN / not an approved live recipient).
+  const started = v.status === 'dialing' || v.status === 'accepted' || v.status === 'completed';
+  return { started, requestId: v.requestId, dryRun: v.status === 'dry_run', reason: started ? undefined : (v.failureReason ?? v.status), retryAt: v.retryAt };
 }
 
 function view(r: { id: string; agentId: string | null; customerId: string | null; toNumber: string; provider: string; status: string; failureReason: string | null; providerCallId: string | null; callId: string | null; durationSec: number | null; createdAt: Date }) {

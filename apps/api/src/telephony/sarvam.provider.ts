@@ -20,7 +20,7 @@ export const SARVAM_DOCS = [
   'https://docs.sarvam.ai/conversations/build/knowledge-base',
 ];
 
-const STATUS: Record<string, string> = { connected: 'completed', no_answer: 'no_answer', busy: 'busy', failed: 'failed' };
+const STATUS: Record<string, string> = { connected: 'completed', completed: 'completed', no_answer: 'no_answer', busy: 'busy', failed: 'failed' };
 
 export class SarvamTelephonyProvider implements TelephonyProvider {
   readonly id = 'sarvam' as const;
@@ -114,9 +114,10 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
       throw e;
     }
     const durationSec = Number.isFinite(Number(b.duration)) ? Math.round(Number(b.duration)) : null;
-    const mapped = STATUS[status] ?? 'failed';
     const failure = typeof b.failure_reason === 'string' ? b.failure_reason.slice(0, 180) : null;
     const transcript = transcriptLines(b.interaction_transcript);
+    // An undocumented status with a conversation in it was a connected call, not a failure.
+    const mapped = STATUS[status] ?? (transcript.length || (durationSec ?? 0) > 0 ? 'completed' : 'failed');
 
     // "inbound" = the organization's Sarvam-hosted agent (configured in the Sarvam console, no agent row here);
     // "inbound:<agentId>" = a Tacksharp-built agent deployed on Sarvam.

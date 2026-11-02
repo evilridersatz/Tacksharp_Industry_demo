@@ -210,25 +210,19 @@ export default function AgentBuilderPage() {
             </ul>
             <p className="text-[12.5px] text-muted">Website chat and voice: always available for testing on this page. Custom agents answer phone calls; WhatsApp is answered by your industry assistant.</p>
             <div className="grid gap-3 lg:grid-cols-2">
-              <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Voice provider for this agent</legend>
-                <select disabled={ro} className={inputCls} value={form.telephonyProvider} onChange={(e) => set('telephonyProvider', e.target.value as Agent['telephonyProvider'])} aria-label="Voice provider">
-                  <option value="plivo">Plivo (your instructions and documents answer every call)</option>
-                  <option value="sarvam">Sarvam Voice Agents (the agent you set up in Sarvam answers)</option>
-                </select>
-                {form.telephonyProvider === 'sarvam' && (
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <label><span className={label}>Sarvam agent (app) id</span><input disabled={ro} className={inputCls} value={form.sarvamAppId ?? ''} onChange={(e) => set('sarvamAppId', e.target.value || null)} />{err('sarvamAppId')}</label>
-                    <label><span className={label}>App version</span><input disabled={ro} type="number" min={1} className={inputCls} value={form.sarvamAppVersion ?? 1} onChange={(e) => set('sarvamAppVersion', Number(e.target.value) || null)} /></label>
-                    <p className="rounded-[8px] bg-amber-50 p-2 text-[12px] text-amber-900 sm:col-span-2">Sarvam answers with the agent configured in Sarvam. Copy these instructions and upload the same documents there: Sarvam has no documented way to push them from here.</p>
-                  </div>
-                )}
+              <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Sarvam agent that answers the phone</legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label><span className={label}>Sarvam agent (app) id</span><input disabled={ro} className={inputCls} value={form.sarvamAppId ?? ''} onChange={(e) => { set('telephonyProvider', 'sarvam'); set('sarvamAppId', e.target.value || null); }} />{err('sarvamAppId')}</label>
+                  <label><span className={label}>App version</span><input disabled={ro} type="number" min={1} className={inputCls} value={form.sarvamAppVersion ?? 1} onChange={(e) => set('sarvamAppVersion', Number(e.target.value) || null)} /></label>
+                  <p className="rounded-[8px] bg-amber-50 p-2 text-[12px] text-amber-900 sm:col-span-2">Calls run on Sarvam (Plivo was removed). Sarvam answers with the agent configured in Sarvam: use the Sarvam phone agent setup on the Voice agents page (languages, instructions and live menu tools) — Sarvam has no documented way to push them from here.</p>
+                </div>
               </fieldset>
               <fieldset className="rounded-[10px] border border-line p-3"><legend className="px-1 text-[12.5px] font-semibold">Phone calls</legend>
                 <label className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.inbound?.enabled)} onChange={(e) => set('inbound', { enabled: e.target.checked, phoneNumber: form.inbound?.phoneNumber ?? null })} />Answer calls to a number</label>
                 {form.inbound?.enabled && <label className="mt-2 block"><span className={label}>Number customers dial</span><input disabled={ro} className={inputCls} value={form.inbound.phoneNumber ?? ''} onChange={(e) => set('inbound', { enabled: true, phoneNumber: e.target.value })} placeholder="+91 44 1234 5678" /></label>}
                 <label className="mt-2 flex items-center gap-1.5 text-[13px]"><input type="checkbox" disabled={ro} checked={Boolean(form.outbound?.enabled)} onChange={(e) => set('outbound', { enabled: e.target.checked, purpose: form.outbound?.purpose ?? '' })} />Allow outbound calls (consenting customers only)</label>
                 {form.outbound?.enabled && <label className="mt-2 block"><span className={label}>Call purpose</span><input disabled={ro} className={inputCls} value={form.outbound.purpose} onChange={(e) => set('outbound', { enabled: true, purpose: e.target.value })} /></label>}
-                <p className="mt-2 text-[11.5px] text-muted">A purchased number does not take calls by itself: it must be routed to your workspace (Plivo) or assigned to an inbound deployment (Sarvam).</p>{err('inbound')}
+                <p className="mt-2 text-[11.5px] text-muted">A purchased number does not take calls by itself: it must be assigned to an inbound deployment in Sarvam.</p>{err('inbound')}
               </fieldset>
             </div>
           </div>
@@ -343,7 +337,7 @@ function TestCall({ agent, readiness }: { agent: Agent; readiness: Readiness | n
             {list.map((c) => <option key={c.id} value={c.id}>{c.name ?? 'Unnamed'}</option>)}
           </select>
           {target && <p className="text-ink">Destination: <span className="font-semibold tabular">+{target.phone}</span></p>}
-          <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={confirm} disabled={!target} onChange={(e) => setConfirm(e.target.checked)} /><span>This places a <b>real phone call</b> to this number{agent.telephonyProvider === 'sarvam' ? ' through Sarvam' : ' through Plivo'} (charged), unless test mode is on.</span></label>
+          <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={confirm} disabled={!target} onChange={(e) => setConfirm(e.target.checked)} /><span>This places a <b>real phone call</b> to this number through Sarvam (charged), unless test mode is on.</span></label>
           <Button disabled={!target || !confirm || busy || Boolean(result)} busy={busy} onClick={async () => {
             setBusy(true);
             try { setResult(await api.post('/telephony/calls', { agentId: agent.id, customerId, confirm: true, idempotencyKey: key })); }
@@ -363,7 +357,7 @@ function payload(a: Agent) {
     name: a.name, description: a.description ?? '', industry: a.industry, useCase: a.useCase ?? '', instructions: a.instructions, languages: a.languages,
     greeting: a.greeting, fallbackMessage: a.fallbackMessage, voice: a.voice ?? { speaker: 'roopa', pace: 1 }, inbound: a.inbound ?? { enabled: false, phoneNumber: null },
     outbound: a.outbound ?? { enabled: false, purpose: '' }, businessHours: a.businessHours, escalation: a.escalation ?? { keywords: [], handoffMessage: '', phone: null },
-    callLimits: a.callLimits ?? { maxCallSeconds: 300, maxConcurrent: 2, dailyLimit: 50 }, telephonyProvider: a.telephonyProvider, sarvamAppId: a.sarvamAppId, sarvamAppVersion: a.sarvamAppVersion,
+    callLimits: a.callLimits ?? { maxCallSeconds: 300, maxConcurrent: 2, dailyLimit: 50 }, telephonyProvider: 'sarvam', sarvamAppId: a.sarvamAppId, sarvamAppVersion: a.sarvamAppVersion,
   };
 }
 

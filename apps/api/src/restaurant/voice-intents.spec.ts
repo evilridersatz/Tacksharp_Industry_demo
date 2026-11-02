@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { asksAvailability, classify, filterAvailabilityClaims, isGoodbye, parseItems, questionKind, romanizeLoanwords } from './chicken-parse.js';
 import { say, spoken, toSpeech } from './replies.js';
-import { decideCallEnd } from '../voice/voice.service.js';
 import { AiService } from '../ai/ai.service.js';
 
 const PROPERTY_WORDS = /\b(BHK|property|properties|site visit|apartment|villa|plot|lakhs?|Porur|Green Valley|Lake View)\b/i;
@@ -63,37 +62,6 @@ describe('spoken restaurant lines', () => {
     expect(t).not.toMatch(/[*✅🙏₹\n]/u);
     expect(t).toContain('390 ரூபாய்');
     expect(toSpeech('Total ₹440', 'en')).toBe('Total 440 rupees');
-  });
-});
-
-describe('when a call ends (decideCallEnd)', () => {
-  const base = { vertical: 'restaurant' as const, turns: 1, maxTurns: 24, endCall: false, failed: false };
-
-  it('a normal answer on turn 1 keeps the call open (the reported 18-second call)', () => {
-    expect(decideCallEnd(base)).toEqual({ end: false });
-    expect(decideCallEnd({ ...base, turns: 5 })).toEqual({ end: false });
-  });
-
-  it('ends only on an explicit end from the engine, with its reason', () => {
-    expect(decideCallEnd({ ...base, endCall: true, endReason: 'customer_goodbye' })).toEqual({ end: true, reason: 'customer_goodbye' });
-    expect(decideCallEnd({ ...base, endCall: true })).toEqual({ end: true, reason: 'conversation_end' });
-  });
-
-  it('bounded: the call ends at the maximum number of turns', () => {
-    expect(decideCallEnd({ ...base, turns: 24 })).toEqual({ end: true, reason: 'max_turns' });
-  });
-
-  it('a failed restaurant turn asks again instead of hanging up; real estate keeps its documented technical end', () => {
-    expect(decideCallEnd({ ...base, failed: true })).toEqual({ end: false });
-    expect(decideCallEnd({ ...base, vertical: 'real_estate', failed: true })).toEqual({ end: true, reason: 'technical' });
-  });
-
-  it('restaurant turn results map to call actions only when the customer ended it', () => {
-    expect(AiService.restaurantActions({})).toEqual({});
-    expect(AiService.restaurantActions({ endCall: false })).toEqual({});
-    expect(AiService.restaurantActions({ endCall: true, endReason: 'customer_goodbye' })).toEqual({ endCall: true });
-    expect(AiService.restaurantActions({ order: { status: 'created' } })).toEqual({ outcome: 'order_placed' });
-    expect(AiService.restaurantActions({ endCall: true, endReason: 'handoff' })).toEqual({ endCall: true, outcome: 'human_requested' });
   });
 });
 

@@ -350,7 +350,7 @@ export default function SettingsPage() {
               <Row label="Ad cost per lead">
                 <Num label="Ad cost per lead" value={d.roi.costPerLeadInr} onChange={(v) => set('roi', { costPerLeadInr: v })} suffix="₹" />
               </Row>
-              <Row label="Voice cost per connected minute" hint="Plivo + Sarvam + OpenAI">
+              <Row label="Voice cost per connected minute" hint="Sarvam + OpenAI">
                 <Num label="Voice cost per minute" value={d.roi.voiceCostPerMinuteInr} onChange={(v) => set('roi', { voiceCostPerMinuteInr: v })} suffix="₹" step={0.1} />
               </Row>
               <Row label="WhatsApp cost per message">

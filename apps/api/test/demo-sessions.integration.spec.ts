@@ -28,7 +28,7 @@ describe.skipIf(!enabled)('shared-number demo sessions (integration)', () => {
   const queue = { add: vi.fn(async (_name: string, _data: any, _opts?: any) => undefined) };
   const saved = { rcpt: process.env.LIVE_TEST_RECIPIENTS, strict: process.env.DEMO_SHARED_NUMBER_STRICT };
   let msgN = 0;
-  let savedCfg: { pn: string; from: string } | undefined;
+  let savedCfg: { pn: string } | undefined;
   const wamid = () => `wamid.DS${Date.now()}${msgN++}`;
   const inbound = (from: string, id = wamid(), text = 'hello') => ({
     object: 'whatsapp_business_account',
@@ -58,8 +58,6 @@ describe.skipIf(!enabled)('shared-number demo sessions (integration)', () => {
     const { WhatsAppService } = await import('../src/webhooks/whatsapp.service.js');
     const { InboundMessageService } = await import('../src/whatsapp/inbound-messages.service.js');
     const { ConversationsService } = await import('../src/conversations/conversations.service.js');
-    const { LeadsService } = await import('../src/leads/leads.service.js');
-    const { VoiceService } = await import('../src/voice/voice.service.js');
     const { TenancyService } = await import('../src/tenancy/tenancy.service.js');
     prisma = new PrismaService();
     await prisma.$connect();
@@ -67,8 +65,8 @@ describe.skipIf(!enabled)('shared-number demo sessions (integration)', () => {
     await wipe();
 
     const { config } = await import('../src/common/config.js');
-    savedCfg = { pn: config.whatsapp.phoneNumberId, from: config.plivo.fromNumber };
-    config.whatsapp.phoneNumberId = 'PNID_SHARED'; config.plivo.fromNumber = '914400000000'; // identifiers only; nothing is sent
+    savedCfg = { pn: config.whatsapp.phoneNumberId };
+    config.whatsapp.phoneNumberId = 'PNID_SHARED'; // identifier only; nothing is sent
     const tenancy = new TenancyService(prisma);
     tenancy.resolve = async () => HUB; // both shared numbers belong to HUB in this test
     const settings = { get: async (org: string) => ({ industry: INDUSTRY[org] ?? 'real_estate' }) };
@@ -77,25 +75,12 @@ describe.skipIf(!enabled)('shared-number demo sessions (integration)', () => {
     webhook = new WhatsAppService(prisma, { cancelPending: vi.fn(async () => undefined) } as never, tenancy, { applyDeliveryStatus: vi.fn(async () => 0) } as never, conversations, new InboundMessageService(prisma), undefined, svc);
     webhook.queue = queue;
 
-    const aiStub = {
-      industry: async (org: string) => INDUSTRY[org] ?? null,
-      voiceSessionKey: (_o: string, callId: string) => `call:${callId}`,
-      openCallSession: vi.fn(async (p: { organizationId: string; callId: string; phone: string }) => {
-        const customer = await prisma.customer.findFirst({ where: { organizationId: p.organizationId, phone: p.phone } });
-        const c = await conversations.getOrCreateConversation({ organizationId: p.organizationId, channel: 'voice', externalId: p.phone, customerId: customer.id });
-        return { key: `call:${p.callId}`, conversationId: c.id };
-      }),
-      likelyFirstReplies: vi.fn(() => []), background: (_k: string, w: () => Promise<unknown>) => void w().catch(() => undefined), settle: async () => undefined,
-    };
-    const sarvamStub = { keyterms: [], textToSpeechUrl: vi.fn(async () => 'https://example.test/a.wav'), textToSpeech: vi.fn(async () => ({ url: 'https://example.test/a.wav', ms: 1, attempts: 1, cached: false, languageCode: 'en-IN' })), languageFor: () => 'en-IN', deleteAudio: vi.fn(async () => undefined) };
-    voice = new VoiceService(prisma, aiStub as never, conversations, new LeadsService(prisma), { settingsFor: async () => ({}) } as never, sarvamStub as never, tenancy, svc);
   }, 60_000);
 
   afterAll(async () => {
     if (saved.rcpt === undefined) delete process.env.LIVE_TEST_RECIPIENTS; else process.env.LIVE_TEST_RECIPIENTS = saved.rcpt;
     if (saved.strict === undefined) delete process.env.DEMO_SHARED_NUMBER_STRICT; else process.env.DEMO_SHARED_NUMBER_STRICT = saved.strict;
-    clearInterval(voice?.sweeper);
-    if (savedCfg) { const { config } = await import('../src/common/config.js'); config.whatsapp.phoneNumberId = savedCfg.pn; config.plivo.fromNumber = savedCfg.from; }
+    if (savedCfg) { const { config } = await import('../src/common/config.js'); config.whatsapp.phoneNumberId = savedCfg.pn; }
     if (!prisma) return;
     await wipe();
     await prisma.$disconnect();
@@ -181,15 +166,6 @@ describe.skipIf(!enabled)('shared-number demo sessions (integration)', () => {
     await webhook.processWebhook({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: 'PNID_SHARED' }, statuses: [{ id: mid, status: 'delivered', recipient_id: TESTER }] } }] }] });
     expect((await prisma.message.findFirst({ where: { externalId: mid } })).deliveryStatus).toBe('delivered');
   }, 30_000);
-
-  it('an inbound call from the bound tester is created in the hotel workspace; others reach the owner', async () => {
-    await voice.answerInbound({ From: `+${TESTER}`, To: '914400000000', CallUUID: `ds-call-${Date.now()}` });
-    const call = await prisma.call.findFirst({ where: { fromNumber: TESTER }, orderBy: { createdAt: 'desc' } });
-    expect(call).toMatchObject({ organizationId: HOTEL, direction: 'inbound' });
-    await voice.answerInbound({ From: `+${STRANGER}`, To: '914400000000', CallUUID: `ds-call-x-${Date.now()}` });
-    const other = await prisma.call.findFirst({ where: { fromNumber: STRANGER }, orderBy: { createdAt: 'desc' } });
-    expect(other).toMatchObject({ organizationId: HUB });
-  });
 
   it('call opening lines follow the workspace industry and never mention property outside real estate', () => {
     const c = { name: 'Ravi Kumar', bhk: null, propertyType: null, location: null, budget: null };

@@ -49,7 +49,7 @@ describe.skipIf(!enabled)('STOP / START opt-out (integration)', () => {
     const { WhatsAppService } = await import('../src/webhooks/whatsapp.service.js');
     const { WhatsAppMessageProcessor } = await import('../src/workers/whatsapp-message.processor.js');
     const { FollowUpProcessor } = await import('../src/workers/follow-up.processor.js');
-    const { VoiceService } = await import('../src/voice/voice.service.js');
+    const { TelephonyService } = await import('../src/telephony/telephony.service.js');
     const { ApprovalsService } = await import('../src/governance/approvals.service.js');
     const { WorkTasksService } = await import('../src/governance/work-tasks.service.js');
     const { TextileEvents } = await import('../src/textile/textile-events.js');
@@ -77,7 +77,11 @@ describe.skipIf(!enabled)('STOP / START opt-out (integration)', () => {
     webhook = new WhatsAppService(prisma, followUps, { resolve: async () => orgFor } as any, { applyDeliveryStatus: vi.fn(async () => 0) } as any, conversations, inbound);
     webhook.queue = { add: vi.fn(async () => undefined) };
     worker = new WhatsAppMessageProcessor(ai as any, {} as any, sender as any, { advanceLeadStatus: vi.fn(async () => undefined) } as any, conversations, inbound, prisma);
-    voice = new VoiceService(prisma, ai as any, conversations, leads, followUps, {} as any, { vertical: async (org: string) => (org === GR ? 'restaurant' : 'real_estate') } as any);
+    voice = new TelephonyService(prisma, followUps);
+    voice.sarvam.fetchImpl = vi.fn(async () => { throw new Error('no real Sarvam call in tests'); });
+    // The Sarvam agent used for automatic calls (so the opt-out gate, not a missing agent, decides).
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: RE, name: 'OptOut caller' } });
+    await prisma.voiceAgent.create({ data: { organizationId: RE, name: 'OptOut caller', industry: 'real_estate', instructions: 'Call leads back about their enquiry.', languages: ['ta', 'en'], greeting: 'Vanakkam', fallbackMessage: 'Sorry', status: 'active', telephonyProvider: 'sarvam', sarvamAppId: 'app-test', sarvamAppVersion: 1, outbound: { enabled: true } } });
     approvals = new ApprovalsService(prisma);
     const workTasks = new WorkTasksService(prisma);
     const tevents = new TextileEvents();
@@ -93,7 +97,7 @@ describe.skipIf(!enabled)('STOP / START opt-out (integration)', () => {
     const orchestrator = new Orchestrator(prisma, inventory, workTasks, approvals, settings, tevents, finance, fevents, marketing, collections, followUps);
     orchestrator.useQueue(null);
     orchestrator.onModuleInit();
-    followUpWorker = new FollowUpProcessor(prisma, conversations, leads, { startOutboundCall: vi.fn(async () => ({ started: true })) } as any, sender as any, followUps, collections);
+    followUpWorker = new FollowUpProcessor(prisma, conversations, leads, { placeSystemCall: vi.fn(async () => ({ started: true })) } as any, sender as any, followUps, collections);
     await prisma.textileProduct.deleteMany({ where: { organizationId: TX } });
   });
 
@@ -161,7 +165,7 @@ describe.skipIf(!enabled)('STOP / START opt-out (integration)', () => {
     expect(sender.sendWithinPolicy).not.toHaveBeenCalled();
     expect(sender.sendText).toHaveBeenCalledTimes(1); // still only the confirmation
     // An AI call (speed-to-lead, dashboard "call now") is refused.
-    expect(await voice.startOutboundCall({ organizationId: RE, customerId: lead.customerId })).toMatchObject({ started: false, reason: 'opted_out' });
+    expect(await voice.placeSystemCall({ organizationId: RE, customerId: lead.customerId, purpose: 'manual_call', idempotencyKey: `optout-${Date.now()}` })).toMatchObject({ started: false, reason: 'opted_out' });
 
     // Any later message that is not START keeps the opt-out (and the assistant may answer the question itself).
     await receive(RE, p, 'what is the price of the Porur flat?');

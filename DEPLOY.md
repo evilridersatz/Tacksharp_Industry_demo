@@ -100,7 +100,7 @@ cd apps/api && npx prisma generate && npm run check:config     # must report no 
 Before going further, confirm `apps/api/.env` has:
 - `NODE_ENV=production`
 - `META_APP_SECRET`
-- `PLIVO_VALIDATE_SIGNATURE=true`
+- `TELEPHONY_WEBHOOK_SECRET` (32+ characters; Sarvam webhook and voice tools). Plivo was removed: `PLIVO_*` are ignored
 - `AUTH_SECRET` (32+ characters)
 - an HTTPS `PUBLIC_BASE_URL`
 - `DRY_RUN=true`
@@ -156,7 +156,7 @@ The script expects:
 - `401` for unauthenticated requests;
 - WhatsApp verify with a wrong token → `403`;
 - unsigned and badly signed WhatsApp webhooks → `401`;
-- an unsigned Plivo callback → `403`;
+- a Sarvam webhook with a bad token and the voice tools without a key → `403`; the removed Plivo answer route → `404`;
 - `/login` and `/invite` load, and the web release matches;
 - with a login: a switch into someone else's workspace is refused.
 
@@ -171,8 +171,8 @@ Then check by hand in the browser (staging):
    - Reuse the link: it should be refused.
    - **Remove** the viewer: the private window's next action asks you to log in.
    - Create another link and **Revoke** it: opening it should be refused.
-3. **Providers (read-only):** open **Data & APIs**, press **Check connections**, and expect WhatsApp and Plivo to show
-   **Connected**. Any other result names the real problem.
+3. **Providers (read-only):** open **Data & APIs**, press **Check connections**, and expect WhatsApp to show
+   **Connected** (Sarvam has no read-only check). Any other result names the real problem.
 4. **Shared-number routing (`DRY_RUN=true`):**
    - Start a demo session for your own number (it must be in `LIVE_TEST_RECIPIENTS`). Send "hi" to the shared
      WhatsApp number; it should appear in that workspace's conversations, with the reply recorded as not sent.

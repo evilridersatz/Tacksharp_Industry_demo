@@ -62,38 +62,6 @@ const fail = (r: { status: number; body: string; ms: number; error?: string; cod
   message: r.error ?? `${what} failed (HTTP ${r.status})${r.status === 401 || r.status === 403 ? ': the credentials were rejected' : ''}.${hint ? ` ${hint}` : ''}${r.body ? ` Provider said: ${r.body}` : ''}`,
 });
 
-// ------------------------------------------------------------------------------------------------ Plivo
-export const PLIVO_API = 'https://api.plivo.com/v1';
-const plivoAuth = (s: { authId: string; authToken: string }) => 'Basic ' + Buffer.from(`${s.authId}:${s.authToken}`).toString('base64');
-
-/** Account check (read-only): proves the Auth ID / Token pair works. */
-export async function plivoAccount(fetchImpl: FetchLike, s: { authId: string; authToken: string }): Promise<ProviderResult> {
-  const r = await request(fetchImpl, `${PLIVO_API}/Account/${encodeURIComponent(s.authId)}/`, { headers: { Authorization: plivoAuth(s) } }, [s.authId, s.authToken]);
-  if (r.status !== 200) return fail(r, 'Plivo account check');
-  const a = (r.json ?? {}) as { name?: string; account_type?: string; cash_credits?: string; auto_recharge?: boolean };
-  return { ok: true, latencyMs: r.ms, message: 'Plivo accepted these credentials.', details: { accountName: a.name ?? null, accountType: a.account_type ?? null, credits: a.cash_credits ?? null } };
-}
-
-/** Does this number belong to this Plivo account? (read-only; used before mapping or calling from it) */
-export async function plivoNumber(fetchImpl: FetchLike, s: { authId: string; authToken: string }, number: string): Promise<ProviderResult> {
-  const r = await request(fetchImpl, `${PLIVO_API}/Account/${encodeURIComponent(s.authId)}/Number/${encodeURIComponent(number)}/`, { headers: { Authorization: plivoAuth(s) } }, [s.authId, s.authToken]);
-  if (r.status === 404) return { ok: false, latencyMs: r.ms, errorCode: 'number_not_on_account', message: `${number} is not a number on this Plivo account.` };
-  if (r.status !== 200) return fail(r, 'Plivo number check');
-  const n = (r.json ?? {}) as { voice_enabled?: boolean; application?: string | null; alias?: string | null };
-  return { ok: true, latencyMs: r.ms, message: `${number} is on this Plivo account.`, details: { voiceEnabled: n.voice_enabled ?? null, application: n.application ? 'linked' : 'none' } };
-}
-
-/** Places a REAL call (costs money). Callers must have already applied every gate (dry run, approved recipient). */
-export async function plivoCall(fetchImpl: FetchLike, s: { authId: string; authToken: string }, p: { from: string; to: string; answerUrl: string; hangupUrl: string }): Promise<ProviderResult> {
-  const form = new URLSearchParams({ from: p.from, to: p.to, answer_url: p.answerUrl, answer_method: 'POST', hangup_url: p.hangupUrl, hangup_method: 'POST', ring_timeout: '30', time_limit: '60' });
-  // Never retried: a timeout might still have placed the call.
-  const r = await request(fetchImpl, `${PLIVO_API}/Account/${encodeURIComponent(s.authId)}/Call/`, { method: 'POST', headers: { Authorization: plivoAuth(s), 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() }, [s.authId, s.authToken], false);
-  if (r.status !== 201 && r.status !== 200) return fail(r, 'Plivo call request');
-  const j = (r.json ?? {}) as { request_uuid?: string | string[]; message?: string };
-  const id = Array.isArray(j.request_uuid) ? j.request_uuid[0] : j.request_uuid;
-  return { ok: true, latencyMs: r.ms, message: 'Plivo accepted the call request. Whether it rang and was answered is reported by the hangup callback.', details: { requestUuid: id ?? null }, units: 1, unitType: 'calls' };
-}
-
 // ------------------------------------------------------------------------------------------------ Sarvam
 export const SARVAM_API = 'https://api.sarvam.ai';
 

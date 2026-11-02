@@ -4,7 +4,8 @@ import { TEMPLATES } from './templates.js';
 
 export const AGENT_LANGUAGES = ['ta', 'en', 'tanglish'] as const;
 export const AGENT_INDUSTRIES = [...new Set([...TEMPLATES.map((t) => t.industry), 'other'])];
-export const TELEPHONY_PROVIDERS = ['plivo', 'sarvam'] as const;
+/** Sarvam only (Plivo removed 2026-11). Stored 'plivo' values on old agents are treated as Sarvam. */
+export const TELEPHONY_PROVIDERS = ['sarvam'] as const;
 
 /** E.164 as stored in this product: digits only, with country code, 8 to 15 digits (leading + allowed in input). */
 export function e164(raw: unknown): string | null {
@@ -104,7 +105,7 @@ export function validateAgent(body: Record<string, unknown>, full: boolean) {
     else out.callLimits = { maxCallSeconds, maxConcurrent, dailyLimit };
   }
   if (has('telephonyProvider')) {
-    if (!(TELEPHONY_PROVIDERS as readonly string[]).includes(String(body.telephonyProvider))) errors.telephonyProvider = 'plivo or sarvam.';
+    if (!(TELEPHONY_PROVIDERS as readonly string[]).includes(String(body.telephonyProvider))) errors.telephonyProvider = 'Sarvam is the only voice provider.';
     else out.telephonyProvider = body.telephonyProvider;
   }
   if (has('sarvamAppId')) {

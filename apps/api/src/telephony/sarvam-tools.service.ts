@@ -248,8 +248,10 @@ export class SarvamToolsService {
     const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
     const num = str(body.order_number, 40).toUpperCase();
     const customer = phone ? await this.prisma.customer.findFirst({ where: { organizationId, phone }, select: { id: true } }) : null;
+    // Only the caller's own orders: an order number alone (said by anyone) never reveals an order.
+    if (!customer) return { ok: true, found: false, message: 'No order found for this caller.' };
     const order = await this.prisma.order.findFirst({
-      where: { organizationId, ...(num ? { orderNumber: num } : {}), ...(customer ? { customerId: customer.id } : num ? {} : { id: '__none__' }) },
+      where: { organizationId, customerId: customer.id, ...(num ? { orderNumber: num } : {}) },
       orderBy: { createdAt: 'desc' },
       select: { orderNumber: true, status: true, total: true, pickupAt: true },
     });

@@ -3,17 +3,17 @@
  *
  * The AI section runs the real-estate agent on fixed real-estate sample data (Porur, 2 BHK, Green Valley
  * Residency...): those answers are EXPECTED here and say nothing about GR Chicken. For the restaurant product use
- *   npm run verify:restaurant            (templates, Plivo callbacks, signatures; --call=<number> for a real call)
+ *   npm run verify:restaurant            (templates, Sarvam voice tools, webhooks; --call=<number> for a real call)
  * Keys never leave your machine. Writes verify-output/verify-report.md (no secrets) to share.
  *
- *   npm run verify:live                                  # AI, Sarvam, WhatsApp, Plivo, Meta, server checks
+ *   npm run verify:live                                  # AI, Sarvam, WhatsApp, Sarvam telephony, Meta, server checks
  *   npm run verify:live -- --only=ai,sarvam              # just some sections
  *   npm run verify:live -- --call=9876543210             # + a REAL outbound AI call to your phone
  *   npm run verify:live -- --inbound                     # + wait for YOU to call the business number
  *   npm run verify:live -- --whatsapp-to=9876543210      # + send one real WhatsApp (template) to your phone
  *   npm run verify:live -- --audio-dir=./my-recordings   # + your own phone recordings (name.wav + name.txt)
  *
- * Costs (approx.): AI tests a few rupees; Sarvam tests a few rupees; a test call = normal Plivo + AI usage.
+ * Costs (approx.): AI tests a few rupees; Sarvam tests a few rupees; a test call = normal Sarvam voice-agent usage.
  */
 import 'dotenv/config';
 import { promises as fs } from 'node:fs';
@@ -41,7 +41,6 @@ const env = process.env;
 // Overridable only so the script itself can be tested offline; never set these in normal use.
 const SARVAM = env.VERIFY_SARVAM_BASE ?? 'https://api.sarvam.ai';
 const GRAPH = env.VERIFY_GRAPH_BASE ?? 'https://graph.facebook.com';
-const PLIVO = env.VERIFY_PLIVO_BASE ?? 'https://api.plivo.com';
 
 type Status = 'PASS' | 'FAIL' | 'WARN' | 'SKIP';
 const report: Array<{ section: string; status: Status; name: string; detail?: string }> = [];
@@ -412,34 +411,17 @@ async function testWhatsApp() {
   }
 }
 
-// ---------------------------------------------------------------- 4. Plivo
-async function testPlivo() {
-  head('4. Plivo');
-  if (!env.PLIVO_AUTH_ID || !env.PLIVO_AUTH_TOKEN) return result('SKIP', 'PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN not set');
-  const auth = { Authorization: 'Basic ' + Buffer.from(`${env.PLIVO_AUTH_ID}:${env.PLIVO_AUTH_TOKEN}`).toString('base64') };
-  const acct = await getJson(`${PLIVO}/v1/Account/${env.PLIVO_AUTH_ID}/`, { headers: auth });
-  if (!acct.ok) return result('FAIL', 'Credentials', errText(acct.body));
-  result('PASS', 'Credentials', `account ${acct.body.name ?? ''} · credit ${acct.body.cash_credits ?? '?'} · ${acct.body.account_type ?? ''}`);
-  if (Number(acct.body.cash_credits) < 5) result('WARN', 'Low Plivo credit', `${acct.body.cash_credits}`);
-
-  const from = normalizePhone(env.PLIVO_FROM_NUMBER);
-  if (!from) return result('FAIL', 'PLIVO_FROM_NUMBER', 'not set or invalid');
-  const n = await getJson(`${PLIVO}/v1/Account/${env.PLIVO_AUTH_ID}/Number/${from}/`, { headers: auth });
-  if (!n.ok) return result('FAIL', `Number ${mask(from)} on this account`, errText(n.body));
-  result('PASS', `Number ${mask(from)} on this account`, `voice ${n.body.voice_enabled ?? '?'} · ${n.body.number_type ?? ''}`);
-
-  const appId = String(n.body.application ?? '').split('/').filter(Boolean).pop();
-  if (!appId) return result('FAIL', 'Inbound application', 'no Plivo application linked to this number — inbound calls will not reach Tacksharp');
-  const app = await getJson(`${PLIVO}/v1/Account/${env.PLIVO_AUTH_ID}/Application/${appId}/`, { headers: auth });
-  if (!app.ok) return result('FAIL', 'Inbound application', errText(app.body));
-  const base = (env.PUBLIC_BASE_URL ?? '').replace(/\/$/, '');
-  const answerOk = app.body.answer_url === `${base}/voice/inbound`;
-  const hangupOk = app.body.hangup_url === `${base}/voice/hangup`;
-  result(answerOk ? 'PASS' : 'FAIL', 'Plivo Answer URL', `${app.body.answer_url ?? 'missing'}${answerOk ? '' : ` (should be ${base}/voice/inbound)`}`);
-  result(hangupOk ? 'PASS' : 'FAIL', 'Plivo Hangup URL', `${app.body.hangup_url ?? 'missing'}${hangupOk ? '' : ` (should be ${base}/voice/hangup — without it inbound calls get no outcome)`}`);
+// ---------------------------------------------------------------- 4. Sarvam telephony (Plivo was removed)
+async function testSarvamTelephony() {
+  head('4. Sarvam voice agents (telephony)');
+  // Sarvam documents no read-only credential check for Voice Agents: presence only here; a real call proves the rest.
+  const names = ['SARVAM_AGENTS_API_KEY', 'SARVAM_AGENTS_ORG_ID', 'SARVAM_AGENTS_WORKSPACE_ID', 'SARVAM_AGENTS_CONNECTION_ID', 'SARVAM_AGENTS_PHONE_NUMBER'];
+  const missing = names.filter((n) => !env[n]);
+  result(missing.length ? 'WARN' : 'PASS', 'Deployment Sarvam account', missing.length ? `not set: ${missing.join(', ')} (organizations may use their own account in Settings → Integrations)` : 'set (values not shown)');
+  result((env.TELEPHONY_WEBHOOK_SECRET ?? '').length >= 32 ? 'PASS' : 'FAIL', 'TELEPHONY_WEBHOOK_SECRET', (env.TELEPHONY_WEBHOOK_SECRET ?? '').length >= 32 ? 'set, 32+ characters' : 'missing or too short: webhooks and voice tools are refused');
+  if (env.PLIVO_AUTH_ID || env.PLIVO_AUTH_TOKEN) result('WARN', 'PLIVO_* still set', 'Plivo was removed; delete these settings');
 }
 
-// ---------------------------------------------------------------- 5. Meta Lead Ads
 async function testMeta() {
   head('5. Meta Lead Ads');
   if (!env.META_PAGE_ACCESS_TOKEN) return result('SKIP', 'META_PAGE_ACCESS_TOKEN not set');
@@ -472,7 +454,7 @@ const authed = (p: string, init: RequestInit = {}) => getJson(api(p), { ...init,
 async function testServer() {
   head('6. Your server (public URL)');
   if (!env.PUBLIC_BASE_URL) return result('SKIP', 'PUBLIC_BASE_URL not set');
-  if (!env.PUBLIC_BASE_URL.startsWith('https://')) result('WARN', 'PUBLIC_BASE_URL', 'not https — Plivo/Meta need HTTPS in production');
+  if (!env.PUBLIC_BASE_URL.startsWith('https://')) result('WARN', 'PUBLIC_BASE_URL', 'not https — Sarvam/Meta need HTTPS in production');
   // Explain a failure instead of reporting a bare 404 (offline ngrok tunnel, tunnel to the dashboard, path in URL).
   const diag = await diagnoseBaseUrl(env.PUBLIC_BASE_URL);
   for (const p of diag.problems) result('FAIL', 'PUBLIC_BASE_URL reaches the API', p);
@@ -484,8 +466,10 @@ async function testServer() {
   } catch (e) {
     return result('FAIL', 'GET /health over the internet', `unreachable: ${e instanceof Error ? e.message : e}`);
   }
-  const unsigned = await getJson(api('/voice/turn?callId=verify'), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'CallUUID=x' });
-  result(unsigned.status === 403 ? 'PASS' : 'WARN', 'Plivo endpoints reject unsigned requests', `HTTP ${unsigned.status}${unsigned.status === 403 ? '' : ' (set PLIVO_VALIDATE_SIGNATURE=true)'}`);
+  const unsigned = await getJson(api('/telephony/sarvam/webhook?org=verify&scope=inbound&t=0'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ interaction_id: 'verify' }) });
+  result(unsigned.status === 403 ? 'PASS' : 'FAIL', 'Sarvam webhook rejects a bad token', `HTTP ${unsigned.status}`);
+  const tool = await getJson(api('/telephony/sarvam/tools/menu'), { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-tacksharp-org': 'verify' }, body: '{}' });
+  result(tool.status === 403 ? 'PASS' : 'FAIL', 'Voice tools reject a missing tool key', `HTTP ${tool.status}`);
   const anon = await getJson(api('/leads'));
   result(anon.status === 401 ? 'PASS' : 'FAIL', 'Private API needs login', `HTTP ${anon.status}`);
   try {
@@ -529,7 +513,7 @@ async function latencyReport() {
   note(['\n**Real voice latency per turn (ms, since the API last started):**', '| Stage | P50 | P95 | n |', '|---|---|---|---|',
     row('Download recording', l.body.download), row('Saaras STT', l.body.stt), row('AI', l.body.ai), row('Bulbul TTS', l.body.tts), row('**Total (customer stops → reply starts)**', l.body.total)].join('\n'));
   const p95 = l.body.total.p95;
-  if (p95) result(p95 <= 3000 ? 'PASS' : 'WARN', 'Voice P95 under ~3 s', `${p95} ms (+ Plivo silence detection ${env.VOICE_SILENCE_TIMEOUT ?? 2} s before this)`);
+  if (p95) result(p95 <= 3000 ? 'PASS' : 'WARN', 'Voice P95 under ~3 s', `${p95} ms(before this)`);
 }
 
 async function testOutboundCall() {
@@ -546,24 +530,28 @@ async function testOutboundCall() {
   if (!lead.ok) return result('FAIL', 'Create test lead', errText(lead.body));
   note(`Calling ${mask(phone)} now. Answer, then say for example:`);
   note('1) "Haan sollunga, Porur la 2 BHK iruka?"  2) "Saturday 11 mani site visit pannalaama?"  3) "Seri, thanks, bye"');
-  const start = await authed('/voice/call', { method: 'POST', body: JSON.stringify({ leadId: lead.body.lead.id }) });
+  const start = await authed('/voice/call', { method: 'POST', body: JSON.stringify({ leadId: lead.body.lead.id, confirm: true }) });
   if (!start.body?.started) return result('FAIL', 'Dial', JSON.stringify(start.body));
-  const call = await waitForCall(async () => (await authed(`/voice/calls/${start.body.callId}`)).body?.call ?? null, 'outbound call');
-  if (!call) return result('FAIL', 'Outbound call', 'did not finish within 6 minutes');
-  await reportCall(call.id, 'Outbound call end to end (Plivo → Saaras → AI → Bulbul)');
+  // Sarvam reports the call by webhook after it ends: wait for the request to be linked to a call record.
+  const call = await waitForCall(async () => {
+    const r = (await authed(`/telephony/calls/${start.body.requestId}`)).body;
+    return r?.callId ? { id: r.callId } : null;
+  }, 'outbound call');
+  if (!call) return result('FAIL', 'Outbound call', 'no Sarvam webhook within 6 minutes (check the webhook URL in Sarvam)');
+  await reportCall(call.id, 'Outbound call end to end (Sarvam agent → webhook → dashboard)');
 }
 
 async function testInboundCall() {
   head('8. REAL inbound call');
   if (!cookie) await login();
   const since = Date.now();
-  note(`Now call ${mask(normalizePhone(env.PLIVO_FROM_NUMBER))} from your phone. Say e.g. "Velachery la 2 BHK iruka?", then "Saturday site visit pannalaama?", then "bye". Waiting up to 6 minutes…`);
+  note(`Now call ${mask(normalizePhone(env.SARVAM_AGENTS_PHONE_NUMBER))} from your phone. Say e.g. "Velachery la 2 BHK iruka?", then "Saturday site visit pannalaama?", then "bye". Waiting up to 6 minutes…`);
   const call = await waitForCall(async () => {
     const list = await authed('/voice/calls');
     return (list.body ?? []).find((c: any) => c.direction === 'inbound' && new Date(c.createdAt).getTime() >= since - 5000) ?? null;
   }, 'inbound call');
-  if (!call) return result('FAIL', 'Inbound call', 'no inbound call arrived — check the Plivo Answer URL (section 4)');
-  await reportCall(call.id, 'Inbound call end to end (customer → Plivo → AI → customer)');
+  if (!call) return result('FAIL', 'Inbound call', 'no inbound call arrived — check the Sarvam inbound deployment and its post-call webhook URL');
+  await reportCall(call.id, 'Inbound call end to end (customer → Sarvam agent → webhook → dashboard)');
 }
 
 // ---------------------------------------------------------------- main
@@ -573,7 +561,7 @@ async function main() {
   if (want('ai')) await testAi();
   if (want('sarvam')) await testSarvam();
   if (want('whatsapp')) await testWhatsApp();
-  if (want('plivo')) await testPlivo();
+  if (want('sarvam-telephony') || want('plivo')) await testSarvamTelephony();
   if (want('meta')) await testMeta();
   if (want('server')) await testServer();
   if (args.call) await testOutboundCall().catch((e) => result('FAIL', 'Outbound call', String(e?.message ?? e)));

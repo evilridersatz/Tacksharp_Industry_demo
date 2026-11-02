@@ -59,14 +59,8 @@ describe('ReadyNoticeService duplicate protection', () => {
       prisma as any,
       orders as any,
       {} as any,
-      { enabled: false } as any,
       {} as any,
     );
-
-    vi.spyOn(service, 'voiceStatus').mockReturnValue({
-      ready: false,
-      missing: ['test configuration'],
-    });
 
     const notification = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));

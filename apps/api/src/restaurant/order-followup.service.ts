@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { bindOrganization } from '../integrations/provider-scope.js';
 import { Prisma } from '@prisma/client';
 import { UnrecoverableError } from 'bullmq';
@@ -11,14 +11,14 @@ import { config } from '../common/config.js';
 import { istHour, nextAllowedCallTime } from '../common/time.js';
 import { errorMessage, log } from '../common/logger.js';
 import { dependencyOf, describeError } from '../common/errors.js';
-import { escapeXml, HANGUP, response, sayXml } from '../voice/plivo-xml.js';
+import { TelephonyService } from '../telephony/telephony.service.js';
 import { firstName } from '../whatsapp/message-templates.js';
 import { describeWhen } from '../conversation/when.js';
 import { FeedbackService } from './feedback.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
 import { followUpConfig, liveGate, type FollowUpConfig } from './followup-config.js';
 import {
-  LiveVoiceTransport,
+  SarvamVoiceTransport,
   LiveWhatsAppTransport,
   MockVoiceTransport,
   MockWhatsAppTransport,
@@ -77,9 +77,10 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
     private readonly ready: ReadyNoticeService,
     private readonly sarvam: SarvamService,
     private readonly feedback: FeedbackService,
+    @Optional() private readonly telephony?: TelephonyService,
   ) {
     this.liveWhatsApp = new LiveWhatsAppTransport(this.sender);
-    this.liveVoice = new LiveVoiceTransport((from, to, a, h) => this.ready.dialer(from, to, a, h));
+    this.liveVoice = new SarvamVoiceTransport(this.telephony);
   }
 
   onModuleInit() {
@@ -419,6 +420,17 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
     const live = await this.prisma.call.findFirst({ where: { customerId: order.customerId, status: { in: ['queued', 'ringing', 'in_progress'] }, createdAt: { gt: new Date(now.getTime() - 10 * 60_000) } } });
     if (live && !simulated) return { status: 'scheduled', retryAt: new Date(now.getTime() + 10 * 60_000), error: 'Another call to this customer is in progress' };
 
+    const request = { organizationId: row.organizationId, customerId: order.customerId, to: order.customer.phone!, idempotencyKey: `${row.id}:${attempt}`, purpose: 'order_feedback', variables: { order_number: order.orderNumber, customer_name: order.customer.name ?? '' } };
+    await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { payload: { request: { ...request, provider: simulated ? 'dry_run' : 'sarvam' }, ...((row.payload as object | null) ?? {}) } as never } });
+
+    if (!simulated) {
+      // Live: Sarvam outbound with the organization's automatic-call agent (every gate in TelephonyService). The call
+      // record and transcript arrive with Sarvam's post-call webhook; reading the rating from it is pending.
+      const r = await this.liveVoice.dial(request);
+      if (!r.requestId) return { status: 'skipped', error: `Feedback call not placed: ${r.reason ?? 'voice not configured'}` };
+      return { status: 'completed', result: { simulated: false, provider: 'sarvam', requestId: r.requestId, note: 'Call requested on Sarvam; outcome and transcript arrive by webhook.' } };
+    }
+
     const call = await this.prisma.call.create({
       data: {
         organizationId: row.organizationId,
@@ -426,27 +438,14 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
         direction: 'outbound',
         status: 'queued',
         toNumber: order.customer.phone!,
-        fromNumber: config.plivo.fromNumber || 'dry-run',
+        fromNumber: 'dry-run',
+        provider: 'dry_run',
         attempt,
         language: order.language === 'english' ? 'en-IN' : 'ta-IN',
-        summary: `${simulated ? '[SIMULATED] ' : ''}Feedback call for ${order.orderNumber}`,
+        summary: `[SIMULATED] Feedback call for ${order.orderNumber}`,
       },
     });
     await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { callId: call.id } });
-    const base = config.publicBaseUrl;
-    const request = { from: config.plivo.fromNumber || 'dry-run', to: order.customer.phone!, answerUrl: `${base}/voice/feedback/answer?followUpId=${row.id}`, hangupUrl: `${base}/voice/feedback/hangup?followUpId=${row.id}` };
-    await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { payload: { request, ...(row.payload as object | null ?? {}) } as never } });
-
-    if (!simulated) {
-      const voice = this.ready.voiceStatus();
-      if (!voice.ready) {
-        await this.prisma.call.update({ where: { id: call.id }, data: { status: 'failed', outcome: 'failed', endedAt: new Date(), hangupCause: 'voice not configured' } });
-        return { status: 'skipped', error: `Voice calling not set up (${voice.missing.join(', ')})` };
-      }
-      const r = await this.liveVoice.dial(request);
-      await this.prisma.call.update({ where: { id: call.id }, data: { status: 'ringing', providerRequestId: r.requestId } });
-      return { status: 'calling', result: { simulated: false } };
-    }
 
     // Dry-run: the same outcome handling as a real call, with a simulated customer.
     const dialed = await this.mockVoice.dial(request);
@@ -498,66 +497,5 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
   private async saveCallLine(organizationId: string, order: OrderFull, role: 'user' | 'assistant', content: string, callId: string, simulated: boolean) {
     const conv = await this.conversations.getOrCreateConversation({ organizationId, channel: 'voice', externalId: order.customer.phone!, customerId: order.customerId });
     await this.conversations.addMessage({ organizationId, conversationId: conv.id, role, content, metadata: { callId, orderId: order.id, kind: 'feedback_call', simulated } });
-  }
-
-  // ---- Live call webhooks (Plivo) ---------------------------------------------------------------
-
-  private async liveContext(followUpId: string) {
-    const row = await this.prisma.orderFollowUp.findUnique({ where: { id: followUpId } });
-    if (!row?.callId) return undefined;
-    const order = await this.prisma.order.findFirstOrThrow({ where: { id: row.orderId, organizationId: row.organizationId }, include: { customer: true, items: true, outlet: true } });
-    const call = await this.prisma.call.findUniqueOrThrow({ where: { id: row.callId } });
-    return { row, order, call };
-  }
-
-  async answer(followUpId: string, params: Record<string, string | undefined>) {
-    const ctx = await this.liveContext(followUpId);
-    if (!ctx) return response(HANGUP);
-    await this.prisma.call.update({ where: { id: ctx.call.id }, data: { status: 'in_progress', answeredAt: ctx.call.answeredAt ?? new Date(), providerCallId: params.CallUUID ?? ctx.call.providerCallId } });
-    const opening = this.callOpening(ctx.order);
-    await this.saveCallLine(ctx.row.organizationId, ctx.order, 'assistant', opening, ctx.call.id, false);
-    const url = await this.sarvam.textToSpeechUrl(opening).catch(() => '');
-    const action = `${config.publicBaseUrl}/voice/feedback/turn?followUpId=${encodeURIComponent(followUpId)}`;
-    return response(`${sayXml(url, 'Hello, this is GR Chicken. How was your order? Please tell us a rating from 1 to 5.')}\n<Record action="${escapeXml(action)}" method="POST" fileFormat="wav" maxLength="15" timeout="3" playBeep="false" redirect="true" />`);
-  }
-
-  async turn(followUpId: string, params: Record<string, string | undefined>) {
-    const ctx = await this.liveContext(followUpId);
-    if (!ctx) return response(HANGUP);
-    let transcript = '';
-    if (params.RecordUrl) {
-      try {
-        transcript = (await this.sarvam.speechToText(await this.ready.fetchRecording(params.RecordUrl), 'reply.wav', 'audio/wav')).transcript?.trim() ?? '';
-      } catch (error) {
-        log.warn('followup.call_stt_failed', { followUpId, error: errorMessage(error) });
-      }
-    }
-    if (!transcript) {
-      await this.prisma.orderFollowUp.updateMany({ where: { id: followUpId, status: 'calling' }, data: { status: 'completed', completedAt: new Date(), result: { simulated: false, transcript: [], note: 'Answered, no clear reply' } } });
-      return response(`<Speak voice="WOMAN" language="en-US">Thank you.</Speak>\n${HANGUP}`);
-    }
-    await this.saveCallLine(ctx.row.organizationId, ctx.order, 'user', transcript, ctx.call.id, false);
-    const done = await this.applyCallReply(ctx.row, ctx.order, ctx.call.id, transcript, false);
-    await this.saveCallLine(ctx.row.organizationId, ctx.order, 'assistant', done.reply, ctx.call.id, false);
-    await this.prisma.orderFollowUp.updateMany({ where: { id: followUpId, status: 'calling' }, data: { status: 'completed', completedAt: new Date(), result: { simulated: false, transcript: [this.callOpening(ctx.order), transcript, done.reply], rating: done.rating ?? null, complaint: done.complaint } } });
-    const url = await this.sarvam.textToSpeechUrl(done.reply).catch(() => '');
-    return response(`${sayXml(url, 'Thank you.')}\n${HANGUP}`);
-  }
-
-  async hangup(followUpId: string | undefined, params: Record<string, string | undefined>) {
-    if (!followUpId) return { ok: true };
-    const ctx = await this.liveContext(followUpId);
-    if (!ctx) return { ok: true };
-    const answered = Boolean(ctx.call.answeredAt);
-    await this.prisma.call.update({
-      where: { id: ctx.call.id },
-      data: { status: answered ? 'completed' : params.HangupCause === 'USER_BUSY' ? 'busy' : 'no_answer', outcome: ctx.call.outcome ?? (answered ? 'connected' : 'no_answer'), endedAt: new Date(), durationSec: Number(params.Duration ?? 0) || undefined, hangupCause: params.HangupCause?.slice(0, 190) },
-    });
-    if (!answered && ctx.row.status === 'calling') {
-      const o = await this.noAnswer(ctx.row, ctx.order, ctx.row.attempts, followUpConfig(), new Date(), false);
-      await this.prisma.orderFollowUp.update({ where: { id: ctx.row.id }, data: { status: 'processing' } });
-      await this.finish({ ...ctx.row, status: 'processing' }, o, ctx.row.attempts);
-    }
-    return { ok: true };
   }
 }

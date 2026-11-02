@@ -6,7 +6,7 @@ import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
 import { WhatsAppSenderService } from '../whatsapp/whatsapp-sender.service.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
-import { VoiceService } from '../voice/voice.service.js';
+import { TelephonyService } from '../telephony/telephony.service.js';
 import { config } from '../common/config.js';
 
 const LANGS = ['english', 'tamil', 'tanglish', 'hindi', 'malayalam', 'telugu', 'kannada'];
@@ -33,7 +33,7 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly whatsapp?: WhatsAppSenderService,
-    @Optional() private readonly voice?: VoiceService,
+    @Optional() private readonly telephony?: TelephonyService,
   ) {}
 
   private async isDemoOrg(org: string) {
@@ -166,6 +166,7 @@ export class CustomersService {
   async readiness(org: string, c: { id: string; phone: string | null; isDemo: boolean; messagingConsent: boolean; callingConsent: boolean; optedOutAt: Date | null; doNotContact: boolean; lastInboundAt: Date | null }) {
     const cfg = followUpConfig();
     const gate = liveGate(cfg, { phone: c.phone, isDemo: c.isDemo || (await this.isDemoOrg(org)) });
+    const callAgent = this.telephony ? await this.telephony.systemAgentId(org) : null;
     const blockers = (channel: 'whatsapp' | 'call') => {
       const b: string[] = [];
       if (!c.phone) b.push('No phone number.');
@@ -174,7 +175,7 @@ export class CustomersService {
       if (channel === 'whatsapp' && !c.messagingConsent) b.push('No WhatsApp consent recorded.');
       if (channel === 'call' && !c.callingConsent) b.push('No calling consent recorded.');
       if (channel === 'whatsapp' && !(config.whatsapp.accessToken && config.whatsapp.phoneNumberId)) b.push('WhatsApp is not configured on this server.');
-      if (channel === 'call' && !config.plivo.fromNumber) b.push('Voice (Plivo) is not configured on this server.');
+      if (channel === 'call' && !callAgent) b.push('No Sarvam agent is chosen for automatic calls (Voice agents).');
       return b;
     };
     const windowOpen = Boolean(c.lastInboundAt && Date.now() - c.lastInboundAt.getTime() < WINDOW_MS);
@@ -250,9 +251,9 @@ export class CustomersService {
       await this.audit(org, actor, id, 'test_call_not_live', { reason: ready.liveReason });
       return { status: 'not_placed', reason: ready.liveReason, note: 'No call was placed.' };
     }
-    if (!this.voice) return { status: 'blocked', reasons: ['Voice service not available on this server.'] };
-    const r = await this.voice.startOutboundCall({ organizationId: org, customerId: c.id, ignoreCallWindow: false });
+    if (!this.telephony) return { status: 'blocked', reasons: ['Voice service not available on this server.'] };
+    const r = await this.telephony.placeSystemCall({ organizationId: org, customerId: c.id, purpose: 'test_call', idempotencyKey: `${c.id}:${Date.now()}` });
     await this.audit(org, actor, id, r.started ? 'test_call_started' : 'test_call_not_started', { ...r });
-    return r.started ? { status: 'started', callId: r.callId } : { status: 'not_placed', reason: r.reason };
+    return r.started ? { status: 'started', requestId: r.requestId } : { status: 'not_placed', reason: r.reason };
   }
 }

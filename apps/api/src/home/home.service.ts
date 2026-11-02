@@ -37,14 +37,12 @@ export class HomeService {
   ) {}
 
   async channels(organizationId: string): Promise<ChannelState[]> {
-    const [waRow, plivoRow, sarvamRow, wa, plivo, sarvam, routes] = await Promise.all([
+    const [waRow, sarvamRow, wa, sarvam, routes] = await Promise.all([
       this.creds.row(organizationId, 'whatsapp'),
-      this.creds.row(organizationId, 'plivo'),
       this.creds.row(organizationId, 'sarvam_telephony'),
       this.creds.resolve(organizationId, 'whatsapp'),
-      this.creds.resolve(organizationId, 'plivo'),
       this.creds.resolve(organizationId, 'sarvam_telephony'),
-      this.prisma.organizationChannel.findMany({ where: { organizationId, kind: { in: ['whatsapp_phone_number_id', 'plivo_number'] } }, select: { kind: true } }),
+      this.prisma.organizationChannel.findMany({ where: { organizationId, kind: 'whatsapp_phone_number_id' }, select: { kind: true } }),
     ]);
     const routed = (kind: string) => routes.some((r) => r.kind === kind);
     const state = (
@@ -66,7 +64,6 @@ export class HomeService {
     return [
       state('whatsapp', 'WhatsApp', '/settings/integrations/whatsapp', [{ row: waRow, eff: wa, name: 'WhatsApp', routeKind: 'whatsapp_phone_number_id' }]),
       state('voice', 'Voice calls', '/settings/integrations', [
-        { row: plivoRow, eff: plivo, name: 'Plivo', routeKind: 'plivo_number' },
         { row: sarvamRow, eff: sarvam, name: 'Sarvam' },
       ]),
     ];

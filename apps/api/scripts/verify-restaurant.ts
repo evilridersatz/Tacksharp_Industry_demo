@@ -2,10 +2,12 @@
  * GR Chicken (restaurant) LIVE readiness check — the restaurant counterpart of verify:live, which checks the
  * real-estate product with fixed real-estate sample data.
  *
- *   npm run verify:restaurant                         # read-only: templates, Plivo callbacks, server, signatures
- *   npm run verify:restaurant -- --call=9876543210    # + ONE real restaurant AI call to that (approved) number
+ *   npm run verify:restaurant                         # read-only: templates, Sarvam voice tools (menu / price / quote
+ *                                                       against the LIVE database; nothing is ordered), server checks
+ *   npm run verify:restaurant -- --call=9876543210    # + ONE real Sarvam call to that (approved) number
  *
- * Read-only by default: it reads template status from Meta and settings from Plivo; it sends no WhatsApp message
+ * Read-only by default: it reads template status from Meta and asks the voice tools for menu, prices and a quote; it
+ * sends no WhatsApp message
  * and places no call. --call places one real call through YOUR server, which still enforces DRY_RUN,
  * LIVE_TEST_RECIPIENTS and the customer's calling consent (the script never bypasses them).
  * Writes verify-output/verify-restaurant-report.md with no secrets and masked phone numbers.
@@ -15,6 +17,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { normalizePhone } from '../src/common/phone.js';
 import { diagnoseBaseUrl } from './lib/diagnose-base-url.js';
+import { toolKey } from '../src/telephony/sarvam-tools.service.js';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -26,7 +29,6 @@ const env = process.env;
 const OUT = path.resolve(process.cwd(), 'verify-output');
 // Overridable only so the script itself can be tested offline; never set these in normal use.
 const GRAPH = env.VERIFY_GRAPH_BASE ?? 'https://graph.facebook.com';
-const PLIVO = env.VERIFY_PLIVO_BASE ?? 'https://api.plivo.com';
 
 type Status = 'PASS' | 'FAIL' | 'WARN' | 'SKIP';
 const report: Array<{ status: Status; name: string; detail?: string }> = [];
@@ -100,23 +102,32 @@ async function testTemplates() {
   }
 }
 
-// ---------------------------------------------------------------- 2. Plivo callbacks + signature
-async function testPlivo() {
-  head('2. Plivo callbacks and signature check');
-  result(env.PLIVO_VALIDATE_SIGNATURE === 'true' ? 'PASS' : 'WARN', 'PLIVO_VALIDATE_SIGNATURE', env.PLIVO_VALIDATE_SIGNATURE === 'true' ? 'true' : 'not true — anyone who knows the URL could post fake call events. Turn it on once PUBLIC_BASE_URL is the HTTPS URL Plivo calls.');
-  if (!env.PLIVO_AUTH_ID || !env.PLIVO_AUTH_TOKEN) return result('SKIP', 'Plivo account', 'PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN not set');
-  const auth = { Authorization: 'Basic ' + Buffer.from(`${env.PLIVO_AUTH_ID}:${env.PLIVO_AUTH_TOKEN}`).toString('base64') };
-  const from = normalizePhone(env.PLIVO_FROM_NUMBER);
-  if (!from) return result('FAIL', 'PLIVO_FROM_NUMBER', 'not set or invalid');
-  const n = await getJson(`${PLIVO}/v1/Account/${env.PLIVO_AUTH_ID}/Number/${from}/`, { headers: auth });
-  if (!n.ok) return result('FAIL', `Number ${mask(from)}`, errText(n.body));
-  const appId = String(n.body.application ?? '').split('/').filter(Boolean).pop();
-  if (!appId) return result('WARN', 'Inbound application', 'no Plivo application on this number — customers calling the shop number will not reach the assistant (outbound calls still work)');
-  const app = await getJson(`${PLIVO}/v1/Account/${env.PLIVO_AUTH_ID}/Application/${appId}/`, { headers: auth });
-  if (!app.ok) return result('FAIL', 'Inbound application', errText(app.body));
+// ---------------------------------------------------------------- 2. Sarvam voice tools (grounded answers, read-only)
+async function testVoiceTools() {
+  head('2. Sarvam voice tools: menu, prices and a quote from the live database (nothing is ordered)');
+  const org = env.GR_ORGANIZATION_ID ?? 'org_gr_chicken';
+  const key = toolKey(org);
+  if (!key) return result('FAIL', 'TELEPHONY_WEBHOOK_SECRET', 'missing or shorter than 32 characters: the voice agent cannot reach its tools');
   const base = (env.PUBLIC_BASE_URL ?? '').replace(/\/$/, '');
-  result(app.body.answer_url === `${base}/voice/inbound` ? 'PASS' : 'FAIL', 'Inbound Answer URL', app.body.answer_url === `${base}/voice/inbound` ? 'matches PUBLIC_BASE_URL' : `should be ${base}/voice/inbound`);
-  result(app.body.hangup_url === `${base}/voice/hangup` ? 'PASS' : 'FAIL', 'Inbound Hangup URL', app.body.hangup_url === `${base}/voice/hangup` ? 'matches PUBLIC_BASE_URL' : `should be ${base}/voice/hangup`);
+  if (!base) return result('SKIP', 'PUBLIC_BASE_URL not set');
+  const call = (tool: string, body: Record<string, unknown> = {}, k = key) =>
+    getJson(`${base}/telephony/sarvam/tools/${tool}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-tacksharp-org': org, 'x-tacksharp-tool-key': k }, body: JSON.stringify(body) });
+  const bad = await call('menu', {}, '0'.repeat(64));
+  result(bad.status === 403 ? 'PASS' : 'FAIL', 'Wrong tool key is refused', `HTTP ${bad.status}`);
+  const menu = await call('menu');
+  if (!menu.ok || !menu.body?.ok) return result('FAIL', 'Menu', `HTTP ${menu.status}`);
+  result(menu.body.items?.length ? 'PASS' : 'FAIL', 'Menu from the database', `${menu.body.items?.length ?? 0} available products; not available today: ${menu.body.unavailable_today}`);
+  lines.push(`\n> ${menu.body.menu_text}`);
+  const ctx = await call('context', {});
+  result(ctx.body?.ok && /Never Hindi/.test(ctx.body?.language_rule ?? '') ? 'PASS' : 'FAIL', 'On-start context (business, shops, no-Hindi rule)', ctx.body?.business_name ?? `HTTP ${ctx.status}`);
+  for (const said of ['broiler', 'naatu kozhi', 'நாட்டுக்கோழி']) {
+    const r = await call('item', { item_name: said });
+    result(r.body?.found ? 'PASS' : 'WARN', `Price for "${said}"`, r.body?.found ? `${r.body.price_text} ${r.body.availability_text}` : r.body?.message ?? `HTTP ${r.status}`);
+  }
+  const unknown = await call('item', { item_name: 'mutton biryani' });
+  result(unknown.body?.found === false ? 'PASS' : 'FAIL', 'Unknown product is not invented', unknown.body?.found === false ? 'answered "not on our menu"' : JSON.stringify(unknown.body).slice(0, 200));
+  const q = await call('quote', { items_text: 'rendu kilo broiler curry cut', pickup_time: 'oru mani nerathula' });
+  result(q.body?.ok ? 'PASS' : 'WARN', 'Tanglish quote priced by the order service (not saved)', q.body?.ok ? q.body.summary_text : q.body?.questions_text ?? q.body?.problems_text ?? q.body?.message ?? `HTTP ${q.status}`);
 }
 
 // ---------------------------------------------------------------- 3. Server
@@ -146,10 +157,8 @@ async function testServer() {
   } catch (e) {
     return result('FAIL', 'GET /health', `unreachable: ${e instanceof Error ? e.message : e}`);
   }
-  for (const p of ['/voice/turn?callId=verify', '/voice/ready/turn?callId=verify', '/voice/feedback/turn?followUpId=verify']) {
-    const r = await getJson(api(p), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'CallUUID=verify' });
-    result(r.status === 403 ? 'PASS' : 'WARN', `Unsigned POST ${p.split('?')[0]} is rejected`, `HTTP ${r.status}${r.status === 403 ? '' : ' (PLIVO_VALIDATE_SIGNATURE is off on the server)'}`);
-  }
+  const wh = await getJson(api('/telephony/sarvam/webhook?org=verify&scope=inbound&t=0'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ interaction_id: 'verify' }) });
+  result(wh.status === 403 ? 'PASS' : 'FAIL', 'Sarvam webhook rejects a bad token', `HTTP ${wh.status}`);
   try {
     await login();
     const me = await authed('/auth/me');
@@ -159,8 +168,8 @@ async function testServer() {
       result(integ.body?.channels?.whatsapp?.connected ? 'PASS' : 'WARN', 'WhatsApp mapped to this tenant', integ.body?.channels?.whatsapp?.connected ? 'yes' : 'no — inbound WhatsApp will not reach GR Chicken');
       for (const r of integ.body?.routing ?? []) {
         if (!r.configured) continue;
-        const what = r.kind === 'plivo_number' ? `Inbound calls to the Plivo number ${r.number}` : `WhatsApp number ${r.number}`;
-        result(r.toThisBusiness ? 'PASS' : 'FAIL', `${what} reach GR Chicken`, r.toThisBusiness ? `via ${r.via}` : `NO — routed to a ${r.vertical} organization (${r.via}). Map it: npm run seed:gr-chicken with ${r.kind === 'plivo_number' ? 'GR_PLIVO_NUMBER' : 'GR_WHATSAPP_PHONE_NUMBER_ID'}`);
+        const what = `WhatsApp number ${r.number}`;
+        result(r.toThisBusiness ? 'PASS' : 'FAIL', `${what} reach GR Chicken`, r.toThisBusiness ? `via ${r.via}` : `NO — routed to a ${r.vertical} organization (${r.via}). Map it: npm run seed:gr-chicken with GR_WHATSAPP_PHONE_NUMBER_ID`);
       }
       result('PASS', 'Server mode', integ.body?.mode ? `DRY_RUN=${integ.body.mode.dryRun} · approved test numbers: ${integ.body.mode.liveTestRecipients}` : 'unknown');
     }
@@ -180,18 +189,19 @@ async function testCall() {
   if (!customer) return result('FAIL', 'Customer', `${mask(phone)} is not a GR Chicken customer yet — message the business on WhatsApp from it first`);
   if (!customer.callingConsent) return result('FAIL', 'Calling consent', `turn on "Follow-up calls" for ${mask(phone)} on the Customers page first`);
   console.log(`Calling ${mask(phone)}. Answer, then say for example:\n  1) "ரெண்டு கிலோ broiler curry cut வேணும்"  2) "rate enna?"  3) "சரி, bye"`);
-  const start = await authed('/voice/call', { method: 'POST', body: JSON.stringify({ customerId: customer.id }) });
-  if (!start.body?.started) return result('FAIL', 'Dial', `not started: ${start.body?.reason ?? start.status} (the server enforces DRY_RUN / LIVE_TEST_RECIPIENTS / consent)`);
+  const start = await authed('/voice/call', { method: 'POST', body: JSON.stringify({ customerId: customer.id, confirm: true }) });
+  if (!start.body?.started) return result('FAIL', 'Dial', `not started: ${start.body?.reason ?? start.status} (the server enforces DRY_RUN / LIVE_TEST_RECIPIENTS / consent / the Sarvam agent for automatic calls)`);
+  // Sarvam reports the call by webhook after it ends.
   const deadline = Date.now() + 6 * 60_000;
   let call: any = null;
   while (Date.now() < deadline) {
-    call = (await authed(`/voice/calls/${start.body.callId}`)).body;
-    if (call?.call?.endedAt) break;
-    await new Promise((r) => setTimeout(r, 3000));
+    const req = (await authed(`/telephony/calls/${start.body.requestId}`)).body;
+    if (req?.callId) { call = (await authed(`/voice/calls/${req.callId}`)).body; break; }
+    await new Promise((r) => setTimeout(r, 5000));
   }
-  if (!call?.call?.endedAt) return result('FAIL', 'Restaurant call', 'did not finish within 6 minutes');
+  if (!call?.call) return result('FAIL', 'Restaurant call', 'no Sarvam webhook within 6 minutes');
   const c = call.call;
-  result(c.turns >= 3 ? 'PASS' : 'FAIL', 'Call stayed open for a multi-turn conversation', `${c.turns} turns · ${c.durationSec ?? 0}s · ended: ${c.endReason ?? c.hangupCause ?? '—'}`);
+  result((call.transcript ?? []).length >= 3 ? 'PASS' : 'FAIL', 'Transcript saved', `${(call.transcript ?? []).length} lines · ${c.durationSec ?? 0}s · summary: ${c.summary ?? '—'}`);
   const transcript = (call.transcript ?? []).map((m: any) => `> **${m.role === 'user' ? 'Customer' : 'AI'}:** ${m.content}`).join('\n');
   const leak = /\b(BHK|property|site visit|apartment|villa|lakhs?)\b/i.test((call.transcript ?? []).filter((m: any) => m.role === 'assistant').map((m: any) => m.content).join(' '));
   result(leak ? 'FAIL' : 'PASS', 'No real-estate words in the assistant\'s lines', leak ? 'found property / BHK words' : 'none');
@@ -202,7 +212,7 @@ async function main() {
   await fs.mkdir(OUT, { recursive: true });
   console.log('GR Chicken live readiness — read-only unless --call is given. No secrets are printed.');
   await testTemplates();
-  await testPlivo();
+  await testVoiceTools();
   await testServer();
   if (args.call) await testCall().catch((e) => result('FAIL', 'Restaurant call', String(e?.message ?? e)));
   const count = (s: Status) => report.filter((r) => r.status === s).length;

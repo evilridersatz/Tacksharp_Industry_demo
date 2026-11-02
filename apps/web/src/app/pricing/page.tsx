@@ -17,7 +17,7 @@ const PLANS = [
 export default function PricingPage() {
   return (
     <SitePage>
-      <SiteHero title="Pay for the plan, bring your own provider accounts" lead="Plans are priced when we activate your organization, based on the plan and number of locations. WhatsApp, Plivo, Sarvam and OpenAI bill you directly for what you use, so there is no markup on messages, minutes or tokens." />
+      <SiteHero title="Pay for the plan, bring your own provider accounts" lead="Plans are priced when we activate your organization, based on the plan and number of locations. WhatsApp, Sarvam and OpenAI bill you directly for what you use, so there is no markup on messages, minutes or tokens." />
       <section className="mx-auto max-w-[1200px] px-4 py-14 sm:px-6">
         <div className="grid gap-5 lg:grid-cols-3">
           {PLANS.map((p) => (

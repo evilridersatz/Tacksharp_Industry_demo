@@ -4,7 +4,7 @@ import { applyOptKeyword, optReply } from '../consent/opt-out.js';
 import type { Job } from 'bullmq';
 import { AiService } from '../ai/ai.service.js';
 import { SarvamService } from '../sarvam/sarvam.service.js';
-import { WhatsAppSenderService, WhatsAppAmbiguousSendError, WhatsAppTransientError } from '../whatsapp/whatsapp-sender.service.js';
+import { MediaRejectedError, WhatsAppSenderService, WhatsAppAmbiguousSendError, WhatsAppTransientError } from '../whatsapp/whatsapp-sender.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { describeError } from '../common/errors.js';
@@ -84,9 +84,12 @@ export class WhatsAppMessageProcessor {
             quality = gate.verdict === 'ok' ? 'ok' : 'weak';
             viaVoiceNote = true;
           } catch (error) {
-            log.error('whatsapp.voice_note_failed', { messageId: data.messageId, error: errorMessage(error) });
+            if (error instanceof MediaRejectedError) {
+              log.warn('whatsapp.voice_note_rejected', { messageId: data.messageId, reason: error.reason });
+              reply = error.reason === 'too_large' ? 'Voice note romba periya size-ah irukku. Chinna voice note illa text-la anuppunga 🙏' : 'Indha file-ah ennala kekka mudiyala. Voice note illa text-la anuppunga 🙏';
+            } else log.error('whatsapp.voice_note_failed', { messageId: data.messageId, error: errorMessage(error) });
           }
-          if (!text) reply = 'Sorry, voice note clear-ah kekkala. Text-la anuppa mudiyuma? 🙏';
+          if (!text && !reply) reply = 'Sorry, voice note clear-ah kekkala. Text-la anuppa mudiyuma? 🙏';
         }
         if (!text && !reply) {
           log.info('whatsapp.unsupported_type', { messageId: data.messageId, type: data.messageType });

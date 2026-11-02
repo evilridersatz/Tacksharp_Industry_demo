@@ -37,9 +37,13 @@ c=$(code -X POST -H 'content-type: application/json' -d "$body" "$API/webhooks/w
 c=$(code -X POST -H 'content-type: application/json' -H 'x-hub-signature-256: sha256=00' -d "$body" "$API/webhooks/whatsapp")
 [ "$c" = "401" ] && ok "badly signed WhatsApp webhook refused (401)" || bad "badly signed WhatsApp webhook" "HTTP $c"
 
-# 4. Plivo signature (no call is created: rejected before any processing)
-c=$(code -X POST -d 'CallUUID=smoke-test&From=910000000000&To=910000000001' "$API/voice/answer")
-[ "$c" = "403" ] && ok "unsigned Plivo callback refused (403: PLIVO_VALIDATE_SIGNATURE enforced)" || bad "unsigned Plivo callback" "HTTP $c (not 403 means Plivo signatures are NOT verified)"
+# 4. Sarvam webhook and voice tools refuse unauthenticated requests (nothing is processed)
+c=$(code -X POST -H 'content-type: application/json' -d '{"interaction_id":"smoke"}' "$API/telephony/sarvam/webhook?org=smoke&scope=inbound&t=0")
+[ "$c" = "403" ] && ok "Sarvam webhook with a bad token refused (403)" || bad "Sarvam webhook token" "HTTP $c (not 403 means the webhook token is NOT checked)"
+c=$(code -X POST -H 'content-type: application/json' -H 'x-tacksharp-org: smoke' -d '{}' "$API/telephony/sarvam/tools/menu")
+[ "$c" = "403" ] && ok "voice tools without a key refused (403)" || bad "voice tools key" "HTTP $c"
+c=$(code -X POST -d 'CallUUID=smoke' "$API/voice/answer")
+[ "$c" = "404" ] && ok "Plivo answer route removed (404)" || bad "Plivo answer route" "HTTP $c (expected 404: Plivo removed)"
 
 # 5. Web
 if [ -n "$WEB" ]; then

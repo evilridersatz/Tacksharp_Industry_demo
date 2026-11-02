@@ -39,7 +39,7 @@ export class AgentsController {
     const set = (...v: string[]) => v.every((x) => Boolean(x));
     return [
       { name: 'WhatsApp Cloud API', status: set(config.whatsapp.accessToken, config.whatsapp.phoneNumberId) ? 'configured' : 'not_configured', note: 'Credentials present; live delivery is verified only by real sends.' },
-      { name: 'Plivo voice', status: set(config.plivo.authId, config.plivo.authToken, config.plivo.fromNumber) ? 'configured' : 'not_configured', note: 'Outbound / inbound AI calls.' },
+      { name: 'Sarvam voice agents (telephony)', status: set(process.env.SARVAM_AGENTS_API_KEY ?? '', process.env.SARVAM_AGENTS_ORG_ID ?? '', process.env.SARVAM_AGENTS_WORKSPACE_ID ?? '', process.env.SARVAM_AGENTS_CONNECTION_ID ?? '') ? 'configured' : 'not_configured', note: 'Inbound / outbound AI calls (deployment-level; organizations can use their own Sarvam account).' },
       { name: 'Sarvam speech', status: set(config.sarvam.apiKey) ? 'configured' : 'not_configured', note: 'Speech-to-text and text-to-speech for calls.' },
       { name: 'AI model (OpenAI / compatible)', status: llm ? 'configured' : 'not_configured', note: llm ? 'Conversation assistant and Marketing drafts (grounded in approved catalogue facts). Other agent tasks make no model calls.' : 'Not configured: Marketing drafts use templates.' },
       { name: 'Meta Lead Ads', status: set(config.meta.pageAccessToken) ? 'configured' : 'not_configured', note: 'Leads arrive with source / campaign for attribution.' },

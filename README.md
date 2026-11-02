@@ -1,5 +1,7 @@
 # Tacksharp
 
+> **2026-11-02: Plivo was removed.** All phone calls run on Sarvam voice agents; Plivo sections below are history. See [GR-CHICKEN-SARVAM-LAUNCH.md](GR-CHICKEN-SARVAM-LAUNCH.md).
+
 AI employees platform: one codebase, one database, several businesses (tenants). Each tenant runs one product:
 
 | Vertical | Tenant example | What the AI does |

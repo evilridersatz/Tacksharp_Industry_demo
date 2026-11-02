@@ -41,8 +41,9 @@ export interface WhatsAppTransport {
 }
 
 /** What the follow-up processor needs from the voice provider. */
+export type VoiceDialRequest = { organizationId: string; customerId: string; to: string; idempotencyKey: string; purpose: string; variables?: Record<string, string> };
 export interface VoiceTransport {
-  dial(input: { from: string; to: string; answerUrl: string; hangupUrl: string }): Promise<{ requestId?: string; simulated: boolean }>;
+  dial(input: VoiceDialRequest): Promise<{ requestId?: string; simulated: boolean; reason?: string }>;
 }
 
 /** Dry-run WhatsApp: records the request, contacts nobody. */
@@ -56,8 +57,8 @@ export class MockWhatsAppTransport implements WhatsAppTransport {
 
 /** Dry-run voice: records the request, dials nobody. */
 export class MockVoiceTransport implements VoiceTransport {
-  readonly dialed: Array<{ from: string; to: string; answerUrl: string; hangupUrl: string }> = [];
-  async dial(input: { from: string; to: string; answerUrl: string; hangupUrl: string }) {
+  readonly dialed: VoiceDialRequest[] = [];
+  async dial(input: VoiceDialRequest) {
     this.dialed.push(input);
     return { requestId: `dryrun-call-${randomUUID()}`, simulated: true };
   }
@@ -80,11 +81,13 @@ export class LiveWhatsAppTransport implements WhatsAppTransport {
   }
 }
 
-/** Real calls through the existing Plivo dialer used by the order-ready call. */
-export class LiveVoiceTransport implements VoiceTransport {
-  constructor(private readonly dialer: (from: string, to: string, answerUrl: string, hangupUrl: string) => Promise<{ requestUuid?: string }>) {}
-  async dial(input: { from: string; to: string; answerUrl: string; hangupUrl: string }) {
-    const r = await this.dialer(input.from, input.to, input.answerUrl, input.hangupUrl);
-    return { requestId: r.requestUuid, simulated: false };
+/** Real calls: Sarvam outbound through TelephonyService (consent, hours, limits, DRY_RUN gates; no Plivo). */
+export class SarvamVoiceTransport implements VoiceTransport {
+  constructor(private readonly telephony?: { placeSystemCall(input: Omit<VoiceDialRequest, 'to'>): Promise<{ started: boolean; requestId?: string; reason?: string; dryRun?: boolean }> }) {}
+  async dial(input: VoiceDialRequest) {
+    if (!this.telephony) return { simulated: false, reason: 'telephony not available' };
+    const { to: _to, ...rest } = input;
+    const r = await this.telephony.placeSystemCall(rest);
+    return r.started ? { requestId: r.requestId, simulated: Boolean(r.dryRun) } : { simulated: false, reason: r.reason };
   }
 }

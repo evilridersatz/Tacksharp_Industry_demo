@@ -121,35 +121,35 @@ with sync_playwright() as p:
 
         # ---------------------------------------------------------------- integrations (A, admin)
         a.goto(WEB + '/settings/integrations'); a.wait_for_timeout(2500)
-        check('integrations: list shows Plivo and WhatsApp, not connected', a.get_by_text('Plivo voice').count() >= 1 and a.get_by_test_id('integration-plivo').get_by_text('Not connected').count() == 1 and a.get_by_test_id('integration-whatsapp').get_by_text('Not connected').count() == 1)
+        check('integrations: list shows Sarvam voice agents and WhatsApp (no Plivo), not connected', a.get_by_text('Sarvam Voice Agents (telephony)').count() >= 1 and a.get_by_test_id('integration-sarvam_telephony').get_by_text('Not connected').count() == 1 and a.get_by_test_id('integration-whatsapp').get_by_text('Not connected').count() == 1 and a.get_by_test_id('integration-plivo').count() == 0)
         check('integrations: a self-service org does not use the platform account', a.get_by_text('Provided by Tacksharp').count() == 0 and a.get_by_test_id('channel-voice').get_by_text('Not connected').count() == 1)
-        a.goto(WEB + '/settings/integrations/plivo'); a.wait_for_timeout(2500)
-        SECRET = f'plivo-ui-secret-{run}-ZZ'
-        a.get_by_label('Auth ID', exact=True).fill(f'MAUITEST{run}AAAA')
-        a.get_by_label('Auth Token', exact=True).fill(SECRET)
-        a.get_by_label('Outbound caller ID', exact=True).fill('+91 44 0000 0001')
+        a.goto(WEB + '/settings/ai-providers/sarvam'); a.wait_for_timeout(2500)
+        SECRET = f'sarvam-ui-secret-{run}-ZZ'
+        a.get_by_label('API key', exact=True).fill(SECRET)
         a.get_by_role('button', name='Save configuration').click(); a.wait_for_timeout(2500)
         check('integrations: saved, shown as "Saved, not tested" (saving is not a passing test)', a.get_by_text('Saved, not tested').count() >= 1)
         check('integrations: the token is masked, never shown', SECRET not in a.content() and a.get_by_placeholder(f'Saved ••••{SECRET[-4:]} — type to replace').count() == 1)
-        g = aapi('/integrations/plivo')
-        check('integrations: API response contains no secret', SECRET not in g['raw'] and g['body']['secrets']['authToken'] == '••••' + SECRET[-4:])
-        check('integrations: stored encrypted in the database', SECRET not in sql(f"SELECT secretCiphertext FROM IntegrationCredential WHERE organizationId='{A}' AND provider='plivo'"))
+        g = aapi('/integrations/sarvam')
+        check('integrations: API response contains no secret', SECRET not in g['raw'] and g['body']['secrets']['apiKey'] == '••••' + SECRET[-4:])
+        check('integrations: stored encrypted in the database', SECRET not in sql(f"SELECT secretCiphertext FROM IntegrationCredential WHERE organizationId='{A}' AND provider='sarvam'"))
         check('integrations: "Enable" disabled until a test passes', a.get_by_role('button', name='Enable integration').is_disabled())
-        check('integrations: enabling via the API is refused too', aapi('/integrations/plivo/enable', {'enabled': True})['status'] == 400)
+        check('integrations: enabling via the API is refused too', aapi('/integrations/sarvam/enable', {'enabled': True})['status'] == 400)
         a.get_by_role('button', name='Test connection').click(); a.wait_for_timeout(12000)
-        t = aapi('/integrations/plivo')['body']
+        t = aapi('/integrations/sarvam')['body']
         check('integrations: an unreachable provider is reported as a failure (never as connected)', t['status'] == 'failed' and t['lastError'] and SECRET not in t['lastError'], (t.get('lastError') or '')[:120])
-        a.screenshot(path=os.path.join(SHOTS, 'integrations-plivo.png'), full_page=True)
+        a.screenshot(path=os.path.join(SHOTS, 'integrations-sarvam.png'), full_page=True)
         check('integrations: unsupported OpenAI model refused by the server', aapi('/integrations/openai', {'apiKey': 'sk-test-abcdefgh', 'model': 'gpt-3.5-turbo'}, 'PUT')['status'] == 400)
-        check('integrations: B does not see A\'s Plivo configuration', (bapi('/integrations/plivo')['body'] or {}).get('saved') is False)
-        check('integrations: test call refused while pending / dry run', aapi('/integrations/plivo/test/call', {'to': '919800011122', 'confirm': True})['status'] == 403)
+        check('integrations: B does not see A\'s Sarvam configuration', (bapi('/integrations/sarvam')['body'] or {}).get('saved') is False)
+        aapi('/integrations/sarvam_telephony', {'apiKey': f'sk-agents-{run}-ZZZZ', 'orgId': 'org1', 'workspaceId': 'ws1', 'connectionId': 'conn1', 'agentPhoneNumber': '918064269808'}, 'PUT')
+        check('integrations: test call refused while pending / dry run', aapi('/integrations/sarvam_telephony/test/call', {'to': '919800011122', 'confirm': True, 'appId': 'app-1'})['status'] == 403)
+        check('integrations: Plivo is gone (404), its settings page too', aapi('/integrations/plivo')['status'] == 404)
 
         # roles: operator cannot see or change integrations; manager can see, not change
         for role in ('operator', 'manager'):
             inv = aapi('/team/invitations', {'email': f'{role}-{run}@example.test', 'role': role})['body']
             c2 = b.new_context(); p2 = c2.new_page(); p2.goto(WEB + '/welcome'); api2 = fetcher(p2)
             acc = api2('/team/links/accept', {'token': inv['token'], 'name': role, 'password': 'role passphrase for test'})
-            got, put = api2('/integrations/plivo')['status'], api2('/integrations/plivo', {'authToken': 'x' * 20}, 'PUT')['status']
+            got, put = api2('/integrations/sarvam')['status'], api2('/integrations/sarvam', {'apiKey': 'x' * 20}, 'PUT')['status']
             expect_get = 403 if role == 'operator' else 200
             check(f'roles: {role} sees integrations = {expect_get == 200}, cannot save (server-enforced)', acc['status'] in (200, 201) and got == expect_get and put == 403, f'accept={acc["status"]} get={got} put={put}')
             c2.close()

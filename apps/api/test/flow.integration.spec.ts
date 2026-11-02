@@ -12,10 +12,7 @@ if (enabled) {
   process.env.DB_NAME = process.env.TEST_DB_NAME;
   process.env.DB_HOST ??= '127.0.0.1';
   process.env.REDIS_HOST ??= '127.0.0.1';
-  process.env.PLIVO_AUTH_ID = 'test';
-  process.env.PLIVO_AUTH_TOKEN = 'test';
-  process.env.PLIVO_FROM_NUMBER = '914400000000';
-  process.env.WHATSAPP_PHONE_NUMBER_ID = 'wa-phone-1';
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'wa-phone-1';
   process.env.PUBLIC_BASE_URL = 'https://example.test';
 }
 
@@ -46,15 +43,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
     markReplyNotHeard: vi.fn(),
     likelyFirstReplies: vi.fn(() => []),
   };
-  const sarvamStub = {
-    keyterms: [] as string[],
-    speechToText: vi.fn(),
-    textToSpeechUrl: vi.fn(async (_text: string) => 'https://example.test/voice/audio/x.wav'),
-    textToSpeech: vi.fn(async (_text: string, _o?: unknown): Promise<{ url: string; ms: number; attempts: number; cached: boolean; languageCode: string; error?: string }> => ({ url: 'https://example.test/voice/audio/x.wav', ms: 1, attempts: 1, cached: false, languageCode: 'ta-IN' })),
-    languageFor: () => 'ta-IN',
-    deleteAudio: vi.fn(async (_files: string[]) => undefined),
-  };
-  const voiceStub = { startOutboundCall: vi.fn() };
+  const voiceStub = { placeSystemCall: vi.fn() };
   // Scripted language model for the real ConversationEngine: by default it must not be needed.
   const llmFake = { run: vi.fn(async (_args: any) => ({ text: '', failed: false, aborted: false, usage: { requests: 0 } })) };
   const whatsappStub = { sendWithinPolicy: vi.fn() };
@@ -70,7 +59,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       ...(await import('../src/site-visits/site-visits.service.js')),
       ...(await import('../src/ai/ai.service.js')),
       ...(await import('../src/webhooks/meta-leads/meta-leads.service.js')),
-      ...(await import('../src/voice/voice.service.js')),
+      ...(await import('../src/telephony/telephony.service.js')),
       ...(await import('../src/workers/follow-up.processor.js')),
       ...(await import('../src/webhooks/whatsapp.service.js')),
       ...(await import('../src/tenancy/tenancy.service.js')),
@@ -90,7 +79,8 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
     engine = new m.ConversationEngine(prisma, conversations, leads, properties, siteVisits, followUps, store, llmFake);
     ai = aiStub;
     meta = new m.MetaLeadsService(prisma, leads, followUps, tenancy);
-    voice = new m.VoiceService(prisma, aiStub, conversations, leads, followUps, sarvamStub, tenancy);
+    voice = new m.TelephonyService(prisma, followUps);
+    voice.sarvam.fetchImpl = vi.fn(async () => { throw new Error('no real Sarvam call in tests'); });
     processor = new m.FollowUpProcessor(prisma, conversations, leads, voiceStub, whatsappStub);
     whatsappWebhook = new m.WhatsAppService(prisma, followUps, tenancy, undefined, conversations, new m.InboundMessageService(prisma));
   });
@@ -117,7 +107,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
 
   // ---------------------------------------------------------------- dedup
   describe('lead deduplication', () => {
-    it('same person in Meta / WhatsApp / Plivo formats is ONE customer and ONE lead', async () => {
+    it('same person in Meta / WhatsApp / phone-call formats is ONE customer and ONE lead', async () => {
       const p = uniquePhone();
       const a = await leads.createLead({ organizationId: ORG, phone: `+91 ${p}`, source: 'meta_lead_ads', budget: '80 lakhs' });
       const b = await leads.createLead({ organizationId: ORG, phone: `91${p}`, source: 'whatsapp' });
@@ -198,7 +188,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       await prisma.customer.update({ where: { id: lead.customerId }, data: { lastInboundAt: new Date(Date.now() + 1000) } });
       const fu = await prisma.followUp.findFirst({ where: { leadId: lead.leadId, channel: 'voice' } });
       expect(await processor.process(fu.id)).toEqual({ skipped: 'customer_replied' });
-      expect(voiceStub.startOutboundCall).not.toHaveBeenCalled();
+      expect(voiceStub.placeSystemCall).not.toHaveBeenCalled();
     });
 
     it('processor skips do-not-contact and closed leads', async () => {
@@ -215,10 +205,10 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
 
     it('processor places the call for the voice step when nothing has changed', async () => {
       const lead = await newMetaLead();
-      voiceStub.startOutboundCall.mockResolvedValue({ started: true, callId: 'call-x' });
+      voiceStub.placeSystemCall.mockResolvedValue({ started: true, requestId: 'req-x' });
       const fu = await prisma.followUp.findFirst({ where: { leadId: lead.leadId, channel: 'voice' } });
-      expect(await processor.process(fu.id)).toEqual({ callId: 'call-x' });
-      expect(voiceStub.startOutboundCall).toHaveBeenCalledWith(expect.objectContaining({ customerId: lead.customerId, leadId: lead.leadId }));
+      expect(await processor.process(fu.id)).toEqual({ requestId: 'req-x' });
+      expect(voiceStub.placeSystemCall).toHaveBeenCalledWith(expect.objectContaining({ customerId: lead.customerId, purpose: 'lead_followup', idempotencyKey: fu.id, variables: { lead_id: lead.leadId } }));
       expect((await prisma.followUp.findUnique({ where: { id: fu.id } })).status).toBe('completed');
     });
 
@@ -232,7 +222,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       await prisma.call.create({ data: { organizationId: ORG, customerId: b.customerId, leadId: b.leadId, direction: 'outbound', status: 'completed', toNumber: b.phone, fromNumber: 'x' } });
       const fb = await prisma.followUp.findFirst({ where: { leadId: b.leadId, channel: 'voice' } });
       expect(await processor.process(fb.id)).toEqual({ skipped: 'already_spoke_on_call' });
-      expect(voiceStub.startOutboundCall).not.toHaveBeenCalled();
+      expect(voiceStub.placeSystemCall).not.toHaveBeenCalled();
     });
 
     it('processor stops automatic calls after the maximum number of attempts', async () => {
@@ -244,7 +234,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       const fu = await prisma.followUp.findFirst({ where: { leadId: lead.leadId, channel: 'voice' } });
       expect(await processor.process(fu.id)).toEqual({ skipped: 'max_call_attempts' });
       expect((await prisma.followUp.findUnique({ where: { id: fu.id } })).cancellationReason).toBe('max_call_attempts');
-      expect(voiceStub.startOutboundCall).not.toHaveBeenCalled();
+      expect(voiceStub.placeSystemCall).not.toHaveBeenCalled();
     });
 
     it('processor never calls twice within the minimum gap: it reschedules instead', async () => {
@@ -254,7 +244,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       const r = await processor.process(fu.id);
       expect(r.reason).toBe('recent_contact');
       expect(new Date(r.rescheduled).getTime()).toBeGreaterThan(Date.now());
-      expect(voiceStub.startOutboundCall).not.toHaveBeenCalled();
+      expect(voiceStub.placeSystemCall).not.toHaveBeenCalled();
     });
 
     it('WhatsApp step without template and closed window is skipped, not failed', async () => {
@@ -352,360 +342,6 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
     });
   });
 
-  // ---------------------------------------------------------------- call identity
-  describe('voice call identity', () => {
-    async function makeCall(status = 'ringing', attempt = 1) {
-      const lead = await newMetaLead();
-      const call = await prisma.call.create({
-        data: {
-          organizationId: ORG, customerId: lead.customerId, leadId: lead.leadId, direction: 'outbound',
-          status, toNumber: lead.phone, fromNumber: '914400000000', attempt,
-        },
-      });
-      return { lead, call };
-    }
-
-    it('answer resolves the customer from callId and ignores Plivo From/To', async () => {
-      const { lead, call } = await makeCall();
-      const xml = await voice.answerOutbound(call.id, { CallUUID: 'uuid-1', From: '914400000000', To: '910000000000' });
-      expect(xml).toContain(`/voice/turn?callId=${call.id}`);
-      const updated = await prisma.call.findUnique({ where: { id: call.id } });
-      expect(updated.providerCallId).toBe('uuid-1');
-      expect(updated.status).toBe('in_progress');
-      const spoken = String((sarvamStub.textToSpeechUrl.mock.calls.at(-1) as unknown[] | undefined)?.[0] ?? '');
-      expect(spoken).toContain('Ravi'); // the lead's own name, not a lookup by From
-      expect(spoken).toContain('Porur');
-      const conv = await prisma.conversation.findFirst({ where: { customerId: lead.customerId, channel: 'voice' } });
-      expect(conv.externalId).toBe(lead.phone);
-    });
-
-    it('turn: recorded audio bytes reach STT, AI runs for the CALL customer (not From)', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const audio = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4000, 7)]);
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(audio, { status: 200 }));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Porur la 2 BHK iruka?', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'சரி, Porur-ல ஒரு option இருக்கு.', actions: {}, timings: {}, leadId: lead.leadId });
-
-      const xml = await voice.handleTurn(call.id, {
-        RecordUrl: 'https://media.plivo.test/rec-1.wav', RecordingDurationMs: '2300', From: '919999999999', CallUUID: 'uuid-2',
-      });
-      const fetchedUrls = fetchSpy.mock.calls.map((c) => String(c[0]));
-      fetchSpy.mockRestore();
-
-      expect(fetchedUrls).toContain('https://media.plivo.test/rec-1.wav');
-      expect(Buffer.compare(sarvamStub.speechToText.mock.calls[0][0], audio)).toBe(0);
-      expect(aiStub.generateResponse).toHaveBeenCalledWith(
-        expect.objectContaining({ phone: lead.phone, channel: 'voice', callContext: expect.objectContaining({ callId: call.id }) }),
-      );
-      expect(xml).toContain('<Play>');
-      expect(xml).toContain('<Record');
-      await aiStub.settle(`call:${call.id}`); // the Call row is updated after the audio is on its way
-      const updated = await prisma.call.findUnique({ where: { id: call.id } });
-      expect(updated.turns).toBe(1);
-      // The language is whatever the engine established from the transcript - never the raw STT label.
-      expect(updated.language).toBeNull();
-    });
-
-    it('Call.language is saved only when the engine reports an established language (a pa-IN label is ignored)', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 1)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Porur la 2 BHK venum', languageCode: 'pa-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'சரி.', actions: {}, timings: {}, leadId: lead.leadId, language: 'ta-IN', path: 'rules' });
-      await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/pa.wav', RecordingDurationMs: '1800' });
-      fetchSpy.mockRestore();
-      await aiStub.settle(`call:${call.id}`);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).language).toBe('ta-IN');
-      expect((await prisma.customer.findUnique({ where: { id: lead.customerId } })).language).not.toBe('pa-IN');
-    });
-
-    it('a turn the engine ends hangs up and stores the outcome', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 1)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Enakku vendam', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({
-        response: 'சரி, Thank you!', actions: { endCall: true, outcome: 'not_interested' }, timings: {}, leadId: lead.leadId,
-      });
-      const xml = await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/r.wav', RecordingDurationMs: '1500' });
-      fetchSpy.mockRestore();
-      expect(xml).toContain('<Hangup/>');
-      await aiStub.settle(`call:${call.id}`);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).outcome).toBe('not_interested');
-    });
-
-    it('TTS fails for a Tamil reply: the customer is asked to repeat (never an unrelated line) and the reply counts as unheard', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 1), { status: 200 }));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Saturday 11 மணிக்கு', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'Green Valley site visit, சனிக்கிழமை 11 மணி. Confirm பண்ணட்டுமா?', actions: {}, timings: {}, leadId: lead.leadId, path: 'rules' });
-      sarvamStub.textToSpeech.mockResolvedValueOnce({ url: '', ms: 8000, attempts: 3, cached: false, languageCode: 'ta-IN', error: 'http_429' });
-      sarvamStub.textToSpeechUrl.mockResolvedValueOnce('https://example.test/voice/audio/prompt-line.wav');
-      const xml = await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/t1.wav', RecordingDurationMs: '2000', CallUUID: 'u-tts' });
-      fetchSpy.mockRestore();
-      expect(aiStub.markReplyNotHeard).toHaveBeenCalledWith(`call:${call.id}`);
-      expect(sarvamStub.textToSpeechUrl).toHaveBeenCalledWith(expect.stringContaining('line'), { cache: true });
-      expect(xml).toContain('prompt-line.wav');
-      expect(xml).toContain('<Record');
-      await aiStub.settle(`call:${call.id}`);
-    });
-
-    it('TTS fails for an English reply: Plivo speaks the SAME words', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 1), { status: 200 }));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'I need a 2 BHK in Porur', languageCode: 'en-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'Got it. Porur, 2 BHK. What is your budget range?', actions: {}, timings: {}, leadId: lead.leadId, path: 'rules' });
-      sarvamStub.textToSpeech.mockResolvedValueOnce({ url: '', ms: 8000, attempts: 3, cached: false, languageCode: 'en-IN', error: 'http_503' });
-      const xml = await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/t2.wav', RecordingDurationMs: '2000', CallUUID: 'u-tts2' });
-      fetchSpy.mockRestore();
-      expect(xml).toContain('<Speak');
-      expect(xml).toContain('What is your budget range?');
-      await aiStub.settle(`call:${call.id}`);
-    });
-
-    it('after a reply, a second empty recording replays our last question (no AI, no state change)', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 1), { status: 200 }));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Porur la 2 BHK venum', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'Budget எவ்வளவு?', actions: {}, timings: {}, leadId: lead.leadId, path: 'rules' });
-      sarvamStub.textToSpeech.mockResolvedValueOnce({ url: 'https://example.test/voice/audio/prompt-budget.wav', ms: 1, attempts: 1, cached: true, languageCode: 'ta-IN' });
-      await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/t3.wav', RecordingDurationMs: '2000', CallUUID: 'u-s1' });
-      fetchSpy.mockRestore();
-      aiStub.generateResponse.mockClear();
-      const first = await voice.handleTurn(call.id, { RecordingDurationMs: '0', CallUUID: 'u-s2' });
-      const second = await voice.handleTurn(call.id, { RecordingDurationMs: '0', CallUUID: 'u-s3' });
-      expect(first).not.toContain('prompt-budget.wav');
-      expect(second).toContain('prompt-budget.wav');
-      expect(aiStub.generateResponse).not.toHaveBeenCalled();
-      await aiStub.settle(`call:${call.id}`);
-    });
-
-    it('silence twice then goodbye; AI is never called', async () => {
-      const { call } = await makeCall('in_progress');
-      expect(await voice.handleTurn(call.id, { RecordingDurationMs: '0' })).toContain('<Record');
-      expect(await voice.handleTurn(call.id, { RecordingDurationMs: '0' })).toContain('<Record');
-      expect(await voice.handleTurn(call.id, { RecordingDurationMs: '0' })).toContain('<Hangup/>');
-      expect(aiStub.generateResponse).not.toHaveBeenCalled();
-    });
-
-    // ------------------------------------------------------------ hangup / retry
-    it('completed call saves duration + outcome, marks contacted, cancels the sequence', async () => {
-      const { lead, call } = await makeCall('in_progress');
-      await prisma.call.update({ where: { id: call.id }, data: { answeredAt: new Date(), outcome: 'qualified' } });
-      await voice.handleHangup(call.id, { CallStatus: 'completed', HangupCauseName: 'Normal Hangup', Duration: '74' });
-      const c = await prisma.call.findUnique({ where: { id: call.id } });
-      expect(c).toMatchObject({ status: 'completed', outcome: 'qualified', durationSec: 74 });
-      expect((await prisma.lead.findUnique({ where: { id: lead.leadId } })).status).toBe('contacted');
-      expect(await prisma.followUp.count({ where: { customerId: lead.customerId, status: 'scheduled' } })).toBe(0);
-    });
-
-    it('no answer on attempt 1 schedules ONE retry inside calling hours; duplicate hangup ignored', async () => {
-      const { lead, call } = await makeCall();
-      await followUps.cancelPending({ organizationId: ORG, customerId: lead.customerId, reason: 'test isolation' });
-      await voice.handleHangup(call.id, { CallStatus: 'no-answer', HangupCauseName: 'No Answer' });
-      expect(await voice.handleHangup(call.id, { CallStatus: 'no-answer' })).toEqual({ ok: true, duplicate: true });
-      const retries = await prisma.followUp.findMany({ where: { customerId: lead.customerId, source: 'retry', channel: 'voice' } });
-      expect(retries).toHaveLength(1);
-      // Attempt 2 comes ~30 minutes later (pushed into the calling window if needed).
-      expect(retries[0].scheduledAt.getTime() - Date.now()).toBeGreaterThan(25 * 60_000);
-      // ...and a "sorry we missed you" WhatsApp goes out a couple of minutes after the missed call.
-      const missed = await prisma.followUp.findMany({ where: { customerId: lead.customerId, source: 'retry', channel: 'whatsapp' } });
-      expect(missed.map((f: any) => f.message)).toEqual(['missed_call']);
-      expect(missed[0].scheduledAt.getTime() - Date.now()).toBeLessThan(3 * 60_000);
-      const hourIst = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(retries[0].scheduledAt)) % 24;
-      expect(hourIst).toBeGreaterThanOrEqual(9);
-      expect(hourIst).toBeLessThan(21);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).outcome).toBe('no_answer');
-    });
-
-    it('busy is retried; the last allowed attempt is not', async () => {
-      const a = await makeCall();
-      await followUps.cancelPending({ organizationId: ORG, customerId: a.lead.customerId, reason: 'test isolation' });
-      await voice.handleHangup(a.call.id, { CallStatus: 'busy', HangupCauseName: 'Busy Line' });
-      expect(await prisma.followUp.count({ where: { customerId: a.lead.customerId, source: 'retry', channel: 'voice' } })).toBe(1);
-
-      const b = await makeCall('ringing', 3);
-      await followUps.cancelPending({ organizationId: ORG, customerId: b.lead.customerId, reason: 'test isolation' });
-      await voice.handleHangup(b.call.id, { CallStatus: 'no-answer' });
-      // Third (last) attempt: no more calls, and the missed-call WhatsApp is only for the first miss.
-      expect(await prisma.followUp.count({ where: { customerId: b.lead.customerId, source: 'retry' } })).toBe(0);
-    });
-
-    it('invalid number → lead lost, do-not-contact, no retry', async () => {
-      const { lead, call } = await makeCall();
-      await voice.handleHangup(call.id, { CallStatus: 'failed', HangupCauseName: 'Invalid Destination Address' });
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).outcome).toBe('invalid_number');
-      expect((await prisma.lead.findUnique({ where: { id: lead.leadId } })).status).toBe('lost');
-      expect((await prisma.customer.findUnique({ where: { id: lead.customerId } })).doNotContact).toBe(true);
-      expect(await prisma.followUp.count({ where: { customerId: lead.customerId, source: 'retry' } })).toBe(0);
-    });
-
-    it('outbound dial refuses a second live call to the same customer', async () => {
-      const { lead } = await makeCall('in_progress');
-      const r = await voice.startOutboundCall({ customerId: lead.customerId, leadId: lead.leadId, ignoreCallWindow: true });
-      expect(r).toEqual({ started: false, reason: 'call_already_in_progress' });
-    });
-  });
-  // ---------------------------------------------------------------- inbound voice
-  describe('inbound voice (customer calls the business)', () => {
-    const uuid = () => `in-${Date.now()}-${n++}`;
-
-    it('unknown caller: creates customer + lead + inbound call and answers in Tamil', async () => {
-      const phone = `91${uniquePhone()}`;
-      const callUuid = uuid();
-      const xml = await voice.answerInbound({ From: `+${phone}`, To: '914400000000', CallUUID: callUuid });
-      const customer = await prisma.customer.findFirst({ where: { phone } });
-      const call = await prisma.call.findFirst({ where: { providerCallId: callUuid } });
-      expect(customer).toBeTruthy();
-      expect(await prisma.lead.count({ where: { customerId: customer.id } })).toBe(1);
-      expect(call).toMatchObject({ direction: 'inbound', status: 'in_progress', customerId: customer.id, fromNumber: phone });
-      expect(xml).toContain(`/voice/turn?callId=${call.id}`);
-      expect(xml).not.toContain('<Speak'); // Tamil Bulbul audio, no English Plivo prompt
-      expect(String(sarvamStub.textToSpeechUrl.mock.calls.at(-1)?.[0])).toContain('வணக்கம்');
-    });
-
-    it('known caller: greeted by name, existing lead reused, opted-out flag cleared', async () => {
-      const lead = await newMetaLead();
-      await prisma.customer.update({ where: { id: lead.customerId }, data: { doNotContact: true } });
-      await voice.answerInbound({ From: lead.phone, To: '914400000000', CallUUID: uuid() });
-      expect(String(sarvamStub.textToSpeechUrl.mock.calls.at(-1)?.[0])).toContain('Ravi');
-      expect(await prisma.lead.count({ where: { customerId: lead.customerId } })).toBe(1);
-      expect((await prisma.customer.findUnique({ where: { id: lead.customerId } })).doNotContact).toBe(false);
-    });
-
-    it('Plivo retrying the answer webhook does not create a second call', async () => {
-      const phone = `91${uniquePhone()}`;
-      const callUuid = uuid();
-      await voice.answerInbound({ From: phone, To: '914400000000', CallUUID: callUuid });
-      await voice.answerInbound({ From: phone, To: '914400000000', CallUUID: callUuid });
-      expect(await prisma.call.count({ where: { providerCallId: callUuid } })).toBe(1);
-    });
-
-    it('same Voice AI agent, told the customer called (not a follow-up); hang-up resolved by CallUUID', async () => {
-      const lead = await newMetaLead();
-      const callUuid = uuid();
-      await voice.answerInbound({ From: lead.phone, To: '914400000000', CallUUID: callUuid });
-      const call = await prisma.call.findFirst({ where: { providerCallId: callUuid } });
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 2)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Saturday site visit pannalaama?', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'சரி!', actions: { outcome: 'site_visit_requested' }, timings: {}, leadId: lead.leadId });
-      await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/in-1.wav', RecordingDurationMs: '2000', From: lead.phone });
-      fetchSpy.mockRestore();
-      const ctxArg = aiStub.generateResponse.mock.calls[0][0];
-      expect(ctxArg.channel).toBe('voice');
-      expect(ctxArg.callContext.direction).toBe('inbound');
-      expect(ctxArg.callContext.reason).toContain('called the business');
-
-      await voice.handleHangup(undefined, { CallUUID: callUuid, CallStatus: 'completed', Duration: '48' });
-      const ended = await prisma.call.findUnique({ where: { id: call.id } });
-      expect(ended).toMatchObject({ status: 'completed', outcome: 'site_visit_requested', durationSec: 48 });
-      expect(ended.summary).toContain('Customer called in. Customer wants a site visit.');
-      expect(sarvamStub.deleteAudio).toHaveBeenCalled(); // per-call audio cleaned up
-    });
-
-    it('hidden caller ID is answered politely and hung up', async () => {
-      const xml = await voice.answerInbound({ From: 'anonymous', To: '914400000000', CallUUID: uuid() });
-      expect(xml).toContain('<Hangup/>');
-    });
-  });
-
-  // ---------------------------------------------------------------- duplicate Plivo webhooks / state
-  describe('duplicate Plivo webhooks and call state', () => {
-    async function liveCall() {
-      const lead = await newMetaLead();
-      const call = await prisma.call.create({
-        data: { organizationId: ORG, customerId: lead.customerId, leadId: lead.leadId, direction: 'outbound', status: 'ringing', toNumber: lead.phone, fromNumber: '914400000000' },
-      });
-      return { lead, call };
-    }
-
-    it('answer webhook twice: greeting saved once, same XML', async () => {
-      const { lead, call } = await liveCall();
-      const a = await voice.answerOutbound(call.id, { CallUUID: 'dup-a' });
-      const b = await voice.answerOutbound(call.id, { CallUUID: 'dup-a' });
-      expect(b).toBe(a);
-      await aiStub.settle(`call:${call.id}`);
-      const conv = await prisma.conversation.findFirst({ where: { customerId: lead.customerId, channel: 'voice' } });
-      expect(await prisma.message.count({ where: { conversationId: conv.id, role: 'assistant' } })).toBe(1);
-    });
-
-    it('turn webhook retried with the same recording: AI runs once', async () => {
-      const { lead, call } = await liveCall();
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(Buffer.alloc(3000, 3)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Porur la 2 BHK iruka?', languageCode: 'ta-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'சரி.', actions: {}, timings: {}, leadId: lead.leadId });
-      const params = { RecordUrl: 'https://media.plivo.test/same.wav', RecordingDurationMs: '1800' };
-      const x1 = await voice.handleTurn(call.id, params);
-      const x2 = await voice.handleTurn(call.id, params);
-      fetchSpy.mockRestore();
-      expect(x2).toBe(x1);
-      expect(aiStub.generateResponse).toHaveBeenCalledTimes(1);
-      await aiStub.settle(`call:${call.id}`);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).turns).toBe(1);
-    });
-
-    it('a turn after the call ended does nothing', async () => {
-      const { call } = await liveCall();
-      await prisma.call.update({ where: { id: call.id }, data: { endedAt: new Date(), status: 'completed' } });
-      expect(await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/late.wav', RecordingDurationMs: '1500' })).toContain('<Hangup/>');
-      expect(aiStub.generateResponse).not.toHaveBeenCalled();
-    });
-
-    it('AI failure or timeout: polite goodbye and hang up, never dead air', async () => {
-      const { lead, call } = await liveCall();
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 4)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'hello', languageCode: 'en-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'technical issue', actions: {}, timings: {}, leadId: lead.leadId, failed: true });
-      const xml = await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/fail.wav', RecordingDurationMs: '1500' });
-      fetchSpy.mockRestore();
-      expect(xml).toContain('<Hangup/>');
-    });
-
-    it('a single English utterance does not change the saved customer language (voice layer never writes it)', async () => {
-      const { lead, call } = await liveCall();
-      await prisma.customer.update({ where: { id: lead.customerId }, data: { language: null } });
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 5)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Please speak in English', languageCode: 'en-IN', latencyMs: 5 });
-      aiStub.generateResponse.mockResolvedValue({ response: 'Sure.', actions: {}, timings: {}, leadId: lead.leadId, path: 'llm' });
-      await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/en.wav', RecordingDurationMs: '1500' });
-      fetchSpy.mockRestore();
-      await aiStub.settle(`call:${call.id}`);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).language).toBeNull();
-      expect((await prisma.customer.findUnique({ where: { id: lead.customerId } })).language).toBeNull();
-    });
-
-    it('garbled speech-to-text is rejected by the quality gate: the AI is never called, the customer is asked again', async () => {
-      const { call } = await liveCall();
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(Buffer.alloc(3000, 6)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'ha ha ha ha ha ha ha ha', languageCode: 'pa-IN', latencyMs: 5 });
-      const xml = await voice.handleTurn(call.id, { RecordUrl: 'https://media.plivo.test/garbled.wav', RecordingDurationMs: '1500' });
-      fetchSpy.mockRestore();
-      expect(aiStub.generateResponse).not.toHaveBeenCalled();
-      expect(xml).toContain('<Record');
-      await aiStub.settle(`call:${call.id}`);
-      expect((await prisma.call.findUnique({ where: { id: call.id } })).silentTurns).toBe(1);
-    });
-
-    it('a retry that arrives while the first request is still being processed joins it: one AI turn', async () => {
-      const { lead, call } = await liveCall();
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(Buffer.alloc(3000, 8)));
-      sarvamStub.speechToText.mockResolvedValue({ transcript: 'Porur la 2 BHK iruka?', languageCode: 'ta-IN', latencyMs: 5 });
-      let release!: () => void;
-      const gate = new Promise<void>((r) => (release = r));
-      aiStub.generateResponse.mockImplementation(async () => {
-        await gate;
-        return { response: 'சரி.', actions: {}, timings: {}, leadId: lead.leadId, path: 'rules' };
-      });
-      const params = { RecordUrl: 'https://media.plivo.test/slow.wav', RecordingDurationMs: '1800' };
-      const first = voice.handleTurn(call.id, params);
-      await new Promise((r) => setTimeout(r, 50));
-      const retry = voice.handleTurn(call.id, params);
-      release();
-      const [a, b] = await Promise.all([first, retry]);
-      fetchSpy.mockRestore();
-      expect(b).toBe(a);
-      expect(aiStub.generateResponse).toHaveBeenCalledTimes(1);
-    });
-  });
-
   // ---------------------------------------------------------------- wrong number, duplicates, race, isolation
   describe('wrong number, duplicate messages, race, organization isolation', () => {
     it('"wrong number" → do-not-contact, automation stopped', async () => {
@@ -768,7 +404,7 @@ describe.skipIf(!enabled)('Tacksharp flow (integration)', () => {
       expect(await leads.updateLeadStatus({ organizationId: 'org_other', leadId: lead.leadId, status: 'won' })).toBeNull();
       const fu = await prisma.followUp.findFirst({ where: { leadId: lead.leadId } });
       await expect(followUps.findOne('org_other', fu.id)).rejects.toThrow('not found');
-      const r = await voice.startOutboundCall({ organizationId: 'org_other', customerId: lead.customerId, leadId: lead.leadId, ignoreCallWindow: true });
+      const r = await voice.placeSystemCall({ organizationId: 'org_other', customerId: lead.customerId, purpose: 'manual_call', idempotencyKey: `iso-${Date.now()}`, ignoreCallWindow: true });
       expect(r.started).toBe(false);
       expect((await prisma.lead.findUnique({ where: { id: lead.leadId } })).status).toBe('new');
     });

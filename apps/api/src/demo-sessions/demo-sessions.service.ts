@@ -53,8 +53,8 @@ export class DemoSessionsService {
   /** Who owns the shared numbers (the organization their inbound traffic reaches without a session). */
   async hubs() {
     const wa = config.whatsapp.phoneNumberId ? await this.tenancy.resolve('whatsapp_phone_number_id', config.whatsapp.phoneNumberId) : undefined;
-    const voice = config.plivo.fromNumber ? await this.tenancy.resolve('plivo_number', normalizePhone(config.plivo.fromNumber) ?? config.plivo.fromNumber) : undefined;
-    return { whatsapp: wa ?? config.defaultOrganizationId, voice: voice ?? config.defaultOrganizationId };
+    // Voice: the Sarvam number is answered by a Sarvam-hosted agent, so it belongs to the default organization.
+    return { whatsapp: wa ?? config.defaultOrganizationId, voice: config.defaultOrganizationId };
   }
 
   private async industryOf(org: string) {
@@ -169,9 +169,10 @@ export class DemoSessionsService {
     const hubs = await this.hubs();
     const { industry } = await this.industryOf(org);
     const wa = config.whatsapp.accessToken && config.whatsapp.phoneNumberId;
-    const pv = config.plivo.authId && config.plivo.authToken && config.plivo.fromNumber;
     const whatsapp: Probe = !wa ? { status: 'not_configured' } : probe ? await this.cached('wa', () => this.probeWhatsApp()) : this.probes.get('wa')?.v ?? { status: 'not_checked' };
-    const voice: Probe = !pv ? { status: 'not_configured' } : probe ? await this.cached('pv', () => this.probePlivo()) : this.probes.get('pv')?.v ?? { status: 'not_checked' };
+    // Sarvam documents no read-only credential check for Voice Agents: configured / not configured only.
+    const sv = process.env.SARVAM_AGENTS_API_KEY && process.env.SARVAM_AGENTS_PHONE_NUMBER;
+    const voice: Probe = sv ? { status: 'not_checked', detail: 'Sarvam voice agents configured (no read-only check available).' } : { status: 'not_configured' };
     return {
       workspace: { organizationId: org, industry },
       mode: cfg.dryRun ? 'demo_simulated' : 'live',
@@ -179,7 +180,7 @@ export class DemoSessionsService {
       strictRouting: process.env.DEMO_SHARED_NUMBER_STRICT === 'true',
       sessionHours: HOURS(),
       whatsapp: { ...whatsapp, number: config.whatsapp.phoneNumberId ? mask(config.whatsapp.phoneNumberId) : null, ownerOrganizationId: hubs.whatsapp, templateConfigured: Boolean(config.whatsapp.templateName) },
-      voice: { ...voice, number: config.plivo.fromNumber ? mask(normalizePhone(config.plivo.fromNumber) ?? config.plivo.fromNumber) : null, ownerOrganizationId: hubs.voice },
+      voice: { ...voice, number: process.env.SARVAM_AGENTS_PHONE_NUMBER ? mask(normalizePhone(process.env.SARVAM_AGENTS_PHONE_NUMBER) ?? '') : null, ownerOrganizationId: hubs.voice },
       approvedRecipients: this.approvedRecipients().map((p) => ({ value: p, label: mask(p) })),
     };
   }
@@ -195,12 +196,6 @@ export class DemoSessionsService {
   private async probeWhatsApp(): Promise<Probe> {
     const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}?fields=verified_name,quality_rating`;
     return this.probe(url, { authorization: `Bearer ${config.whatsapp.accessToken}` }, (j) => [j.verified_name, j.quality_rating && `quality ${j.quality_rating}`].filter(Boolean).join(' · '));
-  }
-
-  private async probePlivo(): Promise<Probe> {
-    const url = `https://api.plivo.com/v1/Account/${config.plivo.authId}/`;
-    const auth = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
-    return this.probe(url, { authorization: `Basic ${auth}` }, (j) => [j.account_type, j.cash_credits !== undefined && 'credits available'].filter(Boolean).join(' · '));
   }
 
   private async probe(url: string, headers: Record<string, string>, describe: (j: Record<string, unknown>) => string): Promise<Probe> {

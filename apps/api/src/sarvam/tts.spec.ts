@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TtsLimiter, retryableTtsStatus, ttsBackoffMs } from './tts-limiter.js';
-import { pcmToWav } from '../voice/stream/audio.js';
+import { pcmToWav } from './wav.js';
 /** 0.4 s of 8 kHz audio: a real, playable WAV (the service rejects anything else). */
 const VALID_WAV = pcmToWav(new Int16Array(3200).fill(1000), 8000).toString('base64');
 
@@ -144,10 +144,6 @@ describe('Sarvam TTS latency guard (regression: 8.15 s turn)', () => {
     const c = await svc.textToSpeech(`${word} okay`, { cache: true });
     expect(b).toMatchObject({ cached: true, url: a.url });
     expect(c.url).not.toBe(a.url);
-    const { isPersonalLine } = await import('../voice/voice.service.js');
-    expect(isPersonalLine('Order GR-ZEJ3NC confirm aachu — 646 rupees')).toBe(true);
-    expect(isPersonalLine('Calling 98765 43210')).toBe(true);
-    expect(isPersonalLine('How many kg of Boneless Chicken? 360 rupees a kilo.')).toBe(false);
   });
 });
 

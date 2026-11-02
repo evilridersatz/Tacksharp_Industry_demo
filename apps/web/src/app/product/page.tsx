@@ -6,11 +6,11 @@ import { SitePage, SiteHero } from '@/components/site';
 
 const PARTS = [
   { icon: MessageSquare, t: 'WhatsApp assistant', d: 'Answers customers on your WhatsApp Business number in Tamil, English or a mix. Voice notes are transcribed. Prices, stock and slots come from your records; it never invents an offer.' },
-  { icon: PhoneCall, t: 'Voice calls', d: 'Calls leads back, confirms visits and tells customers their order is ready, through your own Plivo number with Sarvam voices. Calls respect your calling hours and opt-outs.' },
+  { icon: PhoneCall, t: 'Voice calls', d: 'Calls leads back, confirms visits and tells customers their order is ready, through Sarvam voice agents in Tamil and English. Calls respect your calling hours and opt-outs.' },
   { icon: Bot, t: 'Back-office agents', d: 'Sales, operations, marketing and finance agents draft quotations, reserve stock, prepare campaigns and payment reminders. Anything that commits money or reaches many customers waits for a person.' },
   { icon: Gauge, t: 'A dashboard per industry', d: 'Real estate sees leads and site visits; a restaurant sees orders and its menu; a hospital sees appointments. Same login, same data rules, different work.' },
   { icon: Users, t: 'Team and access', d: 'Invite people by link, choose admin, manager, operator or read-only access, and remove access instantly. Roles are checked by the server on every request.' },
-  { icon: KeyRound, t: 'Your provider accounts', d: 'Connect your own WhatsApp, Plivo, Sarvam and OpenAI accounts. Keys are encrypted at rest, masked on screen and tested before use. You see usage and errors per provider.' },
+  { icon: KeyRound, t: 'Your provider accounts', d: 'Connect your own WhatsApp, Sarvam and OpenAI accounts. Keys are encrypted at rest, masked on screen and tested before use. You see usage and errors per provider.' },
   { icon: ClipboardCheck, t: 'Approvals and audit', d: 'Discounts, campaigns, invoices and stock corrections go through an approval queue. Every sign-in, change and approval is recorded.' },
   { icon: ShieldCheck, t: 'Safe by default', d: 'New organizations run in a recording-only mode until numbers, templates and test recipients are set up. Delivery counts only when WhatsApp confirms it.' },
 ];

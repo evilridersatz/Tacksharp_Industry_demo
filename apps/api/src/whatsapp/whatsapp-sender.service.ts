@@ -211,24 +211,52 @@ export class WhatsAppSenderService {
     };
   }
 
-  /** Downloads an incoming media file (voice note) from Meta. */
-  async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+  /**
+   * Downloads an incoming media file from Meta, validated BEFORE it is used: the MIME type must be on the allow-list for
+   * its kind and the size within the limit (checked on Meta's metadata first, then on the bytes actually received).
+   * Anything else throws MediaRejectedError with a customer-safe reason; nothing is transcribed or stored.
+   */
+  async downloadMedia(mediaId: string, kind: MediaKind = 'audio'): Promise<{ buffer: Buffer; mimeType: string; sizeBytes: number }> {
+    if (!/^[\w.-]{1,128}$/.test(mediaId)) throw new MediaRejectedError('invalid_media_id');
     const { token } = await this.account();
-    const meta = await fetch(`https://graph.facebook.com/${config.whatsapp.apiVersion}/${mediaId}`, {
+    const f = this.fetchImpl ?? fetch;
+    const meta = await f(`https://graph.facebook.com/${config.whatsapp.apiVersion}/${mediaId}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10_000),
     });
     if (!meta.ok) throw new Error(`WhatsApp media lookup ${meta.status}`);
-    const info = (await meta.json()) as { url: string; mime_type?: string };
-    const file = await fetch(info.url, {
+    const info = (await meta.json()) as { url: string; mime_type?: string; file_size?: number | string };
+    const rule = MEDIA_RULES[kind];
+    const mimeType = String(info.mime_type ?? '').split(';')[0].trim().toLowerCase();
+    if (!rule.mime.includes(mimeType)) throw new MediaRejectedError(`unsupported_type:${mimeType || 'unknown'}`);
+    const declared = Number(info.file_size ?? 0);
+    if (declared > rule.maxBytes) throw new MediaRejectedError('too_large');
+    if (!/^https:\/\//.test(info.url ?? '')) throw new Error('WhatsApp media lookup returned no https URL');
+    const file = await f(info.url, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(20_000),
     });
     if (!file.ok) throw new Error(`WhatsApp media download ${file.status}`);
-    return {
-      buffer: Buffer.from(await file.arrayBuffer()),
-      mimeType: (info.mime_type ?? 'audio/ogg').split(';')[0],
-    };
+    const buffer = Buffer.from(await file.arrayBuffer());
+    if (!buffer.length) throw new MediaRejectedError('empty');
+    if (buffer.length > rule.maxBytes) throw new MediaRejectedError('too_large');
+    return { buffer, mimeType, sizeBytes: buffer.length };
+  }
+
+}
+
+export type MediaKind = 'audio' | 'image';
+/** WhatsApp media we accept (Meta's own limits: audio 16 MB, image 5 MB). */
+export const MEDIA_RULES: Record<MediaKind, { mime: string[]; maxBytes: number }> = {
+  audio: { mime: ['audio/ogg', 'audio/opus', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/amr', 'audio/wav', 'audio/x-wav'], maxBytes: Number(process.env.WHATSAPP_MAX_AUDIO_BYTES) || 16 * 1024 * 1024 },
+  image: { mime: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: Number(process.env.WHATSAPP_MAX_IMAGE_BYTES) || 5 * 1024 * 1024 },
+};
+
+/** Media refused by validation (type / size / empty): not retried, answered politely. */
+export class MediaRejectedError extends Error {
+  constructor(readonly reason: string) {
+    super(`media rejected: ${reason}`);
+    this.name = 'MediaRejectedError';
   }
 }
 
