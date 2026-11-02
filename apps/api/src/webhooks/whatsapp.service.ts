@@ -22,7 +22,9 @@ type WhatsAppMessage = {
   timestamp?: string;
   type?: string;
   text?: { body?: string };
-  audio?: { id?: string };
+  audio?: { id?: string; mime_type?: string; voice?: boolean };
+  image?: { id?: string; mime_type?: string; caption?: string };
+  document?: { id?: string; mime_type?: string; caption?: string; filename?: string };
   button?: { text?: string };
   interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } };
 };
@@ -108,6 +110,11 @@ export class WhatsAppService {
             message.interactive?.button_reply?.title ??
             message.interactive?.list_reply?.title;
           const audioId = message.type === 'audio' ? message.audio?.id : undefined;
+          // Images and documents: media ids only (bytes are fetched, validated and processed by the worker).
+          const imageId = message.type === 'image' ? message.image?.id : undefined;
+          const documentId = message.type === 'document' ? message.document?.id : undefined;
+          const caption = (message.image?.caption ?? message.document?.caption)?.slice(0, 1000);
+          const mediaMime = message.audio?.mime_type ?? message.image?.mime_type ?? message.document?.mime_type;
           const contactName = value.contacts?.find((c) => normalizePhone(c.wa_id) === from)?.profile?.name;
 
           // Shared demo number: an approved tester bound to an industry workspace is answered by that workspace.
@@ -136,7 +143,7 @@ export class WhatsAppService {
             providerMessageId: message.id,
             fromPhone: from,
             messageType: message.type ?? 'unknown',
-            payload: { phoneNumberId, ...(demoSessionId ? { demoSessionId } : {}), text: text ?? null, audioId: audioId ?? null, customerName: contactName ?? null, timestamp: message.timestamp ?? null },
+            payload: { phoneNumberId, ...(demoSessionId ? { demoSessionId } : {}), text: text ?? null, audioId: audioId ?? null, imageId: imageId ?? null, documentId: documentId ?? null, caption: caption ?? null, mediaMime: mediaMime ?? null, customerName: contactName ?? null, timestamp: message.timestamp ?? null },
           });
           if (accepted.outcome === 'duplicate') {
             log.info('whatsapp.duplicate_inbound', { messageId: message.id, status: accepted.row.status });
@@ -161,6 +168,10 @@ export class WhatsAppService {
                 messageType: message.type ?? 'unknown',
                 text,
                 audioId,
+                imageId,
+                documentId,
+                caption,
+                mediaMime,
                 customerName: contactName,
                 timestamp: message.timestamp,
               },

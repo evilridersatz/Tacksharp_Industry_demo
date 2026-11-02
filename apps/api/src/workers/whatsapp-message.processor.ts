@@ -13,7 +13,7 @@ import type { WhatsAppMessageJobData } from '../queues/queues.js';
 import { KeyedMutex } from '../common/keyed-mutex.js';
 import { errorMessage, log } from '../common/logger.js';
 import { recordTurn } from '../common/latency.js';
-import { assessTranscript } from '../conversation/transcript-gate.js';
+import { MultimodalService } from '../media/multimodal.service.js';
 
 @Injectable()
 export class WhatsAppMessageProcessor {
@@ -28,7 +28,14 @@ export class WhatsAppMessageProcessor {
     private readonly conversations: ConversationsService,
     private readonly inbound: InboundMessageService,
     @Optional() private readonly prisma?: PrismaService,
+    @Optional() private readonly multimodalService?: MultimodalService,
   ) {}
+
+  /** Injected in the app; built from the same Sarvam / WhatsApp services where a test constructs the processor. */
+  private get multimodal(): MultimodalService {
+    return (this.mm ??= this.multimodalService ?? new MultimodalService(this.sarvam, this.sender));
+  }
+  private mm?: MultimodalService;
 
   process(job: Job<WhatsAppMessageJobData>) {
     return this.mutex.run(job.data.from, () => this.handle(job));
@@ -74,22 +81,24 @@ export class WhatsAppMessageProcessor {
         let text = data.text?.trim();
         let viaVoiceNote = false;
         let quality: 'ok' | 'weak' = 'ok';
-        if (!text && data.audioId) {
-          try {
-            const media = await this.sender.downloadMedia(data.audioId);
-            const stt = await this.sarvam.speechToText(media.buffer, 'voice-note.ogg', media.mimeType);
-            // Same quality gate as phone calls: garbled speech-to-text never drives the conversation.
-            const gate = assessTranscript({ transcript: stt.transcript, sttLanguage: stt.languageCode });
-            text = gate.verdict === 'reject' ? '' : gate.text;
-            quality = gate.verdict === 'ok' ? 'ok' : 'weak';
-            viaVoiceNote = true;
-          } catch (error) {
-            if (error instanceof MediaRejectedError) {
-              log.warn('whatsapp.voice_note_rejected', { messageId: data.messageId, reason: error.reason });
-              reply = error.reason === 'too_large' ? 'Voice note romba periya size-ah irukku. Chinna voice note illa text-la anuppunga 🙏' : 'Indha file-ah ennala kekka mudiyala. Voice note illa text-la anuppunga 🙏';
-            } else log.error('whatsapp.voice_note_failed', { messageId: data.messageId, error: errorMessage(error) });
+        // Multimodal (every industry): voice notes and images become text for the industry's own engine, which
+        // checks every product / price / availability against its database. Media bytes are never stored.
+        let media: Record<string, unknown> | undefined;
+        if (!text && (data.audioId || data.imageId || data.documentId)) {
+          const understood = data.audioId
+            ? await this.multimodal.understandAudio(data.audioId)
+            : data.imageId
+              ? await this.multimodal.understandImage(data.imageId, data.caption, await this.catalogueNames(data.organizationId))
+              : this.multimodal.understandDocument(data.caption, data.mediaMime);
+          media = understood.meta;
+          viaVoiceNote = Boolean(data.audioId);
+          if (understood.kind === 'text') {
+            text = understood.text;
+            quality = understood.quality;
+          } else {
+            reply = understood.reply;
+            conversationId = await this.recordMediaExchange(data, understood.meta, reply, Boolean(understood.handoff));
           }
-          if (!text && !reply) reply = 'Sorry, voice note clear-ah kekkala. Text-la anuppa mudiyuma? 🙏';
         }
         if (!text && !reply) {
           log.info('whatsapp.unsupported_type', { messageId: data.messageId, type: data.messageType });
@@ -113,7 +122,7 @@ export class WhatsAppMessageProcessor {
             message: text!,
             customerName: data.customerName,
             quality,
-            metadata: { waMessageId: data.messageId, viaVoiceNote },
+            metadata: { waMessageId: data.messageId, viaVoiceNote, ...(media ? { media } : {}) },
           });
           aiMs = Date.now() - startedAt;
           reply = result.response;
@@ -131,6 +140,12 @@ export class WhatsAppMessageProcessor {
     const sendStartedAt = Date.now();
     await this.sendReply(row.id, data, reply!, conversationId, finalAttempt);
     const sendMs = Date.now() - sendStartedAt;
+    // Optional spoken reply to a voice note, AFTER the text (which is the fallback). Real Sarvam audio only.
+    if (data.audioId && result) {
+      const voice = await this.multimodal.sendVoiceReply(data.from, reply!).catch((e) => ({ sent: false, reason: errorMessage(e) }));
+      if (voice.reason !== 'disabled') log.info('whatsapp.voice_reply', { messageId: data.messageId, sent: voice.sent, reason: voice.reason });
+      if (voice.sent && conversationId) await this.conversations.addMessage({ organizationId: data.organizationId, conversationId, role: 'assistant', content: reply!, metadata: { media: { messageType: 'voice', generated: true, provider: 'sarvam', processing: 'ok' }, providerMessageId: (voice as { messageId?: string }).messageId } as never }).catch(() => undefined);
+    }
     // Everything below is bookkeeping: a failure here must never make the job retry (and resend the reply).
     if (result) {
       try {
@@ -157,6 +172,30 @@ export class WhatsAppMessageProcessor {
   }
 
   /** The STOP / START message and our confirmation appear in the conversation like any other exchange. */
+  /** Product names the vision model may map a picture to (the engine still checks every one against the database). */
+  private async catalogueNames(organizationId: string): Promise<string[]> {
+    if (!this.prisma) return [];
+    const rows = await this.prisma.menuItem.findMany({ where: { organizationId }, select: { name: true }, take: 80 }).catch(() => []);
+    return rows.map((r) => r.name);
+  }
+
+  /** A media message answered without the engine (unclear, needs confirmation, or for staff): kept in the inbox. */
+  private async recordMediaExchange(data: WhatsAppMessageJobData, meta: Record<string, unknown>, reply: string, handoff: boolean) {
+    try {
+      const cu = this.prisma ? await this.prisma.customer.findFirst({ where: { organizationId: data.organizationId, phone: data.from }, select: { id: true } }) : null;
+      const conv = await this.conversations.getOrCreateConversation({ organizationId: data.organizationId, channel: 'whatsapp', externalId: data.from, customerId: cu?.id });
+      const label = meta.messageType === 'voice' ? '[Voice note]' : meta.messageType === 'image' ? '[Image]' : '[Document]';
+      const said = typeof meta.transcription === 'string' && meta.transcription ? ` ${meta.transcription}` : data.caption ? ` ${data.caption}` : '';
+      await this.conversations.addMessage({ organizationId: data.organizationId, conversationId: conv.id, role: 'user', content: `${label}${said}`.slice(0, 2000), externalId: data.messageId, metadata: { waMessageId: data.messageId, media: meta } as never });
+      await this.conversations.addMessage({ organizationId: data.organizationId, conversationId: conv.id, role: 'assistant', content: reply, metadata: { media: { replyTo: meta.messageType }, ...(handoff ? { handoff: true } : {}) } as never });
+      if (handoff && this.prisma) await this.prisma.conversation.updateMany({ where: { id: conv.id, organizationId: data.organizationId }, data: { status: 'human_handoff', updatedAt: new Date() } });
+      return conv.id;
+    } catch (error) {
+      log.warn('whatsapp.media_exchange_record_failed', { messageId: data.messageId, error: describeError(error) });
+      return undefined;
+    }
+  }
+
   private async recordOptExchange(data: WhatsAppMessageJobData, text: string, reply: string) {
     try {
       const cu = await this.prisma!.customer.findFirst({ where: { organizationId: data.organizationId, phone: data.from }, select: { id: true } });

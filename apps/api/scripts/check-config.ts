@@ -10,6 +10,7 @@
 import 'dotenv/config';
 import { accessSync, constants, existsSync } from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 type Level = 'OK' | 'MISSING' | 'WARN' | 'INFO';
 const env = process.env;
@@ -106,6 +107,14 @@ shown('Enterprise', 'SIGNUP_ENABLED', 'true', 'public self-service registration'
   const n = sa.filter(set).length;
   row('Voice agents', 'SARVAM_AGENTS_* (platform account)', n === sa.length ? 'OK' : n ? 'WARN' : 'INFO', n === sa.length ? 'all set' : n ? `${n} of ${sa.length} set — incomplete` : 'not set — organizations use their own Sarvam account (optional)');
 }
+
+// WhatsApp multimodal (voice notes, images, documents)
+shown('Multimodal', 'VISION_PROVIDER', 'openai', 'openai = OpenAI-compatible vision model (needs an OpenAI key); none = images are not read');
+shown('Multimodal', 'VISION_MODEL', '(the OpenAI integration model)', 'a vision-capable model');
+shown('Multimodal', 'VISION_CONFIDENCE_MIN', '0.6', 'below this the image reading is shown back for confirmation');
+shown('Multimodal', 'WHATSAPP_VOICE_REPLIES', 'false', 'true = also send a Sarvam voice-note reply to voice notes (text is always sent)');
+shown('Multimodal', 'WHATSAPP_MAX_VOICE_SECONDS', '180', 'longer voice notes are refused politely');
+row('Multimodal', 'ffmpeg', (() => { try { execFileSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-version'], { stdio: 'ignore' }); return 'OK'; } catch { return 'WARN'; } })(), 'converts voice notes for Sarvam STT (30 s per request); without it only notes under 30 s are transcribed');
 
 // Website assistant video (Simli)
 row('Assistant video', 'SIMLI_API_KEY + SIMLI_FACE_ID', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'OK' : 'INFO', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'set' : 'not set — the Video call button is hidden');

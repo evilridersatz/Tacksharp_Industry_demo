@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { FileText, Image as ImageIcon, MessageSquare, Mic, Volume2 } from 'lucide-react';
 import type { Call, Message } from '@/lib/types';
 import { dayLabel, timeOnly } from '@/lib/format';
 import { Empty, cx } from './ui';
@@ -33,6 +33,7 @@ export function Thread({ messages, name }: { messages: Message[]; name: string }
           <div key={m.id}>
             {showDay && <p className="mx-auto my-2 w-fit rounded-full bg-white px-2.5 py-0.5 text-[11px] font-semibold text-muted shadow-sm">{day}</p>}
             <div className={cx('flex flex-col', mine ? 'items-end' : 'items-start')}>
+              <MediaBadge meta={m.metadata} />
               <p
                 className={cx(
                   'max-w-[78%] rounded-[14px] px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap',
@@ -160,6 +161,7 @@ export function Transcript({ lines, name, debug = true }: { lines: Message[]; na
             <p className={cx('text-[11.5px] font-semibold', m.role === 'user' ? 'text-ink' : 'text-violet')}>
               {m.role === 'user' ? name : 'Tacksharp AI'} <span className="font-normal text-faint">{timeOnly(m.createdAt)}</span>
             </p>
+            <MediaBadge meta={m.metadata} />
             <p className="text-[13px] leading-relaxed text-body">{m.content}</p>
             {m.role !== 'user' && debug && <TurnBadges meta={m.metadata as TurnMeta | null} />}
           </div>
@@ -167,6 +169,27 @@ export function Transcript({ lines, name, debug = true }: { lines: Message[]; na
       ))}
     </ol>
     </div>
+  );
+}
+
+type MediaMeta = { messageType?: 'voice' | 'image' | 'document'; generated?: boolean; processing?: string; reason?: string; mimeType?: string; sizeBytes?: number; durationSec?: number | null; vision?: { kind?: string; confidence?: number; description?: string } };
+const PROCESSING: Record<string, string> = { ok: 'understood', weak: 'unsure', rejected: 'refused', failed: 'could not read', not_configured: 'reader not set up' };
+
+/** Inbox indicator for voice notes, images, documents and AI voice replies (text messages show nothing extra). */
+function MediaBadge({ meta }: { meta: unknown }) {
+  const md = (meta ?? {}) as { media?: MediaMeta; viaVoiceNote?: boolean };
+  const media = md.media ?? (md.viaVoiceNote ? { messageType: 'voice' as const } : undefined);
+  if (!media?.messageType) return null;
+  const Icon = media.generated ? Volume2 : media.messageType === 'voice' ? Mic : media.messageType === 'image' ? ImageIcon : FileText;
+  const label = media.generated ? 'AI voice reply' : media.messageType === 'voice' ? 'Voice note · transcribed' : media.messageType === 'image' ? `Image${media.vision?.kind ? ` · ${media.vision.kind.replace(/_/g, ' ')}` : ''}` : 'Document';
+  const status = media.processing && !media.generated ? (media.messageType === 'document' && media.processing === 'ok' ? 'received, for staff' : PROCESSING[media.processing] ?? media.processing) : null;
+  const extra = [media.durationSec ? `${Math.round(media.durationSec)} s` : null, typeof media.vision?.confidence === 'number' ? `${Math.round(media.vision.confidence * 100)}% sure` : null].filter(Boolean).join(' · ');
+  return (
+    <p className="mb-0.5 inline-flex flex-wrap items-center gap-1 rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[11px] font-semibold text-body" data-testid={`media-${media.generated ? 'voice-reply' : media.messageType}`} title={media.vision?.description || media.reason || undefined}>
+      <Icon className="size-3" aria-hidden /> {label}
+      {status && <span className={cx('font-normal', media.processing === 'ok' ? 'text-emerald-700' : 'text-amber-800')}>· {status}</span>}
+      {extra && <span className="font-normal text-muted">· {extra}</span>}
+    </p>
   );
 }
 

@@ -127,6 +127,40 @@ export class WhatsAppSenderService {
     return id;
   }
 
+  /**
+   * Uploads generated audio to Meta (POST /{phone-number-id}/media, multipart) and returns the media id. Blocked in
+   * DRY_RUN like every provider request. Only formats WhatsApp plays are accepted here.
+   */
+  async uploadMedia(bytes: Buffer, mimeType: 'audio/mpeg' | 'audio/ogg' | 'audio/aac', filename: string): Promise<string> {
+    if (process.env.DRY_RUN !== 'false') throw new WhatsAppPermanentError('DRY_RUN is on: WhatsApp provider request blocked', 0);
+    const acct = await this.account();
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), filename);
+    let response: Response;
+    try {
+      response = await (this.fetchImpl ?? fetch)(`https://graph.facebook.com/${config.whatsapp.apiVersion}/${acct.phoneNumberId}/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${acct.token}` },
+        body: form,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      throw new WhatsAppTransientError(`WhatsApp media upload failed: ${describeError(error)}`);
+    }
+    const data = (await response.json().catch(() => ({}))) as { id?: string; error?: { message?: string; code?: number } };
+    if (!response.ok || !data.id) throw new WhatsAppPermanentError(`WhatsApp media upload ${response.status}: ${data.error?.message ?? 'no media id'}`, response.status, data.error?.code);
+    return data.id;
+  }
+
+  /** An audio message (voice reply) from an uploaded media id. */
+  async sendAudio(to: string, mediaId: string) {
+    const id = await this.post({ to, type: 'audio', audio: { id: mediaId } });
+    log.info('whatsapp.sent_audio', { to: mask(to), messageId: id });
+    return id;
+  }
+
   async sendTemplate(to: string, params: string[], step?: string) {
     const templateName = this.templateFor(step);
     const count = Math.max(0, config.whatsapp.templateParams);

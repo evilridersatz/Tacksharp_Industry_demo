@@ -51,6 +51,11 @@ export type WhatsAppMessageJobData = {
   text?: string;
   /** Media id for audio / voice notes; transcribed with Sarvam before the AI runs. */
   audioId?: string;
+  /** Image / document media ids and the customer's caption (multimodal: see media/multimodal.service.ts). */
+  imageId?: string;
+  documentId?: string;
+  caption?: string;
+  mediaMime?: string;
   customerName?: string;
   timestamp?: string;
   /** Set after the AI produced a reply, so a retry re-sends instead of re-running the AI. */

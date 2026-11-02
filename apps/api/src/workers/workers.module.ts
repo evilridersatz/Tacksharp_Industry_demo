@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { MultimodalService } from '../media/multimodal.service.js';
 import { AiModule } from '../ai/ai.module.js';
 import { ConversationsModule } from '../conversations/conversations.module.js';
 import { LeadsModule } from '../leads/leads.module.js';
@@ -15,6 +16,6 @@ import { WorkersService } from './workers.service.js';
 
 @Module({
   imports: [AiModule, ConversationsModule, LeadsModule, TelephonyModule, FollowUpsModule, RestaurantModule, AgentsModule, MarketingModule, VerticalsModule, VisionOpsModule],
-  providers: [FollowUpProcessor, WhatsAppMessageProcessor, WorkersService],
+  providers: [FollowUpProcessor, WhatsAppMessageProcessor, WorkersService, MultimodalService],
 })
 export class WorkersModule {}

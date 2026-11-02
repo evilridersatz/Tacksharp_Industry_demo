@@ -114,6 +114,49 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Speech as bytes in a format WhatsApp plays (MP3 = audio/mpeg), for a voice-note reply. One request; on any
+   * failure the reason is returned and NO audio exists (the caller sends text only; audio is never fabricated).
+   */
+  async speechBytes(text: string, opts: { languageCode?: string } = {}): Promise<{ ok: true; bytes: Buffer; mimeType: 'audio/mpeg'; languageCode: string; ms: number } | { ok: false; error: string }> {
+    const clean = text.trim();
+    const acct = await this.account();
+    if (!clean) return { ok: false, error: 'empty' };
+    if (!acct.key) return { ok: false, error: 'sarvam_not_configured' };
+    const languageCode = opts.languageCode ?? this.languageFor(clean);
+    const started = Date.now();
+    try {
+      const response = await this.limiter.run('live', () =>
+        // Documented REST stream endpoint: binary audio in the requested codec (docs.sarvam.ai → text-to-speech/convert-stream).
+        (this.fetchImpl ?? fetch)('https://api.sarvam.ai/text-to-speech/stream', {
+          method: 'POST',
+          headers: { 'api-subscription-key': acct.key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: this.prepareForSpeech(clean).slice(0, 3000),
+            model: acct.ttsModel,
+            speaker: acct.ttsSpeaker,
+            language_code: languageCode,
+            pace: config.sarvam.ttsPace,
+            ...(this.temperature() !== undefined ? { temperature: this.temperature() } : {}),
+            output_audio_codec: 'mp3',
+            output_audio_bitrate: '64k',
+          }),
+          signal: AbortSignal.timeout(Math.max(config.sarvam.ttsTimeoutMs, 15_000)),
+        }),
+      );
+      if (!response.ok) return { ok: false, error: `sarvam_tts_${response.status}` };
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!isMp3(bytes)) return { ok: false, error: bytes.length ? 'invalid_audio:not_mp3' : 'invalid_audio:empty' };
+      log.info('sarvam.tts_bytes', { ms: Date.now() - started, bytes: bytes.length, languageCode });
+      return { ok: true, bytes, mimeType: 'audio/mpeg', languageCode, ms: Date.now() - started };
+    } catch (error) {
+      return { ok: false, error: `sarvam_tts_failed: ${errorMessage(error).slice(0, 120)}` };
+    }
+  }
+
+  /** Tests inject a fake fetch for speechBytes. */
+  fetchImpl?: typeof fetch;
+
   /** Tamil script present -> ta-IN voice, otherwise en-IN. */
   languageFor(text: string) {
     return TAMIL_SCRIPT.test(text) ? 'ta-IN' : 'en-IN';
@@ -188,7 +231,7 @@ export class SarvamService implements OnModuleInit, OnModuleDestroy {
             method: 'POST',
             headers: { 'api-subscription-key': acct.key, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              text: this.prepareForSpeech(clean).slice(0, 2500),
+              text: this.prepareForSpeech(clean).slice(0, 3000),
               model: acct.ttsModel,
               speaker: acct.ttsSpeaker,
               language_code: languageCode,
@@ -360,4 +403,11 @@ export function inspectWav(file: Buffer): { ok: true; codec: string; sampleRate:
   const durationMs = Math.round((dataBytes / bytesPerSample / fmt.sampleRate) * 1000);
   if (durationMs < 50) return { ok: false, reason: 'silent_or_empty' };
   return { ok: true, codec, sampleRate: fmt.sampleRate, channels: fmt.channels, bits: fmt.bits, durationMs };
+}
+
+/** MP3: an ID3 tag or an MPEG audio frame sync at the start, and more than a header's worth of bytes. */
+export function isMp3(b: Buffer): boolean {
+  if (b.length < 128) return false;
+  if (b.toString('latin1', 0, 3) === 'ID3') return true;
+  return b[0] === 0xff && (b[1] & 0xe0) === 0xe0;
 }
