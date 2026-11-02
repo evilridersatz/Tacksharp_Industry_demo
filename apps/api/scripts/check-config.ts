@@ -8,6 +8,8 @@
  * Exit code 0 = nothing blocking; 1 = a setting needed for the selected mode is missing.
  */
 import 'dotenv/config';
+import { accessSync, constants, existsSync } from 'node:fs';
+import path from 'node:path';
 
 type Level = 'OK' | 'MISSING' | 'WARN' | 'INFO';
 const env = process.env;
@@ -85,6 +87,32 @@ row('Stock alerts', 'AWS credentials', set('AWS_ACCESS_KEY_ID') || set('AWS_PROF
 
 // AI
 row('AI', 'OPENAI_API_KEY / OPENAI_BASE_URL', set('OPENAI_API_KEY') || set('OPENAI_BASE_URL') ? 'OK' : 'INFO', set('OPENAI_API_KEY') || set('OPENAI_BASE_URL') ? 'set' : 'none — ordering still works by rules; free-form questions get a help reply');
+
+// Enterprise: per-organization credentials (encrypted), signup
+secret('Enterprise', 'CREDENTIALS_KEYS', false, 'organizations cannot save their own provider credentials (environment accounts keep working)');
+secret('Enterprise', 'CREDENTIALS_ACTIVE_KEY', set('CREDENTIALS_KEYS'));
+shown('Enterprise', 'SIGNUP_ENABLED', 'true', 'public self-service registration');
+
+// Voice agents, knowledge bases, telephony routing (release 2026-10-30)
+{
+  const s = env.TELEPHONY_WEBHOOK_SECRET ?? '';
+  row('Voice agents', 'TELEPHONY_WEBHOOK_SECRET', s.length >= 32 ? 'OK' : 'WARN', s.length >= 32 ? 'set (32+ characters)' : s ? 'too short (needs 32+ characters) — Sarvam calls are refused' : 'missing — calls through Sarvam are refused (Plivo is unaffected)');
+  const dir = path.resolve(env.KNOWLEDGE_DIR || './data/knowledge');
+  let note = `${dir}${env.KNOWLEDGE_DIR ? '' : ' (default, relative to the API directory: set an absolute path that is backed up)'}`;
+  let level: Level = env.KNOWLEDGE_DIR && path.isAbsolute(env.KNOWLEDGE_DIR) ? 'OK' : 'WARN';
+  if (existsSync(dir)) {
+    try { accessSync(dir, constants.W_OK); note += ' — exists, writable'; } catch { level = 'MISSING'; note += ' — exists but NOT writable by this user'; }
+  } else note += ' — will be created on the first upload';
+  row('Voice agents', 'KNOWLEDGE_DIR', level, note);
+  shown('Voice agents', 'TELEPHONY_ORG_MAX_CONCURRENT', '5');
+  shown('Voice agents', 'TELEPHONY_ORG_DAILY_LIMIT', '200');
+  const sa = ['SARVAM_AGENTS_API_KEY', 'SARVAM_AGENTS_ORG_ID', 'SARVAM_AGENTS_WORKSPACE_ID', 'SARVAM_AGENTS_CONNECTION_ID', 'SARVAM_AGENTS_PHONE_NUMBER'];
+  const n = sa.filter(set).length;
+  row('Voice agents', 'SARVAM_AGENTS_* (platform account)', n === sa.length ? 'OK' : n ? 'WARN' : 'INFO', n === sa.length ? 'all set' : n ? `${n} of ${sa.length} set — incomplete` : 'not set — organizations use their own Sarvam account (optional)');
+}
+
+// Website assistant video (Simli)
+row('Assistant video', 'SIMLI_API_KEY + SIMLI_FACE_ID', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'OK' : 'INFO', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'set' : 'not set — the Video call button is hidden');
 
 // Meta Lead Ads (real estate)
 secret('Meta Lead Ads (real estate)', 'META_PAGE_ACCESS_TOKEN', false, 'real-estate lead ads only');

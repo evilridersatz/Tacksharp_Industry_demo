@@ -118,17 +118,21 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     const failure = typeof b.failure_reason === 'string' ? b.failure_reason.slice(0, 180) : null;
     const transcript = transcriptLines(b.interaction_transcript);
 
-    if (scope.startsWith('inbound:')) {
-      const agentId = scope.slice('inbound:'.length);
-      const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId: org } });
+    // "inbound" = the organization's Sarvam-hosted agent (configured in the Sarvam console, no agent row here);
+    // "inbound:<agentId>" = a Tacksharp-built agent deployed on Sarvam.
+    if (scope === 'inbound' || scope.startsWith('inbound:')) {
+      const agentId = scope.startsWith('inbound:') ? scope.slice('inbound:'.length) : null;
+      const agent = agentId ? await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId: org } }) : null;
       const phone = normalizePhone(callerPhone(b));
-      if (!agent || !phone) {
+      if ((agentId && !agent) || !phone) {
         log.warn('telephony.sarvam_inbound_unlinked', { org, hasAgent: Boolean(agent), hasPhone: Boolean(phone) });
         return { accepted: true, organizationId: org };
       }
       const customer = (await this.prisma.customer.findFirst({ where: { organizationId: org, phone } })) ?? (await this.prisma.customer.create({ data: { organizationId: org, phone, source: 'voice_inbound_sarvam' } }));
-      const call = await this.prisma.call.create({ data: { organizationId: org, customerId: customer.id, direction: 'inbound', status: mapped, outcome: status || 'failed', toNumber: '', fromNumber: phone, providerCallId: attemptId, durationSec, agentId: agent.id, provider: 'sarvam', endedAt: new Date(), hangupCause: failure, summary: summary(transcript) } });
+      const callSummary = await this.callSummary(org, customer.id, b, transcript, durationSec, 'inbound');
+      const call = await this.prisma.call.create({ data: { organizationId: org, customerId: customer.id, direction: 'inbound', status: mapped, outcome: status || 'failed', toNumber: '', fromNumber: phone, providerCallId: attemptId, durationSec, agentId: agent?.id ?? null, provider: 'sarvam', endedAt: new Date(), hangupCause: failure, summary: callSummary } });
       await this.saveTranscript(org, customer.id, phone, call.id, transcript);
+      log.info('telephony.sarvam_inbound', { org, callId: call.id, status: mapped, durationSec, lines: transcript.length });
       return { accepted: true, organizationId: org };
     }
 
@@ -136,13 +140,37 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     if (!req) return { accepted: true, organizationId: org, reason: 'unknown_request' };
     let callId = req.callId;
     if (req.customerId) {
-      const call = await this.prisma.call.create({ data: { organizationId: org, customerId: req.customerId, direction: 'outbound', status: mapped, outcome: status || 'failed', toNumber: req.toNumber, fromNumber: '', providerCallId: attemptId, durationSec, agentId: req.agentId, provider: 'sarvam', endedAt: new Date(), hangupCause: failure, summary: summary(transcript) } });
+      const callSummary = await this.callSummary(org, req.customerId, b, transcript, durationSec, 'outbound');
+      const call = await this.prisma.call.create({ data: { organizationId: org, customerId: req.customerId, direction: 'outbound', status: mapped, outcome: status || 'failed', toNumber: req.toNumber, fromNumber: '', providerCallId: attemptId, durationSec, agentId: req.agentId, provider: 'sarvam', endedAt: new Date(), hangupCause: failure, summary: callSummary } });
       callId = call.id;
       await this.saveTranscript(org, req.customerId, req.toNumber, call.id, transcript);
     }
     await this.prisma.telephonyCallRequest.update({ where: { id: req.id }, data: { status: mapped, durationSec, failureReason: failure, callId, providerCallId: req.providerCallId ?? attemptId } });
     log.info('telephony.sarvam_result', { requestId: req.id, status: mapped, durationSec });
     return { accepted: true, organizationId: org };
+  }
+
+  /**
+   * Plain-English call summary from facts only: Sarvam's own summary when the payload carries one, otherwise the
+   * duration, orders this caller placed during the call (from our database, via the voice tools), staff call-back
+   * requests, and the caller's first request in their words. Never a model's guess.
+   */
+  private async callSummary(org: string, customerId: string, b: Record<string, unknown>, lines: Array<{ role: 'user' | 'assistant'; content: string }>, durationSec: number | null, direction: 'inbound' | 'outbound'): Promise<string | null> {
+    const provided = [b.summary, b.call_summary, (b.analysis as Record<string, unknown> | undefined)?.summary].find((v) => typeof v === 'string' && v.trim());
+    const parts: string[] = [];
+    if (typeof provided === 'string') parts.push(provided.trim());
+    const since = new Date(Date.now() - ((durationSec ?? 0) + 15 * 60) * 1000);
+    const orders = await this.prisma.order.findMany({ where: { organizationId: org, customerId, channel: 'voice', createdAt: { gte: since } }, select: { orderNumber: true, total: true }, take: 5 });
+    for (const o of orders) parts.push(`Order ${o.orderNumber} placed on the call (₹${Number(o.total)}).`);
+    const handoff = await this.prisma.workTask.findFirst({ where: { organizationId: org, agent: 'voice', entityId: customerId, status: 'open', updatedAt: { gte: since } }, select: { id: true } });
+    if (handoff) parts.push('Caller asked for a staff call-back (task open).');
+    if (!provided) {
+      const firstAsk = lines.find((l) => l.role === 'user' && l.content.length > 3);
+      if (firstAsk) parts.unshift(`Caller: "${firstAsk.content.slice(0, 160)}"`);
+      if (!orders.length && lines.length) parts.push('No order placed.');
+      if (!lines.length) parts.push(`No transcript (${direction} call${durationSec != null ? `, ${durationSec}s` : ''}).`);
+    }
+    return parts.length ? parts.join(' ').slice(0, 1000) : null;
   }
 
   private async saveTranscript(organizationId: string, customerId: string, phone: string, callId: string, lines: Array<{ role: 'user' | 'assistant'; content: string }>) {
@@ -174,7 +202,6 @@ function callerPhone(b: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-const summary = (lines: Array<{ content: string }>) => (lines.length ? lines.map((l) => l.content).join(' ').slice(0, 600) : null);
 
 /** Stored webhook payloads keep outcome fields, not the full transcript (that is saved as messages). */
 function redact(b: Record<string, unknown>) {

@@ -74,6 +74,8 @@ export class TelephonyService {
       providers: { plivo, sarvam },
       dryRun: followUpConfig().dryRun,
       // Inbound result webhooks to paste into each Sarvam inbound deployment (one per agent).
+      /** The organization's Sarvam-hosted agent (configured in the Sarvam console). */
+      sarvamOrgInboundWebhook: showWebhookUrls ? SarvamTelephonyProvider.webhookUrl(organizationId, 'inbound') : null,
       sarvamInboundWebhooks: showWebhookUrls ? agents.map((a) => ({ agentId: a.id, agentName: a.name, url: SarvamTelephonyProvider.webhookUrl(organizationId, `inbound:${a.id}`) })) : [],
     };
   }
