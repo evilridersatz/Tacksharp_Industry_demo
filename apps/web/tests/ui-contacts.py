@@ -5,7 +5,7 @@ the workspace badge, add a customer (validation, consent source), search, edit, 
 history, and tenant isolation against a demo workspace.
 
   Needs: API on :3000 (DB_NAME=<test db> DRY_RUN=true RATE_LIMIT_API_PER_MIN=2000 RATE_LIMIT_LOGIN=100), web on :3001,
-         with WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID / PLIVO_FROM_NUMBER set (placeholders are fine: DRY_RUN
+         with WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID set and a Sarvam agent for automatic calls (created below) (placeholders are fine: DRY_RUN
          stops every provider request) — without them the contact buttons are, correctly, disabled as "not configured".
          owner@tacksharp.test (home workspace is a real one; memberships to the demo workspaces).
   Run:   TEST_DB_NAME=tacksharp_test python3 -I apps/web/tests/ui-contacts.py
@@ -13,10 +13,14 @@ history, and tenant isolation against a demo workspace.
 Creates customers named "UI Contact <run>" in the owner's home workspace of the TEST database. No message, no call.
 """
 from playwright.sync_api import sync_playwright
-import json, os, re, tempfile, time
+import json, os, re, subprocess, tempfile, time
 
 WEB, API = 'http://localhost:3001', 'http://localhost:3000'
 SHOTS = os.environ.get('SHOTS_DIR', tempfile.gettempdir())
+DB = os.environ.get('TEST_DB_NAME', 'tacksharp_test')
+def sql(q):
+    return subprocess.run(['mysql', '-h127.0.0.1', f"-u{os.environ.get('DB_USER', 'root')}", f"-p{os.environ.get('DB_PASSWORD', '')}", DB, '-N', '-e', q], capture_output=True, text=True).stdout.strip()
+
 results = []
 def check(name, ok, detail=''):
     results.append(bool(ok)); print(('PASS ' if ok else 'FAIL ') + name + (f'  — {detail}' if detail else ''))
@@ -38,6 +42,10 @@ with sync_playwright() as p:
     spaces = api('/auth/workspaces')['body']
     homews = next(w for w in spaces if w['organizationId'] == home)
     check('home workspace is a live (non-demo) workspace', not homews['isDemo'], homews['name'])
+    # Calls run on Sarvam (Plivo removed): the test call needs a Sarvam agent for automatic calls in this workspace.
+    if not (api('/telephony')['body'] or {}).get('systemAgentId'):
+        sql(f"INSERT INTO VoiceAgent (id, organizationId, name, industry, instructions, languages, greeting, fallbackMessage, status, telephonyProvider, sarvamAppId, sarvamAppVersion, outbound, updatedAt) VALUES ('ui_auto_{run}', '{home}', 'UI auto caller {run}', 'other', 'Test agent for automatic calls.', '[\"ta\",\"en\"]', 'Vanakkam', 'Sorry', 'active', 'sarvam', 'app-ui', 1, '{{\"enabled\": true}}', NOW(3))")
+        check('a Sarvam agent can be chosen for automatic calls', api('/telephony/system-agent', {'agentId': f'ui_auto_{run}'}, 'PUT')['status'] == 200)
     demo = next((w for w in spaces if w['isDemo'] and w['organizationId'].startswith('org_demo_') and w['industry'] == 'real_estate'), None)
     try:
         pg.goto(WEB + '/contacts'); pg.wait_for_timeout(2500)
@@ -121,6 +129,9 @@ with sync_playwright() as p:
         check('no page errors', not errs, '; '.join(errs)[:200])
     finally:
         api('/auth/workspace', {'organizationId': home})
+        if sql(f"SELECT COUNT(*) FROM VoiceAgent WHERE id='ui_auto_{run}'") == '1':
+            api('/telephony/system-agent', {'agentId': None}, 'PUT')
+            sql(f"DELETE FROM VoiceAgent WHERE id='ui_auto_{run}'")
     b.close()
 
 print(f"\n{sum(results)}/{len(results)} passed")

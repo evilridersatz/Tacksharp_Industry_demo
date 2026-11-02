@@ -79,6 +79,7 @@ export class VoiceAgentsService {
     const agent = await this.prisma.voiceAgent.create({
       data: {
         organizationId: actor.org,
+        telephonyProvider: 'sarvam', // the only provider (Plivo removed); the column's old default was 'plivo'
         templateKey: tpl?.key ?? null,
         createdBy: actor.sub,
         callLimits: { maxCallSeconds: 300, maxConcurrent: 2, dailyLimit: 50 },
