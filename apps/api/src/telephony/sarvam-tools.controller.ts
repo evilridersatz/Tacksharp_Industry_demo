@@ -32,7 +32,9 @@ export class SarvamToolsController {
     requirePermission(u, PERMISSIONS.agentsManage);
     // The full tool key lets a caller place orders for this shop: only integration admins can reveal it.
     if (reveal === '1') requirePermission(u, PERMISSIONS.integrationsManage);
-    const o = await this.prisma.organization.findUnique({ where: { id: org }, select: { name: true } });
+    const o = await this.prisma.organization.findUnique({ where: { id: org }, select: { name: true, vertical: true } });
+    // The grounded tools read a food business's menu, shops and orders. Other industries: not offered yet (pending).
+    if (o?.vertical !== 'restaurant') return { applicable: false, reason: 'The live menu and ordering tools are for food businesses (restaurant / chicken shop). Tools for this industry are pending.' };
     return sarvamConfigPack({
       organizationId: org,
       businessName: o?.name ?? 'our shop',

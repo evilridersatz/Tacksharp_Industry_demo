@@ -8,6 +8,7 @@ import { toast } from '@/components/toast';
 
 type Tool = { name: string; description: string; method: string; url: string; headers: Record<string, string>; body: Record<string, string>; saveReplyIntoVariables: string[] };
 export type ConfigPack = {
+  applicable?: boolean; reason?: string;
   language: { startingLanguage: string; allowedLanguages: string[]; neverAllowed: string[]; autoDetect: string; rule: string };
   instructions: string;
   onStartHook: Omit<Tool, 'name' | 'description'>;
@@ -45,7 +46,7 @@ export function SarvamConfigPack({ canReveal }: { canReveal: boolean }) {
   return (
     <Card>
       <CardHeader title="Sarvam phone agent setup" subtitle="Copy these into your Sarvam agent so it answers from your live menu and prices, in Tamil or English only." />
-      {error ? <ErrorBanner message={error} /> : !pack ? <Skeleton className="h-40" /> : (
+      {error ? <ErrorBanner message={error} /> : !pack ? <Skeleton className="h-40" /> : pack.applicable === false ? <p className="text-[13px] text-muted" data-testid="sarvam-config-pack-na">{pack.reason}</p> : (
         <div className="space-y-4 text-[12.5px]" data-testid="sarvam-config-pack">
           <section className="rounded-[10px] border border-line p-3">
             <p className="flex items-center gap-1.5 font-semibold text-ink"><Languages className="size-4" aria-hidden />Languages (Sarvam console → agent → Languages)</p>

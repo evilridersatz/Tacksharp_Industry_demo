@@ -244,6 +244,9 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(shown.tools[0].headers['x-tacksharp-tool-key']).toBe(mod.toolKey(ORG));
     expect(shown.postCallWebhook).toMatch(/scope=inbound&t=[0-9a-f]{64}$/);
     await expect(controller.configPack(ORG, { sub: 'u2', org: ORG, role: 'sales' } as any)).rejects.toThrow(/agents.manage/);
+    // Not a food business: the menu / ordering tools are not offered (honest "pending"), no tool key.
+    await prisma.organization.upsert({ where: { id: 'org_test_st_re' }, create: { id: 'org_test_st_re', name: 'Realty', vertical: 'real_estate' }, update: {} });
+    expect(await controller.configPack('org_test_st_re', { sub: 'u1', org: 'org_test_st_re', role: 'admin' } as any, '1')).toMatchObject({ applicable: false });
     expect((await controller.configPack(ORG, { sub: 'u3', org: ORG, role: 'manager' } as any)).tools.length).toBe(6);
     await expect(controller.configPack(ORG, { sub: 'u3', org: ORG, role: 'manager' } as any, '1')).rejects.toThrow(/integrations.manage/);
   });

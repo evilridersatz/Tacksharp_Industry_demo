@@ -10,6 +10,7 @@ from playwright.sync_api import sync_playwright
 import atexit, os, re, subprocess, tempfile, time
 
 WEB = 'http://localhost:3001'
+API = 'http://localhost:3000'
 SHOTS = os.environ.get('SHOTS_DIR', tempfile.gettempdir())
 DB = os.environ.get('TEST_DB_NAME', '')
 results = []
@@ -147,10 +148,26 @@ with sync_playwright() as p:
     cd.get_by_role('button', name='Close', exact=True).last.click(); pg.wait_for_timeout(1200)
     check('call log: the request appears with its outcome', pg.get_by_text(re.compile('Test mode is on|blocked by your calling hours')).count() >= 1)
     check('telephony: Sarvam only (Plivo removed); agent for automatic calls selectable', pg.get_by_text('Phone calls (Sarvam)').count() == 1 and pg.get_by_role('radio', name=re.compile('Plivo')).count() == 0 and pg.get_by_label('Agent for automatic calls').count() == 1)
-    pack = pg.get_by_test_id('sarvam-config-pack')
-    pack.wait_for(timeout=8000)
-    pack.scroll_into_view_if_needed(); pack.screenshot(path=os.path.join(SHOTS, 'sarvam-config-pack.png'))
-    check('Sarvam phone agent setup: Tamil + English only, never Hindi; 6 tools + on-start hook; key hidden', pack.count() == 1 and pack.get_by_text(re.compile('Tamil \\(ta-IN\\) and English \\(en-IN\\)')).count() == 1 and pack.get_by_text(re.compile('Hindi \\(hi-IN\\)')).count() >= 1 and pack.get_by_text('get_menu', exact=True).count() == 1 and pack.get_by_text('place_order', exact=True).count() == 1 and pack.get_by_text(re.compile('The tool key is hidden')).count() == 1)
+    na = pg.get_by_test_id('sarvam-config-pack-na')
+    na.wait_for(timeout=8000)
+    check('Sarvam phone agent setup: menu tools are offered only to food businesses (this workspace says so honestly)', na.get_by_text(re.compile('for food businesses')).count() == 1)
+    # A food workspace gets the full pack: Tamil + English only, Hindi removed, 6 tools + on-start hook, key hidden.
+    jget = lambda path, body=None, method=None: pg.evaluate("""async ([u, b, m]) => { const r = await fetch(u, { method: m || (b ? 'POST' : 'GET'), credentials: 'include', headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; }""", [API + path, body, method])
+    spaces = jget('/auth/workspaces')['body'] or []
+    home_org = jget('/auth/me')['body']['organizationId']
+    food = next((w for w in spaces if w.get('industry') in ('restaurant', 'food') or 'Chicken' in (w.get('name') or '')), None)
+    if food and jget('/auth/workspace', {'organizationId': food['organizationId']})['status'] in (200, 201):
+        pg.goto(WEB + '/voice-agents'); pg.wait_for_timeout(2000)
+        pack = pg.get_by_test_id('sarvam-config-pack')
+        try: pack.wait_for(timeout=8000)
+        except Exception: pass
+        ok = pack.count() == 1 and pack.get_by_text(re.compile('Tamil \\(ta-IN\\) and English \\(en-IN\\)')).count() == 1 and pack.get_by_text(re.compile('Hindi \\(hi-IN\\)')).count() >= 1 and pack.get_by_text('get_menu', exact=True).count() == 1 and pack.get_by_text('place_order', exact=True).count() == 1 and pack.get_by_text(re.compile('The tool key is hidden')).count() == 1
+        check(f"Sarvam phone agent setup in a food workspace ({food['name']}): Tamil + English only, never Hindi; tools; key hidden", ok)
+        if pack.count(): pack.scroll_into_view_if_needed(); pack.screenshot(path=os.path.join(SHOTS, 'sarvam-config-pack.png'))
+        jget('/auth/workspace', {'organizationId': home_org})
+        pg.goto(WEB + '/voice-agents'); pg.wait_for_timeout(1500)
+    else:
+        check('a food workspace to show the Sarvam setup pack', False, 'none available to this user')
     pg.get_by_text('Sarvam: what works (verified)').click(); pg.wait_for_timeout(300)
     check('telephony: Sarvam limitations stated (hosted agent, no webhook signing)', pg.get_by_text(re.compile('NOT pushed to Sarvam automatically')).count() == 1 and pg.get_by_text(re.compile('does not document webhook signing')).count() == 1)
     pg.screenshot(path=os.path.join(SHOTS, 'voice-agents-list.png'))
