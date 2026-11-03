@@ -15,7 +15,7 @@ import { normalizePhone } from '../common/phone.js';
  *   FOLLOWUP_SEND_MAX_ATTEMPTS      default 3. Attempts for a WhatsApp send that fails with a temporary error.
  *   FOLLOWUP_FEEDBACK_TEMPLATE      approved WhatsApp template for the feedback request outside the 24h window
  *                                   ({{1}} customer name, {{2}} order number).
- *   FOLLOWUP_CONFIRMATION_TEMPLATE  approved template for confirmations / updates outside 24h ({{1}} order number).
+ *   FOLLOWUP_CONFIRMATION_TEMPLATE  approved template for confirmations / updates outside 24h ({{1}} order number, {{2}} customer name).
  */
 export function followUpConfig(env: NodeJS.ProcessEnv = process.env) {
   const num = (name: string, fallback: number) => {

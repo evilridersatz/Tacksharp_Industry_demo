@@ -67,8 +67,8 @@ shown('WhatsApp', 'WHATSAPP_TEMPLATE_LANGUAGE', 'en', 'must equal the approved l
 const tpl = (name: string, params: string, use: string) =>
   row('Restaurant templates', name, set(name) ? 'OK' : 'WARN', set(name) ? `set — must be APPROVED with ${params}` : `missing — ${use} reaches only customers who messaged in the last 24h`);
 tpl('WHATSAPP_TEMPLATE_ORDER_READY', '1 body variable ({{1}} order number)', '"order ready" WhatsApp fallback');
-tpl('FOLLOWUP_CONFIRMATION_TEMPLATE', '1 body variable ({{1}} order number)', 'order confirmation / updates');
-tpl('FOLLOWUP_FEEDBACK_TEMPLATE', '2 body variables ({{1}} name, {{2}} order number)', 'feedback request');
+tpl('FOLLOWUP_CONFIRMATION_TEMPLATE', '2 body variables ({{1}} order number, {{2}} customer name)', 'order confirmation / updates');
+tpl('FOLLOWUP_FEEDBACK_TEMPLATE', '1 body variable ({{1}} order number)', 'feedback request');
 row('Restaurant templates', 'Offer template', 'INFO', 'set per offer campaign in the dashboard (Offers page), not in .env');
 
 // Real-estate templates (other product; listed so their absence is not confused with a restaurant problem)
