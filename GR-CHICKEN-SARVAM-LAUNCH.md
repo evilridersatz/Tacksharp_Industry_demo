@@ -103,10 +103,10 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
   **These seven were approved by the owner on 2026-11-03 (evening)**, after the morning approval of the five above.
   Approval covers applying them; it still has to happen after the verified backup in the runbook below.
 - `20261104100000_knowledge_studio`: `KnowledgeDocument.authored` (default false), `KnowledgeGap` (new table).
-  Additive; written after that approval under the owner's "finish everything" instruction. **Confirm it with the owner
-  before applying.**
+  Additive. **Approved by the owner on 2026-11-03 (20:18 IST).**
 - `20261104200000_invoice_payment_links`: nullable `PlatformInvoice.paymentLinkId` (unique) / `paymentLinkUrl` /
-  `paymentLinkStatus`, `PaymentWebhookEvent` (new table). Additive; **confirm with the owner before applying.**
+  `paymentLinkStatus`, `PaymentWebhookEvent` (new table). Additive. **Approved by the owner on 2026-11-03 (20:18 IST).**
+  All fourteen migrations above are approved; apply them in timestamp order, only after the verified backup below.
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

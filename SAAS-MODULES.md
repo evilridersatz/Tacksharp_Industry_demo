@@ -330,8 +330,8 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 - **Not verified against Razorpay** from here (no network access to it): needs the keys, the webhook URL registered in
   the Razorpay dashboard, and one test-mode payment end to end before going live.
 - Migrations `20261103900000_subscriptions` (approved 2026-11-03) and `20261104200000_invoice_payment_links`
-  (`PlatformInvoice.paymentLinkId / paymentLinkUrl / paymentLinkStatus`, `PaymentWebhookEvent`; additive; confirm
-  before applying).
+  (`PlatformInvoice.paymentLinkId / paymentLinkUrl / paymentLinkStatus`, `PaymentWebhookEvent`; additive; approved
+  2026-11-03).
 - Tests: `src/billing/plans.spec.ts` (4), `test/billing.integration.spec.ts` (6), `test/payments.integration.spec.ts`
   (6; fake Razorpay API, real signed webhooks), `tests/ui-billing.py` (28).
 - **Not built (needs business decisions):** GST e-invoicing (IRN through an IRP / GSP account), usage-based (metered)
@@ -355,7 +355,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 - API: `GET /knowledge-studio`, `GET /knowledge-documents/:id/passages`, `GET|PUT /knowledge-documents/:id/answer`,
   `POST /knowledge-bases/:id/answers` (`{ title, text, gapId? }`), `GET /knowledge-gaps?knowledgeBaseId&status`,
   `POST /knowledge-gaps/:id/status`. View needs agents-view, changes need agents-manage; everything organization-scoped.
-- Migration `20261104100000_knowledge_studio` (additive; confirm before applying).
+- Migration `20261104100000_knowledge_studio` (additive; approved 2026-11-03).
 - Tests: `src/knowledge/knowledge-studio.spec.ts` (2), `test/knowledge-studio.integration.spec.ts` (5),
   `tests/ui-knowledge.py` (21).
 - **Not built:** semantic (embedding) search; retrieval is BM25 as before. Website / WhatsApp custom-agent chats do not
