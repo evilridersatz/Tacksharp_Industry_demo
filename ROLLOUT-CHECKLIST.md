@@ -83,14 +83,26 @@ The live folder is never modified; the new release goes into a new directory and
 - **STOP** if the list differs (an older migration pending, or a "failed" / "modified" migration). Ask before acting.
 - [ ] `npx prisma migrate deploy`, then `npx prisma migrate status` says the schema is up to date.
 
-## 5. Build and switch (only the two recorded processes)
+## 5. Build, pre-flight and switch (all FOUR processes; done this way on 2026-11-03)
 
-- [ ] `export NODE_OPTIONS=--max-old-space-size=1280` (2 GB RAM: the build must not starve the live processes).
-- [ ] `npm run build` (API), then the web build with `NEXT_PUBLIC_RELEASE_ID=$SHA` (`DEPLOY.md` step 5).
-- [ ] `pm2 delete tacksharp-gr-chicken` and start it from `$NEW/apps/api` (`dist/main.js`, `RELEASE_ID=$SHA`);
-      `pm2 delete tacksharp-gr-dashboard` and start it from `$NEW/apps/web` (`.next/standalone/apps/web/server.js`, same
-      port as before). `pm2 save`. Never `pm2 restart all`; never touch pm2 0, 1, 5, 8.
-- [ ] `pm2 logs <api> --lines 60 --nostream`: startup completes, no errors, the Plivo warning only if `PLIVO_*` remain.
+The dashboards call `platform-api.tacksharp.in` (pm2 `tacksharp-platform-api-new-test`, port 3314, no background jobs)
+and `gr-api.tacksharp.in` (pm2 `tacksharp-gr-chicken`, port 3001) takes the webhooks and runs the jobs. Both dashboards
+(`grchicken.tacksharp.in` :3002, `platform.tacksharp.in` :3114) share one build. Switch the four together.
+
+- [ ] `export NODE_OPTIONS=--max-old-space-size=1280`, then from `$NEW`:
+      `NEXT_PUBLIC_API_URL=https://platform-api.tacksharp.in NEXT_PUBLIC_RELEASE_ID=$SHA npm run build`; copy
+      `apps/web/.next/static` and `apps/web/public` into `apps/web/.next/standalone/apps/web/` (standalone layout).
+- [ ] Save each process's settings from `pm2 jlist` into two owner-only process files in `~/rollout`, one pointing at
+      `$NEW` and one at `$PREV` (rollback). **The file names must end in `.config.js`** (e.g. `new.config.js`,
+      `prev.config.js`): pm2 runs any other name as a plain script, which on 2026-11-03 left nothing serving for two
+      minutes. Remove pm2-level settings that would override the new `.env` (it was `TELEPHONY_WEBHOOK_SECRET` on the
+      platform API).
+- [ ] **Pre-flight** (no customer impact): start the new API on port 3401 with `RUN_WORKERS=false`, `DRY_RUN=true` and
+      the new dashboard on 3402; `/health` must show the new release, database and Redis ok; `/login` must be 200;
+      then delete the two pre-flight processes.
+- [ ] **Protected switch**: delete the four, start `new.config.js`, wait up to 60 s for 3001 / 3314 health and
+      3002 / 3114 `/login`; on success `pm2 save`, otherwise delete them and start `prev.config.js` automatically.
+      Never `pm2 restart all`; never touch the old 22-Oct test processes.
 
 ## 6. Verify (read-only; nothing is sent)
 
