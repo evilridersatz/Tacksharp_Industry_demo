@@ -305,6 +305,8 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
   fbsbx / facebook / instagram hosts) from the signed webhook are kept; the inbox shows images straight from Meta (no
   referrer) and other files as links. Meta's links expire after a while.
 - **Story replies:** labelled "[Reply to your story]" with a link to the story; story mentions are labelled.
+- **Reactions:** a customer's emoji reaction (Instagram / Messenger `reaction`, react / unreact) is kept on the message it
+  reacts to and shown under it; only messages of that person's own conversation can be touched.
 - **Human Agent tag** (setting "Human Agent replies (7 days)", off by default): a person (never the AI, never an
   approved AI draft) may reply 24 h - 7 days after the customer's last message with `messaging_type: MESSAGE_TAG`,
   `tag: HUMAN_AGENT`. Turn it on only after Meta approved the app for the Human Agent permission.
@@ -314,9 +316,9 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
   ignored. The AI never answers comments. Staff reply publicly (`POST /{comment-id}/replies`) or send the one private
   message Meta allows (`POST /{ig-account-id}/messages`, `recipient.comment_id`, within 7 days; refused when opted out
   or already sent). Same live gate (DRY_RUN, approved test ids, demo customers). `POST /inbox/conversations/:id/private-reply`.
-- Tests: `test/social-extras.integration.spec.ts` (4), `tests/ui-social.py` (29 in all).
+- Tests: `test/social-extras.integration.spec.ts` (4), `tests/ui-social.py` (30 in all).
 - **Not built:** Facebook Page post comments (Meta's comment webhook format for Pages could not be confirmed from its
-  documentation here), reactions, hiding / deleting comments, AI replies to comments. **Not verified against Meta**:
+  documentation here), hiding / deleting comments, AI replies to comments. **Not verified against Meta**:
   needs a Page, an app with `pages_messaging` / `instagram_manage_messages` / `instagram_manage_comments`, the webhook
   subscribed (messages, message_deliveries, message_reads, messaging_seen, comments) and, for the 7-day tag, the Human
   Agent permission.

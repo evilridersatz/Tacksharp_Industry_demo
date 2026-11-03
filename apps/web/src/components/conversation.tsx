@@ -48,6 +48,7 @@ export function Thread({ messages, name, channel }: { messages: Message[]; name:
               >
                 {template ? `Template message sent (${m.content.slice(10, m.content.indexOf(']'))})` : m.content}
               </p>
+              {(() => { const r = (m.metadata as { reaction?: { emoji?: string | null; kind?: string | null } } | null)?.reaction; return r ? <span className="-mt-1.5 rounded-full bg-white px-1.5 text-[13px] shadow-sm" title={`Customer reacted${r.kind ? ` (${r.kind})` : ''}`} data-testid="reaction">{r.emoji || '♥'}</span> : null; })()}
               <span className="mt-0.5 text-[11px] text-faint">
                 {mine ? `${(m.metadata as { author?: string; authorName?: string } | null)?.author === 'staff' ? (m.metadata as { authorName?: string }).authorName ?? 'Team' : (m.metadata as { autoReply?: boolean } | null)?.autoReply ? 'Automatic' : 'AI'} · ` : ''}
                 {timeOnly(m.createdAt)}

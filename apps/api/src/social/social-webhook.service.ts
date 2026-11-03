@@ -24,6 +24,8 @@ type MessagingEvent = {
   delivery?: { mids?: string[]; watermark?: number };
   /** Messenger: read up to `watermark`; Instagram: read this `mid`. */
   read?: { watermark?: number; mid?: string };
+  /** An emoji reaction to message `mid` (react / unreact). */
+  reaction?: { mid?: string; action?: string; reaction?: string; emoji?: string };
 };
 type CommentValue = { id?: string; text?: string; from?: { id?: string; username?: string }; media?: { id?: string; media_product_type?: string }; parent_id?: string };
 type Entry = { id?: string; time?: number; messaging?: MessagingEvent[]; field?: string; value?: CommentValue; changes?: Array<{ field?: string; value?: CommentValue }> };
@@ -113,6 +115,10 @@ export class SocialWebhookService {
       for (const ev of entry.messaging ?? []) {
         if (ev.delivery || ev.read) {
           await this.receipt(r.organizationId, r.channel, ev).catch((e) => log.warn('social.receipt_failed', { error: describeError(e) }));
+          continue;
+        }
+        if (ev.reaction) {
+          await this.react(r.organizationId, r.channel, ev).catch((e) => log.warn('social.reaction_failed', { error: describeError(e) }));
           continue;
         }
         const m = ev.message;
@@ -219,6 +225,24 @@ export class SocialWebhookService {
     let n = 0;
     for (const id of ids) n += await this.conversations.applyDeliveryStatus(org, id, status);
     if (n) log.info('social.receipt', { channel, status, updated: n });
+  }
+
+  /**
+   * A customer's emoji reaction to a message in their conversation (ours or theirs): kept on that message so the thread
+   * shows it; "unreact" removes it. Only messages of that person's conversation can be touched.
+   */
+  private async react(org: string, channel: SocialChannel, ev: MessagingEvent) {
+    const user = ev.sender?.id;
+    const mid = ev.reaction?.mid;
+    if (!user || !mid || user === ev.recipient?.id) return;
+    const conv = await this.prisma.conversation.findFirst({ where: { organizationId: org, channel, externalId: user }, select: { id: true } });
+    if (!conv) return;
+    const m = await this.prisma.message.findFirst({ where: { organizationId: org, conversationId: conv.id, externalId: mid }, select: { id: true, metadata: true } });
+    if (!m) return;
+    const md = { ...((m.metadata ?? {}) as Record<string, unknown>) };
+    if (ev.reaction!.action === 'unreact') delete md.reaction;
+    else md.reaction = { emoji: String(ev.reaction!.emoji ?? '').slice(0, 16) || null, kind: String(ev.reaction!.reaction ?? '').slice(0, 30) || null, at: new Date().toISOString() };
+    await this.prisma.message.update({ where: { id: m.id }, data: { metadata: md as never } });
   }
 
   /**

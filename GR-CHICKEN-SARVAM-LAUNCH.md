@@ -59,6 +59,8 @@ cp -p .env ~/backups/env-pre-rotation-$(date +%F-%H%M)
 sed -i "s|^TELEPHONY_WEBHOOK_SECRET=.*|TELEPHONY_WEBHOOK_SECRET=$NEWSECRET|" .env; unset NEWSECRET
 grep -c '^TELEPHONY_WEBHOOK_SECRET=' .env      # expect 1
 npm run check:config                          # names only; must say the secret is set (32+ chars)
+# check:config also lists Instagram & Messenger (META_SOCIAL_VERIFY_TOKEN, LIVE_TEST_SOCIAL_IDS) and Tacksharp billing
+# (RAZORPAY_KEY_ID / _SECRET / _WEBHOOK_SECRET, PLATFORM_LEGAL_NAME / _GSTIN / _ADDRESS / _BILLING_EMAIL): names only.
 ```
 
 After the API restarts with the new secret: copy the NEW webhook URL and tool key from the dashboard pack into

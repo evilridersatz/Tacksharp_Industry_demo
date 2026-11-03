@@ -89,7 +89,7 @@ describe.skipIf(!enabled)('Instagram / Messenger extras (integration)', () => {
     await prisma.$disconnect();
   });
 
-  it('receipts: Messenger delivery (mids) and read (watermark), Instagram read (mid); never backwards', async () => {
+  it('receipts: Messenger delivery (mids) and read (watermark), Instagram read (mid); never backwards; reactions', async () => {
     const from = user();
     await say('page', from, { text: 'hello' });
     const c = await convOf(from, 'messenger');
@@ -116,6 +116,13 @@ describe.skipIf(!enabled)('Instagram / Messenger extras (integration)', () => {
     });
     await post(messaging('instagram', ig, { read: { mid: `mid.I1${run}` } }));
     expect(await status(`mid.I1${run}`)).toBe('read');
+    // Reactions: kept on the message reacted to; unreact removes it; another person's reaction cannot touch it.
+    await post(messaging('instagram', ig, { reaction: { mid: `mid.I1${run}`, action: 'react', reaction: 'love', emoji: '\u2764\ufe0f' } }));
+    expect((await prisma.message.findFirst({ where: { externalId: `mid.I1${run}` } })).metadata.reaction).toMatchObject({ emoji: '\u2764\ufe0f', kind: 'love' });
+    await post(messaging('instagram', user(), { reaction: { mid: `mid.I1${run}`, action: 'unreact' } }));
+    expect((await prisma.message.findFirst({ where: { externalId: `mid.I1${run}` } })).metadata.reaction).toBeTruthy();
+    await post(messaging('instagram', ig, { reaction: { mid: `mid.I1${run}`, action: 'unreact' } }));
+    expect((await prisma.message.findFirst({ where: { externalId: `mid.I1${run}` } })).metadata.reaction).toBeUndefined();
     // A receipt from someone we never wrote to changes nothing.
     expect(await post(messaging('page', user(), { read: { watermark: Date.now() } }))).toMatchObject({ success: true });
   });

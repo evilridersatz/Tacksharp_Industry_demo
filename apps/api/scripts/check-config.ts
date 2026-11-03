@@ -119,6 +119,20 @@ row('Multimodal', 'ffmpeg', (() => { try { execFileSync(process.env.FFMPEG_PATH 
 // Website assistant video (Simli)
 row('Assistant video', 'SIMLI_API_KEY + SIMLI_FACE_ID', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'OK' : 'INFO', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'set' : 'not set — the Video call button is hidden');
 
+// Instagram & Messenger (per-organization credentials are saved in the dashboard; these are deployment settings)
+row('Instagram & Messenger', 'META_SOCIAL_VERIFY_TOKEN', set('META_SOCIAL_VERIFY_TOKEN') ? 'OK' : set('WHATSAPP_VERIFY_TOKEN') ? 'INFO' : 'WARN', set('META_SOCIAL_VERIFY_TOKEN') ? 'set' : set('WHATSAPP_VERIFY_TOKEN') ? 'not set — the WhatsApp verify token is used for /webhooks/meta-social' : 'missing — Meta cannot verify /webhooks/meta-social');
+row('Instagram & Messenger', 'LIVE_TEST_SOCIAL_IDS', dryRun ? 'INFO' : set('LIVE_TEST_SOCIAL_IDS') || env.LIVE_ALLOW_ALL_CUSTOMERS === 'true' ? 'OK' : 'WARN', set('LIVE_TEST_SOCIAL_IDS') ? `${env.LIVE_TEST_SOCIAL_IDS!.split(',').filter(Boolean).length} approved account(s)` : 'none — live mode reaches no Instagram / Messenger account');
+
+// Tacksharp billing (platform account: online payment and invoice seller details)
+{
+  const keys = set('RAZORPAY_KEY_ID') && set('RAZORPAY_KEY_SECRET');
+  row('Billing', 'RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET', keys ? 'OK' : set('RAZORPAY_KEY_ID') || set('RAZORPAY_KEY_SECRET') ? 'WARN' : 'INFO', keys ? `set${env.RAZORPAY_KEY_ID!.startsWith('rzp_test_') ? ' (TEST mode keys)' : env.RAZORPAY_KEY_ID!.startsWith('rzp_live_') ? ' (LIVE keys)' : ''}` : set('RAZORPAY_KEY_ID') || set('RAZORPAY_KEY_SECRET') ? 'only one of the two is set' : 'not set — "Payment link" is refused; invoices are paid by bank transfer / UPI and recorded by staff');
+  if (keys || set('RAZORPAY_WEBHOOK_SECRET')) secret('Billing', 'RAZORPAY_WEBHOOK_SECRET', keys, 'without it a payment can never mark an invoice paid (links are refused)');
+  for (const n of ['PLATFORM_LEGAL_NAME', 'PLATFORM_GSTIN', 'PLATFORM_ADDRESS']) row('Billing', n, set(n) ? 'OK' : 'WARN', set(n) ? 'set' : 'missing — invoices are labelled as a payment request, not a tax invoice');
+  if (set('PLATFORM_GSTIN') && !/^[0-9]{2}[A-Z0-9]{10}[0-9A-Z]{3}$/.test(env.PLATFORM_GSTIN!.trim())) row('Billing', 'PLATFORM_GSTIN format', 'WARN', 'not 15 characters like 33ABCDE1234F1Z5');
+  secret('Billing', 'PLATFORM_BILLING_EMAIL', false, 'shown on invoices');
+}
+
 // Meta Lead Ads (real estate)
 secret('Meta Lead Ads (real estate)', 'META_PAGE_ACCESS_TOKEN', false, 'real-estate lead ads only');
 
