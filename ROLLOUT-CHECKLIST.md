@@ -4,8 +4,25 @@ One ordered list for the person doing the rollout. Tick each box; **stop at any 
 details behind each step are in `DEPLOY.md` (generic steps) and `GR-CHICKEN-SARVAM-LAUNCH.md` (GR Chicken, Sarvam,
 migrations). Nothing here prints a secret: commands show names, counts and statuses only.
 
-Current production: release `/var/www/staging/releases/tacksharp-20261028-531e3d4` (commit `531e3d4`). It is never
-modified; the new release goes into a new directory and is switched only after it is verified.
+## This server (checked read-only on 2026-11-03)
+
+| | |
+|---|---|
+| Host | AWS Lightsail, Mumbai (ap-south-1), `43.204.240.13`, user `ubuntu`, Ubuntu 22.04, t3.small (2 GB RAM + 4 GB swap) |
+| Node / npm | 22 / 10 (fine) |
+| Disk | 58 GB, 36 GB free (fine) |
+| ffmpeg | installed (4.4.2) |
+| Redis | 6.0.16 (the job library recommends 6.2+; works, upgrade later as a separate change) |
+| Live release folder (`PREV`) | `/var/www/staging/releases/tacksharp-20261028-531e3d4`, **code `f5c64e6`** (updated in place; the folder name is out of date). Rollback target = this folder as it is. |
+| Live processes | pm2 **9 `tacksharp-gr-chicken`** (API, settings from `apps/api/.env`, `DRY_RUN=false`, runs the background jobs) and pm2 **10 `tacksharp-gr-dashboard`** (web, `.next/standalone/apps/web/server.js`). Uptime 3 days, 0 unstable restarts. |
+| Database | `tacksharp` on `127.0.0.1`; migrations applied up to `20261030000000_voice_agents` (`migrate status`: up to date) |
+| Other processes | pm2 5 / 8 (`tacksharp-platform-*-new-test`, same folder, port 3314, **same live database, `DRY_RUN=false`**, no background jobs) and pm2 0 / 1 (old 22-Oct test release). Not touched by this rollout; owner to decide whether to stop them (`pm2 stop 5 8 0 1`, reversible), because the test copy works on real customer data. |
+| `.env` note | Has a stale `DATABASE_URL` (other user). The app ignores it (uses `DB_*`); only the migration tool reads it. Remove that line in the NEW release's `.env` (step 3). |
+
+GR Chicken is **already live** (`DRY_RUN=false`). Keep it that way in the new release: switching it on would stop real
+follow-ups. Everything new (drips, workflows, Instagram, payment links, plans) does nothing until someone sets it up.
+
+The live folder is never modified; the new release goes into a new directory and is switched only after it is verified.
 
 ## 0. Before you start (people and access)
 
@@ -21,7 +38,7 @@ modified; the new release goes into a new directory and is switched only after i
 ## 1. Discover (read-only)
 
 - [ ] `pm2 ls`: write down the exact API and web process names, scripts, args and ports (`DEPLOY.md` step 1).
-- [ ] Note `PREV=/var/www/staging/releases/tacksharp-20261028-531e3d4` and confirm the processes run from it.
+- [ ] Note `PREV=/var/www/staging/releases/tacksharp-20261028-531e3d4` (code `f5c64e6`); pm2 9 and 10 run from it.
 
 ## 2. Backup (STOP if any check fails)
 
@@ -44,16 +61,19 @@ modified; the new release goes into a new directory and is switched only after i
   - [ ] Optional: `META_SOCIAL_VERIFY_TOKEN`, `LIVE_TEST_SOCIAL_IDS` (section 8).
   - [ ] Optional: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (section 9).
   - [ ] Invoices: `PLATFORM_LEGAL_NAME`, `PLATFORM_GSTIN`, `PLATFORM_ADDRESS`, `PLATFORM_BILLING_EMAIL`.
-  - [ ] Keep `DRY_RUN=true`. Delete `PLIVO_*` (ignored now).
-- [ ] `which ffmpeg` (voice notes longer than 30 s); install it if missing.
+  - [ ] `DRY_RUN`: keep today's value (`false` on this server: GR Chicken is live). Delete `PLIVO_*` (ignored now).
+  - [ ] Delete the stale `DATABASE_URL` line: `sed -i '/^DATABASE_URL=/d' "$NEW/apps/api/.env"` (the migration tool
+        then uses the same `DB_*` login as the app).
+- [x] ffmpeg installed (4.4.2).
 - [ ] `cd "$NEW/apps/api" && npm run check:config` shows **no required setting missing**. Read every WARN line.
 - **STOP** if `check:config` exits with a missing required setting.
 
-## 4. Database migrations (owner sign-off: approved 2026-11-03 for all fifteen)
+## 4. Database migrations (owner sign-off: approved 2026-11-03)
 
-- [ ] `npx prisma migrate status` lists **exactly these 15** as not yet applied (and nothing else):
+- [ ] `npx prisma migrate status` lists **exactly these 13** as not yet applied (and nothing else; this database
+      already has everything up to `20261030000000_voice_agents`):
 
-  `20261029000000_enterprise_platform`, `20261030000000_voice_agents`, `20261103000000_team_inbox`,
+  `20261103000000_team_inbox`,
   `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`,
   `20261103500000_workflows`, `20261103600000_mcp_keys`, `20261103700000_ai_steering`,
   `20261103800000_agent_builder`, `20261103900000_subscriptions`, `20261104100000_knowledge_studio`,
@@ -65,9 +85,11 @@ modified; the new release goes into a new directory and is switched only after i
 
 ## 5. Build and switch (only the two recorded processes)
 
+- [ ] `export NODE_OPTIONS=--max-old-space-size=1280` (2 GB RAM: the build must not starve the live processes).
 - [ ] `npm run build` (API), then the web build with `NEXT_PUBLIC_RELEASE_ID=$SHA` (`DEPLOY.md` step 5).
-- [ ] `pm2 delete <api>` and start it from `$NEW` with `RELEASE_ID=$SHA`; the same for `<web>`. `pm2 save`.
-      Never `pm2 restart all`.
+- [ ] `pm2 delete tacksharp-gr-chicken` and start it from `$NEW/apps/api` (`dist/main.js`, `RELEASE_ID=$SHA`);
+      `pm2 delete tacksharp-gr-dashboard` and start it from `$NEW/apps/web` (`.next/standalone/apps/web/server.js`, same
+      port as before). `pm2 save`. Never `pm2 restart all`; never touch pm2 0, 1, 5, 8.
 - [ ] `pm2 logs <api> --lines 60 --nostream`: startup completes, no errors, the Plivo warning only if `PLIVO_*` remain.
 
 ## 6. Verify (read-only; nothing is sent)
@@ -107,22 +129,26 @@ modified; the new release goes into a new directory and is switched only after i
 - [ ] Razorpay dashboard → Webhooks: URL `https://gr-api.tacksharp.in/webhooks/razorpay`, the same secret as
       `RAZORPAY_WEBHOOK_SECRET`, events `payment_link.paid`, `payment_link.partially_paid`, `payment_link.expired`,
       `payment_link.cancelled`.
-- [ ] Payment links are refused while `DRY_RUN=true`; test this together with section 10, on a test invoice of a test
+- [ ] Payment links are refused while `DRY_RUN=true` (this server is live, so they work); test on a test invoice of a test
       organization: create the link, pay it in Razorpay test mode, confirm the invoice turns **paid** with the
       `razorpay:pay_...` reference. Only then switch to live keys.
 
-## 10. First live sends (owner approval immediately before)
+## 10. First live tests of the new release (owner approval immediately before)
 
-- [ ] Approved numbers / accounts only: `LIVE_TEST_RECIPIENTS` (WhatsApp, calls), `LIVE_TEST_SOCIAL_IDS`
-      (Instagram / Messenger). `LIVE_ALLOW_ALL_CUSTOMERS` stays `false`.
-- [ ] `DRY_RUN=false`, restart only the API, run the live call test (`GR-CHICKEN-SARVAM-LAUNCH.md` section 5, "Live
-      call test"), the inbound call in Tamil, and one WhatsApp confirmation.
+This server is already live (`DRY_RUN=false`), so nothing is switched on here: the tests below use the new features
+for the first time, with approved numbers / accounts only.
+
+- [ ] Check (do not widen) `LIVE_TEST_RECIPIENTS` (WhatsApp, calls) and `LIVE_TEST_SOCIAL_IDS` (Instagram /
+      Messenger). Whether `LIVE_ALLOW_ALL_CUSTOMERS` is already `true` on this server: read it, do not change it.
+- [ ] Run the live call test (`GR-CHICKEN-SARVAM-LAUNCH.md` section 5, "Live call test"), the inbound call in Tamil,
+      and one WhatsApp confirmation, from an approved number.
 - [ ] Check in the dashboard: the order, the WhatsApp delivery status, the call transcript and summary.
 - [ ] Opening to all customers (`LIVE_ALLOW_ALL_CUSTOMERS=true`) is a separate owner decision.
 
 ## 11. Rollback
 
-- [ ] `DEPLOY.md` step 7: start the recorded `$PREV` processes again. The new tables stay (the old code ignores them).
+- [ ] `DEPLOY.md` step 7: start `tacksharp-gr-chicken` and `tacksharp-gr-dashboard` again from `$PREV` (code
+      `f5c64e6`). The new tables stay (the old code ignores them).
 - [ ] Restore the `.env` backup if the secret was rotated; point the Sarvam webhook back.
 - [ ] Restoring the database backup only with the owner's approval.
 

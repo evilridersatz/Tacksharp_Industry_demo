@@ -83,7 +83,8 @@ cd "$NEW" && npm ci && cd apps/api && npx prisma generate && npm run check:confi
 `.env` additions (names only): `TELEPHONY_WEBHOOK_SECRET` (rotated, section 4), `KNOWLEDGE_DIR` (absolute, writable,
 outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGENTS_API_KEY`, `SARVAM_AGENTS_ORG_ID`,
 `SARVAM_AGENTS_WORKSPACE_ID`, `SARVAM_AGENTS_CONNECTION_ID`, `SARVAM_AGENTS_PHONE_NUMBER`. `PLIVO_*` can be deleted
-(ignored; startup warns while they are present). Keep `DRY_RUN=true` until the live call test.
+(ignored; startup warns while they are present). Keep `DRY_RUN=true` until the live call test on a server that is not
+live yet; the GR Chicken server is already live (`DRY_RUN=false`): keep its value (see `ROLLOUT-CHECKLIST.md`).
 
 **Migrations (database change: backup first, DEPLOY.md step 2).** Approved by the owner on 2026-11-03 for production
 (after a verified backup). From `531e3d4` **fifteen** are pending (it already has everything up to
