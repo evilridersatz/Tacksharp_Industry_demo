@@ -92,8 +92,9 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 - `20261103100000_crm`: nullable `Customer.attributes` / `stage` / `followUpAt` + indexes, `CustomerNote`;
 - `20261103200000_drip`: `DripSequence`, `DripEnrollment`, `DripStepRun` (new tables only);
 - `20261103300000_meta_capi`: `MetaCapiEvent` (new table only);
-- `20261103400000_social_identity`: `SocialIdentity` (new table only).
-  **These last two await the owner's approval** (added after the 2026-11-03 approval of the five above).
+- `20261103400000_social_identity`: `SocialIdentity` (new table only);
+- `20261103500000_workflows`: `Workflow`, `WorkflowRun` (new tables only).
+  **These last three await the owner's approval** (added after the 2026-11-03 approval of the five above).
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

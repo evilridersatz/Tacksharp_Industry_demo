@@ -2648,3 +2648,56 @@ model SocialIdentity {
   @@unique([organizationId, channel, externalUserId])
   @@index([customerId])
 }
+
+/// Visual Workflow Studio: one trigger and a tree of steps (graph JSON, see src/workflows/workflow-graph.ts).
+model Workflow {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String        @db.VarChar(120)
+  description    String?       @db.VarChar(500)
+  /// draft | active | paused
+  status         String        @default("draft") @db.VarChar(20)
+  graph          Json
+  /// +1 on every saved change; a run keeps the version (and graph) it started with.
+  version        Int           @default(1)
+  /// Only records created / changed after this moment start runs (no back-fill of history).
+  activatedAt    DateTime?
+  createdBy      String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  runs           WorkflowRun[]
+
+  @@unique([organizationId, name])
+  @@index([status])
+}
+
+model WorkflowRun {
+  id             String    @id @default(cuid())
+  organizationId String
+  workflowId     String
+  version        Int
+  /// Snapshot of the graph this run executes (edits never change a running run).
+  graph          Json
+  /// "<trigger>:<record id>": each record starts a workflow at most once.
+  triggerKey     String
+  customerId     String?
+  context        Json?
+  /// running | waiting | completed | failed | stopped
+  status         String    @default("running") @db.VarChar(20)
+  cursor         Json?
+  resumeAt       DateTime?
+  attempts       Int       @default(0)
+  /// [{ stepId, type, result, detail, at }]
+  log            Json?
+  /// A test run from the studio: nothing is sent or changed, waits are skipped.
+  test           Boolean   @default(false)
+  lastError      String?   @db.VarChar(500)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+  workflow       Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, triggerKey])
+  @@index([status, resumeAt])
+  @@index([organizationId, createdAt])
+}

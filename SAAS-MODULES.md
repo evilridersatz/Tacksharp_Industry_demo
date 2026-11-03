@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger (P3)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio (P3)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,11 +10,12 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Visual Workflow Studio (P3) | Done | `/workflows`, `apps/api/src/workflows/` |
 | Instagram & Messenger (P3) | Done for the team inbox (AI replies pending; not yet tested against Meta) | Settings → Integrations → Instagram & Messenger, `/inbox`, `apps/api/src/social/` |
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`.
 
 ## Team inbox and human hand-over
 
@@ -104,6 +105,35 @@ fallback.
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
 
+## Visual Workflow Studio (P3)
+
+A visual editor at `/workflows`: a trigger card, then steps connected top to bottom; a **Condition** splits into **Yes**
+and **No** branches (nested up to 4 deep, 40 steps). Steps are added with the + between cards and edited in the side
+panel; errors are shown on the card they belong to. Templates: welcome a new lead, thank big orders, refunds to the team.
+
+- Triggers: new enquiry / lead, order completed, customer reaches a CRM stage (once per customer per stage), conversation
+  needs a person (AI hand-over or team take-over), customer message containing a keyword. Read from the database every
+  minute; only records created / changed **after activation** start a run (never history); each record starts a given
+  workflow once.
+- Steps: condition (CRM stage, tag, language, source, has email, WhatsApp consent, order total, trigger channel; facts
+  read when the step runs), wait (1 minute to 60 days), send WhatsApp, AI call, set CRM stage, add tag, hand to the team
+  (AI off, high priority, round-robin), create task, enrol in a drip sequence (must belong to this workspace).
+- Messages and calls use the shared `OutreachService` (also used by drip sequences): consent, 24 h window / approved
+  template, live gate (DRY_RUN = simulated, saved in the conversation as "not sent (test mode)"), opted-out customers
+  skipped. A WhatsApp step marked in flight before sending is never sent twice; temporary failures retry after 5 / 15 / 60
+  minutes; AI calls are idempotent per run and step.
+- Versioning: every saved change is a new version; a run executes the graph snapshot it started with. Pausing holds all
+  runs; activating starts from now. Runs can be stopped; each keeps a step log.
+- **Test on a customer**: the saved version against one real customer — conditions on real data, messages previewed
+  (would send / would skip and why), changes described, waits skipped; nothing is sent or changed.
+- API: `GET/POST /workflows`, `GET/PATCH /workflows/:id`, `POST /workflows/:id/activate|pause|test`,
+  `POST /workflows/runs/:runId/stop`. `marketing.view` to read, `marketing.manage` to change.
+- Tests: `src/workflows/workflow-graph.spec.ts` (5), `test/workflows-studio.integration.spec.ts` (6: every trigger and step
+  with real effects, waits, pause, snapshot after edit, opt-out, live sends with retry limit, interrupted send not
+  repeated, test runs, stop, isolation) and `tests/ui-workflows.py` (15, real worker).
+- Pending: drag-and-drop free canvas (the editor is a structured top-down flow), loops / jumps between steps,
+  webhooks and integrations as steps, per-workflow analytics.
+
 ## Instagram & Messenger (P3)
 
 Instagram Direct and Facebook Messenger messages arrive in the **team inbox** and the team replies from there.
@@ -138,12 +168,12 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: Visual Workflow Studio, AI replies on Instagram / Messenger, live AI steering, advanced analytics, more
+P3: AI replies on Instagram / Messenger, live AI steering, advanced analytics, more
 integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production
 
-Apply the five migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
+Apply the six migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
 add columns and tables. Drip sends nothing until a sequence is created, activated and customers are enrolled.

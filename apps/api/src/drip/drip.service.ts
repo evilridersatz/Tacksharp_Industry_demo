@@ -1,18 +1,14 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { ConversationsService } from '../conversations/conversations.service.js';
-import { TelephonyService } from '../telephony/telephony.service.js';
-import { WhatsAppAmbiguousSendError, WhatsAppSenderService, WhatsAppTransientError } from '../whatsapp/whatsapp-sender.service.js';
-import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
-import { firstName } from '../whatsapp/message-templates.js';
+import { OutreachService } from '../automation/outreach.service.js';
 import { runInProviderScope } from '../integrations/provider-scope.js';
 import { customerLockKey, withLock } from '../common/redis-lock.js';
 import { queueRedis } from '../queues/queues.js';
 import { config } from '../common/config.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
-import { dueAt, fill, presetFor, validateHours, validateSteps, type DripStep } from './drip-plan.js';
+import { dueAt, presetFor, validateHours, validateSteps, type DripStep } from './drip-plan.js';
 
 type Actor = { sub: string; org: string };
 const RETRY_MINUTES = [5, 15, 60];
@@ -32,9 +28,7 @@ const LEASE_MS = 10 * 60_000;
 export class DripService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly conversations: ConversationsService,
-    private readonly whatsapp: WhatsAppSenderService,
-    @Optional() private readonly telephony?: TelephonyService,
+    private readonly outreach: OutreachService,
   ) {}
 
   // ----------------------------------------------------------------------------------------------- sequences
@@ -277,57 +271,16 @@ export class DripService {
     return null;
   }
 
-  private async runWhatsApp(
-    e: { id: string; organizationId: string; customerId: string; sequenceId: string; stepIndex: number; attempts: number },
-    step: DripStep,
-  ): Promise<Outcome> {
-    const c = (await this.prisma.customer.findUnique({ where: { id: e.customerId } }))!;
-    // Contact preference: marketing consent, or the customer contacted the business themselves.
-    if (!c.messagingConsent && !c.lastInboundAt) return { status: 'skipped', reason: 'No WhatsApp consent and the customer never contacted the business' };
-    const org = await this.prisma.organization.findUnique({ where: { id: e.organizationId }, select: { name: true } });
-    const vars = { name: firstName(c.name) || 'there', business: org?.name ?? config.defaultOrganizationName };
-    const windowOpen = await this.conversations.isWhatsAppWindowOpen(e.organizationId, c.id);
-    const useText = windowOpen && Boolean(step.text);
-    if (!useText && !step.templateName) return { status: 'skipped', reason: '24-hour window closed and no approved template on this step' };
-    const content = useText ? fill(step.text!, vars) : `[template:${step.templateName}] ${vars.name} | ${vars.business}`;
-
-    const gate = liveGate(followUpConfig(), { phone: c.phone, isDemo: c.isDemo });
-    let messageId: string | undefined;
-    if (gate.live) {
-      try {
-        messageId = useText
-          ? await this.whatsapp.sendText(c.phone!, content)
-          : await this.whatsapp.sendCampaignTemplate(c.phone!, { name: step.templateName!, language: step.templateLanguage ?? 'en', bodyParams: [vars.name, vars.business] });
-      } catch (err) {
-        if (err instanceof WhatsAppTransientError) return { retryAt: new Date(Date.now() + RETRY_MINUTES[Math.min(RETRY_MINUTES.length - 1, e.attempts)] * 60_000), reason: describeError(err), countsAsAttempt: true };
-        if (err instanceof WhatsAppAmbiguousSendError) return { status: 'failed', reason: `Delivery unknown, not repeated: ${describeError(err)}` };
-        return { status: 'failed', reason: describeError(err) };
-      }
-    }
-    const conversation = await this.conversations.getOrCreateConversation({ organizationId: e.organizationId, channel: 'whatsapp', externalId: c.phone!, customerId: c.id });
-    await this.conversations.addMessage({
-      organizationId: e.organizationId,
-      conversationId: conversation.id,
-      role: 'assistant',
-      content,
-      externalId: messageId,
-      metadata: { drip: { sequenceId: e.sequenceId, enrollmentId: e.id, step: e.stepIndex }, kind: useText ? 'text' : 'template', ...(gate.live ? {} : { simulated: true, notSentReason: gate.reason }) },
-    });
-    return gate.live ? { status: 'sent', messageId } : { status: 'simulated', reason: gate.reason };
+  private async runWhatsApp(e: { id: string; organizationId: string; customerId: string; sequenceId: string; stepIndex: number; attempts: number }, step: DripStep): Promise<Outcome> {
+    const r = await this.outreach.whatsApp(e.organizationId, e.customerId, step, { drip: { sequenceId: e.sequenceId, enrollmentId: e.id, step: e.stepIndex } });
+    if (r.retryable) return { retryAt: new Date(Date.now() + RETRY_MINUTES[Math.min(RETRY_MINUTES.length - 1, e.attempts)] * 60_000), reason: r.reason, countsAsAttempt: true };
+    return r;
   }
 
   private async runVoice(e: { id: string; organizationId: string; customerId: string; stepIndex: number }, _step: DripStep): Promise<Outcome> {
-    const c = (await this.prisma.customer.findUnique({ where: { id: e.customerId } }))!;
-    const enquired = await this.prisma.lead.count({ where: { customerId: c.id } });
-    if (!c.callingConsent && !enquired) return { status: 'skipped', reason: 'No calling consent and no enquiry from this customer' };
-    if (!this.telephony) return { status: 'skipped', reason: 'Telephony module unavailable' };
-    const r = await this.telephony.placeSystemCall({ organizationId: e.organizationId, customerId: c.id, purpose: 'drip', idempotencyKey: `${e.id}-${e.stepIndex}` });
-    if (r.started) return { status: 'sent', messageId: r.requestId };
-    if (r.dryRun) return { status: 'simulated', reason: 'DRY_RUN or not an approved live recipient: no call placed' };
-    if (r.reason === 'outside_calling_hours' || r.reason === 'call_already_in_progress' || r.reason === 'concurrency_limit') {
-      return { retryAt: r.retryAt ?? new Date(Date.now() + 15 * 60_000), reason: r.reason, countsAsAttempt: false };
-    }
-    return { status: 'skipped', reason: r.reason ?? 'call not started' };
+    const r = await this.outreach.call(e.organizationId, e.customerId, 'drip', `${e.id}-${e.stepIndex}`);
+    if (r.retryable) return { retryAt: r.retryAt ?? new Date(Date.now() + 15 * 60_000), reason: r.reason, countsAsAttempt: false };
+    return r;
   }
 
   private async advance(e: { id: string; stepIndex: number; enrolledAt: Date; sequence: { sendStartHour: number; sendEndHour: number } }, steps: DripStep[], now: Date, result: string) {

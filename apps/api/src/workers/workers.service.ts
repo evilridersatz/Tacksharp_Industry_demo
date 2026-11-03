@@ -1,3 +1,4 @@
+import { WorkflowsService } from '../workflows/workflows.service.js';
 import { MetaCapiService } from '../meta-capi/meta-capi.service.js';
 import { DripService } from '../drip/drip.service.js';
 import { Injectable, Optional, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
@@ -54,6 +55,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     @Optional() private readonly monitoring?: MonitoringEngine,
     @Optional() private readonly drips?: DripService,
     @Optional() private readonly capi?: MetaCapiService,
+    @Optional() private readonly workflows?: WorkflowsService,
   ) {}
 
   onModuleInit() {
@@ -133,12 +135,15 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // Drip automation: due steps every minute. Each enrolment is leased in the database, so several API instances
     // ticking at once never run the same step twice.
     this.dripTimer = setInterval(() => {
-      if (this.dripRunning || !this.drips) return; // drips + Meta CAPI share one minute tick
+      if (this.dripRunning || !this.drips) return; // drips, Meta CAPI and workflows share one minute tick
       this.dripRunning = true;
       void this.drips.runDue().catch((e) => log.warn('drip.tick_failed', { error: describeError(e) }))
         // Meta Conversions API: record new conversions and send queued events (per organization, when enabled).
         .then(() => this.capi?.tick())
         .catch((e) => log.warn('meta_capi.tick_failed', { error: describeError(e) }))
+        // Visual Workflow Studio: start runs for new trigger records and execute due steps.
+        .then(() => this.workflows?.tick())
+        .catch((e) => log.warn('workflow.tick_failed', { error: describeError(e) }))
         .finally(() => (this.dripRunning = false));
     }, 60_000);
     this.dripTimer.unref();

@@ -53,6 +53,7 @@ describe.skipIf(!enabled)('drip automation (integration)', () => {
     const { PrismaService } = await import('../src/prisma/prisma.service.js');
     const { ConversationsService } = await import('../src/conversations/conversations.service.js');
     const { DripService } = await import('../src/drip/drip.service.js');
+    const { OutreachService } = await import('../src/automation/outreach.service.js');
     errors = await import('../src/whatsapp/whatsapp-sender.service.js');
     prisma = new PrismaService();
     await prisma.$connect();
@@ -60,7 +61,7 @@ describe.skipIf(!enabled)('drip automation (integration)', () => {
     conversations = new ConversationsService(prisma);
     sender = { sendText: vi.fn(async () => `wamid.DRIP${n++}`), sendCampaignTemplate: vi.fn(async () => `wamid.TPL${n++}`) };
     telephony = { placeSystemCall: vi.fn(async () => ({ started: false, dryRun: true, reason: 'dry_run' })) };
-    svc = new DripService(prisma, conversations, sender, telephony);
+    svc = new DripService(prisma, new OutreachService(prisma, conversations, sender, telephony));
   }, 60_000);
 
   afterAll(async () => {
