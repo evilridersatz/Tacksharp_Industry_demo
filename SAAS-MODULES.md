@@ -278,7 +278,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 ## Not done (pending)
 
 P3: AI replies on Instagram / Messenger, more
-integrations. P4: advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
+integrations. P4: knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
