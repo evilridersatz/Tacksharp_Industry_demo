@@ -702,7 +702,11 @@ function AiDraftForm({ contentId, notify, onDone }: { contentId?: string; notify
   const [language, setLanguage] = useState('english');
   const [productIds, setProductIds] = useState<string[]>([]);
   const [offer, setOffer] = useState('');
+  const [find, setFind] = useState('');
   const [busy, setBusy] = useState(false);
+  // Chosen products first, then the search matches (a catalogue can be far longer than the 60 shown).
+  const q = find.trim().toLowerCase();
+  const shown = [...(products ?? []).filter((p) => productIds.includes(p.id)), ...(products ?? []).filter((p) => !productIds.includes(p.id) && (!q || p.name.toLowerCase().includes(q)))].slice(0, 60);
   const go = async () => {
     setBusy(true);
     try {
@@ -719,11 +723,13 @@ function AiDraftForm({ contentId, notify, onDone }: { contentId?: string; notify
       </div>
       <div>
         <p className="text-[12.5px] font-semibold text-body">Products (up to 6; prices only where approved)</p>
+        {(products?.length ?? 0) > 12 && <input aria-label="Find a product" className={cx(inputCls, 'mt-1')} placeholder={`Search ${products!.length} products`} value={find} onChange={(e) => setFind(e.target.value)} />}
         <div className="mt-1 flex max-h-28 flex-wrap gap-1.5 overflow-auto">
-          {(products ?? []).slice(0, 60).map((p) => (
+          {shown.map((p) => (
             <button key={p.id} type="button" onClick={() => setProductIds((ids) => (ids.includes(p.id) ? ids.filter((x) => x !== p.id) : ids.length < 6 ? [...ids, p.id] : ids))} className={cx('rounded-full border px-2.5 py-0.5 text-[12px]', productIds.includes(p.id) ? 'border-brand bg-brand-soft text-brand-dark' : 'border-line text-muted')}>{p.name}{!p.priceApproved && ' (no price)'}</button>
           ))}
           {products && !products.length && <span className="text-muted">No active products in the catalogue.</span>}
+          {products && products.length > 0 && !shown.length && <span className="text-muted">No product matches “{find}”.</span>}
         </div>
       </div>
       <Label text="Offer (optional, used word for word; leave empty for none)"><input className={inputCls} value={offer} maxLength={200} onChange={(e) => setOffer(e.target.value)} /></Label>

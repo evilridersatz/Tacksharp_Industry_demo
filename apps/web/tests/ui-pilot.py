@@ -117,6 +117,7 @@ with sync_playwright() as p:
         pg.get_by_role('tab', name='Content calendar').click(); pg.wait_for_timeout(1500)
         pg.get_by_role('button', name='AI draft').click(); pg.wait_for_timeout(1000)
         d = pg.locator('dialog[open]')
+        if d.get_by_label('Find a product').count(): d.get_by_label('Find a product').fill(f'Pilot Silk {run}')
         d.get_by_role('button', name=f'Pilot Silk {run}').click()
         d.get_by_label('Language').select_option('tanglish')
         d.get_by_role('button', name='Draft').click(); pg.wait_for_timeout(2500)
@@ -136,6 +137,8 @@ with sync_playwright() as p:
         check('agent registry no longer lists finance reminders as not built', 'Payment reminders: prepared by the agent' in json.dumps(api('/agents')))
         check('no page errors', not errs, '; '.join(errs)[:300])
     finally:
+        # Test products are deactivated (orders keep referring to them), so they do not pile up in pickers.
+        sql(f"UPDATE TextileProduct SET active=0 WHERE sku='PIL-{run}'")
         api('/settings', {'industry': original.get('industry', 'real_estate'), 'textile': original.get('textile', {}), 'finance': original.get('finance', {})}, 'PUT')
         b.close()
 
