@@ -1,5 +1,7 @@
 # Tacksharp — GR Chicken (full source)
 
+> **Rolling out branch `enterprise-saas-20261029` to production?** Follow `ROLLOUT-CHECKLIST.md` step by step.
+
 Complete source: NestJS API (`apps/api`), Next.js dashboard (`apps/web`), AI package (`packages/ai`), all tests.
 This version: WhatsApp messages answered exactly once (durable inbound table), MVP demo catalogue seed, immediate
 stock / unit / quantity checks with alternatives, priced cart with running total, unknown stock never claimed,

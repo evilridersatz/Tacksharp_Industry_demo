@@ -86,7 +86,9 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 (ignored; startup warns while they are present). Keep `DRY_RUN=true` until the live call test.
 
 **Migrations (database change: backup first, DEPLOY.md step 2).** Approved by the owner on 2026-11-03 for production
-(all five, after a verified backup). From `531e3d4` five are pending, all additive (no drop, rename or rewrite):
+(after a verified backup). From `531e3d4` **fifteen** are pending (it already has everything up to
+`20261028100000_team_access`), all additive (no drop, rename or rewrite). The step-by-step order is in
+`ROLLOUT-CHECKLIST.md`.
 - `20261029000000_enterprise_platform`: `IntegrationCredential`, `IntegrationEvent`, defaulted `Organization` / `User` columns;
 - `20261030000000_voice_agents`: knowledge bases/documents/chunks, `VoiceAgent`, `TelephonyCallRequest`, `TelephonyWebhookEvent`, nullable `Call.agentId`, and `Call.provider` (existing rows read `plivo`, which is true for them).
 - `20261103000000_team_inbox`: `Conversation` inbox columns (status, priority, assignee, labels, AI on/off, hand-off
