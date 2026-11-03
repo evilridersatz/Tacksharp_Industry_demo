@@ -150,8 +150,24 @@ export class WhatsAppMessageProcessor {
       throw error;
     }
 
+    // Live AI steering, review mode: the AI's reply (already decided and recorded by its engine) waits in the team
+    // inbox for a person to approve, edit or discard it. Only AI replies are held (STOP / START confirmations and
+    // media acknowledgements are not), and only where a person switched the conversation to review.
+    if (result && conversationId && this.prisma) {
+      const conv = await this.prisma.conversation.findFirst({ where: { id: conversationId, organizationId: data.organizationId }, select: { aiMode: true } });
+      if (conv?.aiMode === 'review') {
+        await this.holdForReview(row.id, data, conversationId, reply!, new Date(startedAt - 1000));
+        try {
+          await this.leads.advanceLeadStatus({ organizationId: data.organizationId, leadId: result.leadId, status: 'contacted' });
+        } catch {
+          /* bookkeeping only */
+        }
+        return { heldForReview: conversationId };
+      }
+    }
+
     const sendStartedAt = Date.now();
-    await this.sendReply(row.id, data, reply!, conversationId, finalAttempt);
+    await this.sendReply(row.id, data, reply!, conversationId, finalAttempt, new Date((row.receivedAt?.getTime() ?? startedAt - 60_000) - 2000));
     if (conversationId) await this.inboxService?.onCustomerMessage(data.organizationId, conversationId).catch((e) => log.warn('inbox.update_failed', { error: errorMessage(e) }));
     const sendMs = Date.now() - sendStartedAt;
     // Optional spoken reply to a voice note, AFTER the text (which is the fallback). Real Sarvam audio only.
@@ -223,7 +239,30 @@ export class WhatsAppMessageProcessor {
     }
   }
 
-  private async sendReply(inboundId: string, data: WhatsAppMessageJobData, text: string, conversationId: string | undefined, finalAttempt: boolean) {
+  /**
+   * Marks THIS turn's AI reply as held. Engines may save their reply in the background just after answering, so the
+   * reply is found by its exact text and time (created during this turn), waiting up to 10 s for it; it never marks an
+   * earlier message. If it does not appear in time, nothing is marked (the reply is still not sent) and it is logged.
+   */
+  private async holdForReview(inboundId: string, data: WhatsAppMessageJobData, conversationId: string, reply: string, since: Date) {
+    let msg: { id: string; metadata: unknown } | null = null;
+    for (let i = 0; i < 40 && !msg; i++) {
+      msg = await this.prisma!.message.findFirst({ where: { organizationId: data.organizationId, conversationId, role: 'assistant', content: reply, createdAt: { gte: since }, deliveryStatus: null }, orderBy: { createdAt: 'desc' }, select: { id: true, metadata: true } });
+      if (!msg) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (msg) {
+      const md = (msg.metadata ?? {}) as Record<string, unknown>;
+      await this.prisma!.message.update({ where: { id: msg.id }, data: { deliveryStatus: 'held', deliveryUpdatedAt: new Date(), metadata: { ...md, review: { status: 'pending', inboundId } } as never } });
+    } else {
+      log.warn('whatsapp.held_reply_not_found', { messageId: data.messageId, conversationId });
+    }
+    await this.inbound.markSkipped(inboundId, 'held_for_review: the AI reply waits for a person to approve it');
+    await this.inboxService?.onCustomerMessage(data.organizationId, conversationId).catch(() => undefined);
+    log.info('whatsapp.held_for_review', { messageId: data.messageId, conversationId, found: Boolean(msg) });
+  }
+
+  private async sendReply(inboundId: string, data: WhatsAppMessageJobData, text: string, conversationId: string | undefined, finalAttempt: boolean, since: Date) {
+    const match = { content: text, since };
     if (!(await this.inbound.markSending(inboundId))) {
       log.warn('whatsapp.send_already_claimed', { messageId: data.messageId, inboundId });
       return undefined;
@@ -234,7 +273,7 @@ export class WhatsAppMessageProcessor {
       log.info('whatsapp.reply_accepted', { messageId: data.messageId, inboundId, providerMessageId: id, conversationId });
       if (conversationId) {
         await this.conversations
-          .recordReplySend(data.organizationId, conversationId, { providerMessageId: id, status: 'accepted' })
+          .recordReplySend(data.organizationId, conversationId, { providerMessageId: id, status: 'accepted' }, match)
           .catch((error) => log.warn('whatsapp.reply_status_save_failed', { messageId: data.messageId, error: describeError(error) }));
       }
       return id;
@@ -242,14 +281,14 @@ export class WhatsAppMessageProcessor {
       const detail = describeError(error);
       if (error instanceof WhatsAppAmbiguousSendError) {
         await this.inbound.markUnknown(inboundId, detail);
-        if (conversationId) await this.conversations.recordReplySend(data.organizationId, conversationId, { status: 'unknown', error: detail }).catch(() => undefined);
+        if (conversationId) await this.conversations.recordReplySend(data.organizationId, conversationId, { status: 'unknown', error: detail }, match).catch(() => undefined);
       } else if (error instanceof WhatsAppTransientError && !finalAttempt) {
         // Meta never got it (or said try later): the same stored reply goes out on the next attempt.
         await this.inbound.markSendRetryable(inboundId, detail);
       } else {
         // Refused before or by the provider (not configured, invalid recipient, retries used up): nothing was sent.
         await this.inbound.markFailed(inboundId, detail, { replyFailed: true });
-        if (conversationId) await this.conversations.recordReplySend(data.organizationId, conversationId, { status: 'failed', error: detail }).catch(() => undefined);
+        if (conversationId) await this.conversations.recordReplySend(data.organizationId, conversationId, { status: 'failed', error: detail }, match).catch(() => undefined);
       }
       log.error('whatsapp.reply_send_failed', { messageId: data.messageId, inboundId, error: detail });
       throw error;

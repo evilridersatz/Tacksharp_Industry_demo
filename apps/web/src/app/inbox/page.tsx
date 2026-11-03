@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Hand, Inbox as InboxIcon, Lock, MessageSquare, Search, Send, StickyNote, Tag, UserPlus } from 'lucide-react';
+import { Bot, CheckCircle2, Compass, Hand, Inbox as InboxIcon, Lock, MessageSquare, Search, Send, StickyNote, Tag, Trash2, UserPlus } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Message } from '@/lib/types';
 import { displayName, formatPhone, timeAgo } from '@/lib/format';
@@ -10,16 +10,18 @@ import { Avatar, Badge, Button, Card, Empty, ErrorBanner, Segmented, Skeleton, c
 import { Thread } from '@/components/conversation';
 import { inputCls } from '@/components/textile';
 import { toast } from '@/components/toast';
+import { useWorkspace } from '@/lib/industry';
 
 type Person = { id: string; name: string; role?: string };
 type Row = {
-  id: string; channel: string; externalId: string | null; inboxStatus: 'open' | 'pending' | 'resolved'; priority: string; labels: string[]; aiEnabled: boolean;
+  id: string; channel: string; externalId: string | null; inboxStatus: 'open' | 'pending' | 'resolved'; priority: string; labels: string[]; aiEnabled: boolean; aiMode?: 'auto' | 'review';
   needsHuman: boolean; handoffReason: string | null; assignee: Person | null; customer: { id: string; name: string | null; phone: string | null; optedOutAt: string | null } | null;
   lastMessage: { content: string; role: string; createdAt: string } | null; updatedAt: string;
 };
 type List = { counts: { open: number; pending: number; resolved: number; mine: number; unassigned: number; needsHuman: number; aiOff: number }; items: Row[] };
 type Detail = Omit<Row, 'customer' | 'lastMessage'> & {
   handoff: { reason: string | null; at: string | null; lastCustomerMessages: string[] } | null;
+  guidance: { text: string; until: string | null } | null; pendingDrafts: number;
   customer: { id: string; name: string | null; phone: string | null; email: string | null; language: string | null; tags: unknown; source: string | null; messagingConsent: boolean; callingConsent: boolean; optedOutAt: string | null; doNotContact: boolean; createdAt: string } | null;
   orders: Array<{ id: string; orderNumber: string; status: string; total: number; createdAt: string }>;
   leads: Array<{ id: string; status: string; source: string | null }>;
@@ -98,6 +100,7 @@ export default function InboxPage() {
                       {c.channel !== 'whatsapp' && <Badge tone="violet">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>}
                       {c.needsHuman && <Badge tone="rose">needs a person</Badge>}
                       {!c.aiEnabled && <Badge tone="amber">AI off</Badge>}
+                      {c.aiMode === 'review' && <Badge tone="violet">review first</Badge>}
                       {c.priority !== 'normal' && <Badge tone={PRIORITY_TONE[c.priority]}>{c.priority}</Badge>}
                       {c.assignee && <Badge tone="slate">{c.assignee.name}</Badge>}
                       {c.labels.slice(0, 3).map((l) => <Badge key={l} tone="sky">{l}</Badge>)}
@@ -165,6 +168,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
         <p className={cx('flex items-center gap-2 px-4 py-2 text-[12.5px] font-semibold', d.aiEnabled ? 'bg-[#e7f6ee] text-[#15803d]' : 'bg-amber-soft text-[#b45309]')} data-testid="ai-state">
           {d.aiEnabled ? <><Bot className="size-4" aria-hidden />The AI is answering this conversation</> : <><Hand className="size-4" aria-hidden />The team is handling this conversation — the AI is silent</>}
         </p>
+        {d.aiEnabled && <Steering d={d} id={id} canReply={canReply} busy={busy} run={run} />}
         {d.handoff && (
           <div className="mx-4 mt-3 rounded-[10px] border border-rose-200 bg-rose-50 p-3 text-[12.5px]" data-testid="handoff-summary">
             <p className="font-semibold text-rose-800">Hand-over: {d.handoff.reason ?? 'needs a person'}</p>
@@ -174,6 +178,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
         <div className="max-h-[440px] flex-1 overflow-y-auto p-4">
           <Thread messages={d.messages} name={d.customer ? displayName(d.customer) : 'the customer'} />
         </div>
+        <Drafts d={d} id={id} canReply={canReply} busy={busy} run={run} />
         <div className="border-t border-line p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <Segmented label="Write" value={tab} onChange={setTab} options={[{ value: 'reply', label: 'Reply to customer' }, { value: 'note', label: 'Internal note' }]} />
@@ -256,5 +261,69 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
         {!canReply && <p className="flex items-center gap-1 text-[12px] text-muted"><MessageSquare className="size-3.5" aria-hidden />Your role can read the inbox but not reply.</p>}
       </aside>
     </>
+  );
+}
+
+type Run = (key: string, fn: () => Promise<unknown>, ok?: string | ((r: unknown) => string)) => Promise<boolean | undefined>;
+
+/** Live AI steering: send automatically or review first, and private guidance for the AI in this conversation. */
+function Steering({ d, id, canReply, busy, run }: { d: Detail; id: string; canReply: boolean; busy: string | null; run: Run }) {
+  const { workspace } = useWorkspace();
+  const [text, setText] = useState(d.guidance?.text ?? '');
+  const [hours, setHours] = useState('24');
+  const reviewable = d.channel === 'whatsapp' && workspace?.industry !== 'restaurant';
+  return (
+    <div className="mx-4 mt-3 rounded-[10px] border border-violet-200 bg-violet-50/60 p-3 text-[12.5px]" data-testid="ai-steering">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-1.5 font-semibold text-ink"><Compass className="size-4 text-violet-700" aria-hidden />Steer the AI</span>
+        {reviewable ? (
+          <Segmented label="AI replies" value={d.aiMode ?? 'auto'} onChange={(v) => void run('mode', () => api.patch(`/inbox/conversations/${id}`, { aiMode: v }), v === 'review' ? 'Review first: the AI drafts each reply and waits for your approval.' : 'The AI sends its replies automatically again.')} options={[{ value: 'auto', label: 'Send automatically' }, { value: 'review', label: 'Review first' }]} />
+        ) : (
+          <span className="text-muted">{workspace?.industry === 'restaurant' ? 'Order replies always go out at once (take over to answer yourself).' : 'Review first is available on WhatsApp.'}</span>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <label className="min-w-[220px] flex-1">
+          <span className="sr-only">Guidance for the AI</span>
+          <input className={inputCls} aria-label="Guidance for the AI" maxLength={500} placeholder="Private guidance, e.g. “Customer is price sensitive: lead with the 55L option”" value={text} onChange={(e) => setText(e.target.value)} disabled={!canReply} />
+        </label>
+        <select className={cx(inputCls.replace('w-full', ''), 'w-36')} aria-label="Guidance lasts" value={hours} onChange={(e) => setHours(e.target.value)} disabled={!canReply}>
+          <option value="2">for 2 hours</option><option value="24">for 24 hours</option><option value="72">for 3 days</option><option value="">until cleared</option>
+        </select>
+        <Button busy={busy === 'guide'} disabled={!canReply || !text.trim()} onClick={() => void run('guide', () => api.patch(`/inbox/conversations/${id}`, { aiGuidance: text, aiGuidanceHours: hours || null }), 'Guidance saved. The AI uses it from its next reply.')}>Save guidance</Button>
+        {d.guidance && <Button variant="ghost" busy={busy === 'unguide'} disabled={!canReply} onClick={() => void run('unguide', () => api.patch(`/inbox/conversations/${id}`, { aiGuidance: null }), 'Guidance cleared.').then(() => setText(''))}>Clear</Button>}
+      </div>
+      <p className="mt-1.5 text-[11.5px] text-muted" data-testid="guidance-state">
+        {d.guidance ? `In force${d.guidance.until ? ` until ${new Date(d.guidance.until).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : ' until cleared'}. ` : 'No guidance. '}
+        Never shown to the customer. It shapes replies the AI writes with its language model; answers taken straight from your data (prices, slots, bookings) are not changed by it.
+      </p>
+    </div>
+  );
+}
+
+/** Review mode: the AI's replies waiting for a person. Approve as written, edit and send, or discard. */
+function Drafts({ d, id, canReply, busy, run }: { d: Detail; id: string; canReply: boolean; busy: string | null; run: Run }) {
+  const held = d.messages.filter((m) => (m as { deliveryStatus?: string | null }).deliveryStatus === 'held');
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  if (!held.length) return null;
+  const sentMsg = (r: unknown) => ((r as { sent?: boolean; notSentReason?: string }).sent === false ? `Approved but NOT sent: ${(r as { notSentReason?: string }).notSentReason ?? 'test mode'}.` : 'Sent to WhatsApp.');
+  return (
+    <div className="border-t border-violet-200 bg-violet-50/50 p-3" data-testid="ai-drafts">
+      <p className="mb-2 text-[12.5px] font-semibold text-violet-900">{held.length} AI {held.length === 1 ? 'reply waits' : 'replies wait'} for your approval</p>
+      {held.map((m) => {
+        const value = edits[m.id] ?? m.content;
+        const changed = value.trim() !== m.content;
+        return (
+          <div key={m.id} className="mb-2 rounded-[10px] border border-violet-200 bg-white p-2" data-testid="ai-draft">
+            <textarea className={cx(inputCls, 'h-20 py-2')} aria-label="AI draft" value={value} onChange={(e) => setEdits({ ...edits, [m.id]: e.target.value })} disabled={!canReply} />
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <Button variant="primary" busy={busy === `ap-${m.id}`} disabled={!canReply || !value.trim()} onClick={() => void run(`ap-${m.id}`, () => api.post(`/inbox/conversations/${id}/drafts/${m.id}/approve`, changed ? { text: value } : {}), sentMsg)}><Send className="size-4" />{changed ? 'Send edited' : 'Approve & send'}</Button>
+              <Button variant="ghost" busy={busy === `ds-${m.id}`} disabled={!canReply} onClick={() => void run(`ds-${m.id}`, () => api.post(`/inbox/conversations/${id}/drafts/${m.id}/discard`, {}), 'Discarded: not sent.')}><Trash2 className="size-4" />Discard</Button>
+              <span className="text-[11.5px] text-muted">Whatever the AI did (a booking, an update) is already recorded; only its message waits.</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

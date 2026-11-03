@@ -105,12 +105,14 @@ export class AnalyticsService {
 
   // -------------------------------------------------------------------------------------------- sections
   private async period(org: string, from: Date, to: Date) {
-    const messages = await this.prisma.message.findMany({
+    const read = await this.prisma.message.findMany({
       where: { organizationId: org, createdAt: { gte: from, lt: to } },
-      select: { conversationId: true, role: true, createdAt: true, metadata: true },
+      select: { conversationId: true, role: true, createdAt: true, metadata: true, deliveryStatus: true },
       orderBy: { createdAt: 'asc' },
       take: MESSAGE_CAP,
     });
+    // AI replies held for review (or discarded there) were never sent: they do not count as answers.
+    const messages = read.filter((m) => !['held', 'discarded', 'sending'].includes(m.deliveryStatus ?? ''));
     const convIds = [...new Set(messages.map((m) => m.conversationId))];
     const [handoffs, leads, orders] = await Promise.all([
       convIds.length ? this.prisma.conversation.count({ where: { organizationId: org, id: { in: convIds }, handoffAt: { gte: from, lt: to } } }) : 0,
@@ -130,7 +132,7 @@ export class AnalyticsService {
     const round = (v: number | null) => (v === null ? null : Math.round(v));
     return {
       messages,
-      capped: messages.length >= MESSAGE_CAP,
+      capped: read.length >= MESSAGE_CAP,
       answeredBy,
       responseTimes: {
         ai: { count: rt.ai.length, medianSec: round(median(rt.ai)), p90Sec: round(percentile(rt.ai, 90)) },

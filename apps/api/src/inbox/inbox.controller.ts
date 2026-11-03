@@ -66,6 +66,20 @@ export class InboxController {
     return this.svc.assignRoundRobin(this.actor(u), u.org, id);
   }
 
+  @Post('conversations/:id/drafts/:messageId/approve')
+  @HttpCode(200)
+  approveDraft(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Param('messageId') messageId: string, @Body() body: { text?: unknown }) {
+    requirePermission(u, PERMISSIONS.inboxReply);
+    return this.svc.approveDraft(this.actor(u), id, messageId, body ?? {});
+  }
+
+  @Post('conversations/:id/drafts/:messageId/discard')
+  @HttpCode(200)
+  discardDraft(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Param('messageId') messageId: string) {
+    requirePermission(u, PERMISSIONS.inboxReply);
+    return this.svc.discardDraft(this.actor(u), id, messageId);
+  }
+
   @Get('members')
   members(@CurrentUser() u: SessionClaims) {
     requirePermission(u, PERMISSIONS.inboxView);

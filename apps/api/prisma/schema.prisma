@@ -145,34 +145,34 @@ model Property {
 }
 
 model Customer {
-  id                   String          @id @default(cuid())
+  id                   String           @id @default(cuid())
   organizationId       String
   name                 String?
   phone                String?
   email                String?
   language             String?
   source               String?
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
   location             String?
-  budget               Decimal?        @db.Decimal(15, 2)
+  budget               Decimal?         @db.Decimal(15, 2)
   bhk                  Int?
   propertyType         String?
   /// Free-text facts the AI saved: timeline, objections, liked property, callback notes.
   purchaseTimeline     String?
-  objections           String?         @db.Text
+  objections           String?          @db.Text
   interestedPropertyId String?
   callbackAt           DateTime?
   /// Set when the customer says not interested / wrong number. Blocks all automation.
-  doNotContact         Boolean         @default(false)
+  doNotContact         Boolean          @default(false)
   lastInboundAt        DateTime?
   /// Restaurant follow-ups: may we message / call this customer (recorded by staff, or given by ordering on WhatsApp).
-  messagingConsent     Boolean         @default(false)
-  callingConsent       Boolean         @default(false)
+  messagingConsent     Boolean          @default(false)
+  callingConsent       Boolean          @default(false)
   /// Customer replied STOP. Blocks all business-initiated messages and calls until they reply START.
   optedOutAt           DateTime?
   /// Synthetic record created by the demo seed (never a real person).
-  isDemo               Boolean         @default(false)
+  isDemo               Boolean          @default(false)
   /// Marketing labels / segments ("saree_buyer", "wedding", "festival"...): a JSON string array.
   tags                 Json?
   /// CRM: custom attributes {key: string|number|boolean} (up to 20, keys a-z0-9_).
@@ -184,7 +184,7 @@ model Customer {
   crmNotes             CustomerNote[]
   dripEnrollments      DripEnrollment[]
   socialIdentities     SocialIdentity[]
-  organization         Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls                Call[]
   Conversation         Conversation[]
   followUps            FollowUp[]
@@ -274,31 +274,36 @@ model FollowUp {
 }
 
 model Conversation {
-  id             String       @id
-  organizationId String
-  customerId     String?
-  channel        String
-  externalId     String?
-  status         String       @default("active")
+  id              String             @id
+  organizationId  String
+  customerId      String?
+  channel         String
+  externalId      String?
+  status          String             @default("active")
   /// Unified inbox: open | pending | resolved (independent of `status`, which the AI engines set to human_handoff).
-  inboxStatus    String       @default("open")
+  inboxStatus     String             @default("open")
   /// low | normal | high | urgent
-  priority       String       @default("normal")
+  priority        String             @default("normal")
   /// Team member who owns the conversation (null = unassigned).
-  assigneeId     String?
+  assigneeId      String?
   /// ["vip","complaint",...] labels chosen by the team.
-  labels         Json?
+  labels          Json?
   /// false = a person has taken over: customer messages are stored, the AI does not reply.
-  aiEnabled      Boolean      @default(true)
-  handoffReason  String?      @db.VarChar(300)
-  handoffAt      DateTime?
-  lastCustomerAt DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime
-  Customer       Customer?    @relation(fields: [customerId], references: [id])
-  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  Message        Message[]
-  notes          ConversationNote[]
+  aiEnabled       Boolean            @default(true)
+  /// auto = the AI's replies are sent; review = the AI's reply waits for a person to approve / edit / discard it.
+  aiMode          String             @default("auto") @db.VarChar(10)
+  /// Private team guidance the AI model follows in this conversation (never shown to the customer).
+  aiGuidance      String?            @db.VarChar(500)
+  aiGuidanceUntil DateTime?
+  handoffReason   String?            @db.VarChar(300)
+  handoffAt       DateTime?
+  lastCustomerAt  DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime
+  Customer        Customer?          @relation(fields: [customerId], references: [id])
+  Organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  Message         Message[]
+  notes           ConversationNote[]
 
   @@unique([organizationId, channel, externalId])
   @@index([organizationId, inboxStatus, updatedAt])

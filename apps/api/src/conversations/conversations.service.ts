@@ -239,18 +239,44 @@ export class ConversationsService {
    * newest assistant message (one message at a time per customer, so it is this turn's reply).
    * "accepted" means Meta took the request; only a delivery receipt makes it delivered / read.
    */
-  async recordReplySend(organizationId: string, conversationId: string, result: { providerMessageId?: string; status: 'accepted' | 'unknown' | 'failed'; error?: string }) {
-    const reply = await this.prisma.message.findFirst({ where: { organizationId, conversationId, role: 'assistant' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
-    if (!reply) return;
-    await this.prisma.message.update({
-      where: { id: reply.id },
-      data: {
-        ...(result.providerMessageId ? { externalId: result.providerMessageId } : {}),
-        deliveryStatus: result.status,
-        deliveryError: result.error?.slice(0, 500) ?? null,
-        deliveryUpdatedAt: new Date(),
-      },
-    });
+  /**
+   * Records the send result on the reply that was sent. With `match` (the reply text and the time the customer's message
+   * arrived) only that exact reply is updated. Most engines have saved it already (found at once, same as before); the
+   * real-estate engine saves its reply in the background just after answering, so when it is not there yet the result
+   * is recorded in the background as soon as it appears (up to 10 s), never on an earlier message and without holding
+   * the caller.
+   */
+  async recordReplySend(organizationId: string, conversationId: string, result: { providerMessageId?: string; status: 'accepted' | 'unknown' | 'failed'; error?: string }, match?: { content: string; since: Date }) {
+    const find = () =>
+      match
+        ? this.prisma.message.findFirst({ where: { organizationId, conversationId, role: 'assistant', content: match.content, createdAt: { gte: match.since }, deliveryStatus: null }, orderBy: { createdAt: 'desc' }, select: { id: true } })
+        : this.prisma.message.findFirst({ where: { organizationId, conversationId, role: 'assistant' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+    const apply = (id: string) =>
+      this.prisma.message.update({
+        where: { id },
+        data: {
+          ...(result.providerMessageId ? { externalId: result.providerMessageId } : {}),
+          deliveryStatus: result.status,
+          deliveryError: result.error?.slice(0, 500) ?? null,
+          deliveryUpdatedAt: new Date(),
+        },
+      });
+    const reply = await find();
+    if (reply) {
+      await apply(reply.id);
+      return;
+    }
+    if (!match) return;
+    void (async () => {
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        const later = await find().catch(() => null);
+        if (later) {
+          await apply(later.id).catch(() => undefined);
+          return;
+        }
+      }
+    })();
   }
 
   /**

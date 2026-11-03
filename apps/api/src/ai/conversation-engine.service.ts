@@ -25,6 +25,7 @@ import { errorMessage, log, timer } from '../common/logger.js';
 
 import { SessionStore } from './session.store.js';
 import { LlmRunner, type AiUsageMetrics } from './llm-runner.service.js';
+import { activeGuidance, guidanceBlock } from '../inbox/steering.js';
 import { asksLocation, asksPrice, classifyIntent, commonQuestion, isLineCheck, isBareNo, isExplicitAffirmation, isExplicitNegation, isPropertyRejection, leadingAffirmation, parseCallbackTime, refersToShownProperty, type Intent } from '../conversation/intent.js';
 import { extractSlots, qualificationState, type Slots } from '../conversation/slots.js';
 import { detectLanguage, initialLanguage, updateLanguage, turnLanguage, replyStyle, callLanguageCode, type Lang, type TurnLanguage } from '../conversation/language.js';
@@ -1511,7 +1512,7 @@ export class ConversationEngine {
       phone: turn.input.phone,
       nowText: now.text,
       nowIso: now.iso,
-      brief: this.renderBrief(session, callReason, plan.reask),
+      brief: this.renderBrief(session, callReason, plan.reask) + guidanceBlock(await this.teamGuidance(session.organizationId, session.channel, turn.input.phone)),
       styleLine: this.styleLine(session),
       actions: turn.actions,
       updateCustomerMemory: (update) => this.modelMemory(turn, update),
@@ -1683,6 +1684,16 @@ export class ConversationEngine {
   // ---------------------------------------------------------------------------------------------
   // Brief, style, helpers
   // ---------------------------------------------------------------------------------------------
+
+  /** Live AI steering: the team's private guidance for this conversation, when set and not expired (best effort). */
+  private async teamGuidance(organizationId: string, channel: string, phone: string): Promise<string | null> {
+    try {
+      const c = await this.prisma.conversation.findFirst({ where: { organizationId, channel, externalId: phone, aiGuidance: { not: null } }, select: { aiGuidance: true, aiGuidanceUntil: true } });
+      return activeGuidance(c);
+    } catch {
+      return null;
+    }
+  }
 
   private renderBrief(s: Session, callReason?: string, reask?: boolean): string {
     const sl = s.slots;

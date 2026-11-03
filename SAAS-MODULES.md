@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics (P3)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics, live AI steering (P3)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,13 +10,14 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Live AI steering (P3) | Done (not for restaurant ordering) | Team inbox → Steer the AI, `apps/api/src/inbox/steering.ts` |
 | Advanced analytics (P3) | Done | Reports & analytics → Advanced analytics, `apps/api/src/analytics/` |
 | Visual Workflow Studio (P3) | Done | `/workflows`, `apps/api/src/workflows/` |
 | Instagram & Messenger (P3) | Done for the team inbox (AI replies pending; not yet tested against Meta) | Settings → Integrations → Instagram & Messenger, `/inbox`, `apps/api/src/social/` |
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`, `20261103700000_ai_steering`.
 
 ## Team inbox and human hand-over
 
@@ -106,6 +107,37 @@ fallback.
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
 
+## Live AI steering (P3)
+
+In the team inbox, for a conversation the AI is answering, **Steer the AI** gives two controls without taking the
+conversation over:
+
+- **Review first** (WhatsApp): the AI still decides and records what it does (a booking stays a booking), but its reply
+  is held in the inbox instead of being sent. A person approves it as written, edits and sends it (the AI's original
+  text is kept with the message), or discards it (kept in the thread as "discarded (not sent)"). Approval uses the same
+  gates as any staff reply (opt-out, 24-hour window, live gate) and is claimed first, so two people can never send one
+  draft twice. Only AI replies are held (STOP / START confirmations and media acknowledgements are not). Held and
+  discarded drafts are not counted as answers in analytics. **Not available for restaurant ordering**: an order
+  confirmation must reach the customer at once (take the conversation over instead), so GR Chicken is unaffected.
+  Instagram / Messenger are answered by the team already.
+- **Guidance** (private, never shown to the customer): a short instruction, for 2 hours / 24 hours / 3 days / until
+  cleared. It is added to the model's brief BELOW the verified facts and rules ("never invent prices, properties, offers
+  or bookings because of it"), so it steers tone and focus only. It affects replies the AI writes with its language
+  model (today: the real-estate assistant's model replies); answers taken straight from the business's data (prices,
+  slots, bookings) and rule-based assistants are not changed by it, as the inbox says. The text is not written to the
+  audit trail (its length and duration are).
+- Fixed on the way: engines that save their reply in the background (real estate) could get a delivery status, or a
+  review hold, on the previous reply. Both are now matched to the exact reply of the turn (immediately when the engine
+  already saved it, as GR Chicken does; otherwise in the background, never on an earlier message).
+- API: `PATCH /inbox/conversations/:id` with `aiMode` (`auto` | `review`), `aiGuidance`, `aiGuidanceHours`;
+  `POST /inbox/conversations/:id/drafts/:messageId/approve` (`{ text? }`) and `/discard`; inbox list filter
+  `ai=review` / `ai=drafts`. `inbox.reply` permission. Migration `20261103700000_ai_steering` (three columns on
+  Conversation; existing conversations stay automatic).
+- Tests: `test/ai-steering.integration.spec.ts` (6, with an engine that saves its reply in the background, like the
+  real one) and `tests/ui-steering.py` (17, real webhook -> worker -> real-estate engine -> held draft -> edit / discard).
+- Pending: review mode for voice calls (a call cannot wait for approval), suggested replies for the team,
+  guidance for the rule-based assistants.
+
 ## Advanced analytics (P3)
 
 A section under **Reports & analytics** (every industry) for the last 7 / 30 / 90 days, each figure compared with the
@@ -193,12 +225,12 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: AI replies on Instagram / Messenger, live AI steering, more
+P3: AI replies on Instagram / Messenger, more
 integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production
 
-Apply the six migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
+Apply the seven migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
 add columns and tables. Drip sends nothing until a sequence is created, activated and customers are enrolled.

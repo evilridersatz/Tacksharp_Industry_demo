@@ -8,6 +8,7 @@ import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 import { SocialSenderService, isSocialChannel } from '../social/social-sender.service.js';
+import { AI_MODES, GUIDANCE_MAX_HOURS, activeGuidance, cleanGuidance } from './steering.js';
 
 export type Actor = { sub: string; org: string; role: string };
 export const INBOX_STATUSES = ['open', 'pending', 'resolved'] as const;
@@ -45,6 +46,8 @@ export class InboxService {
     if (q.channel && q.channel !== 'all') where.channel = q.channel;
     if (q.ai === 'off') where.aiEnabled = false;
     if (q.ai === 'handoff') where.status = 'human_handoff';
+    if (q.ai === 'review') where.aiMode = 'review';
+    if (q.ai === 'drafts') where.Message = { some: { deliveryStatus: 'held' } };
     if (q.label) where.labels = { array_contains: q.label } as never;
     const text = (q.q ?? '').trim().slice(0, 80);
     if (text) {
@@ -75,6 +78,7 @@ export class InboxService {
         priority: c.priority,
         labels: (c.labels as string[] | null) ?? [],
         aiEnabled: c.aiEnabled,
+        aiMode: c.aiMode,
         needsHuman: c.status === 'human_handoff',
         handoffReason: c.handoffReason,
         assignee: c.assigneeId ? { id: c.assigneeId, name: users.get(c.assigneeId) ?? 'Team member' } : null,
@@ -125,6 +129,9 @@ export class InboxService {
       priority: c.priority,
       labels: (c.labels as string[] | null) ?? [],
       aiEnabled: c.aiEnabled,
+      aiMode: c.aiMode,
+      guidance: activeGuidance(c) ? { text: c.aiGuidance, until: c.aiGuidanceUntil } : null,
+      pendingDrafts: messages.filter((m) => m.deliveryStatus === 'held').length,
       needsHuman: c.status === 'human_handoff',
       handoff: c.status === 'human_handoff' || !c.aiEnabled ? { reason: c.handoffReason, at: c.handoffAt, lastCustomerMessages: lastAsks } : null,
       assignee: c.assigneeId ? { id: c.assigneeId, name: users.get(c.assigneeId) ?? 'Team member' } : null,
@@ -197,6 +204,28 @@ export class InboxService {
       if (to && !(await this.members(actor.org)).some((m) => m.id === to)) throw new BadRequestException('That person cannot take conversations in this workspace.');
       data.assigneeId = to;
       changes.assigneeId = to;
+    }
+    // Live AI steering: review mode (approve before send) and private guidance for the AI.
+    if (body.aiMode !== undefined) {
+      const mode = String(body.aiMode);
+      if (!(AI_MODES as readonly string[]).includes(mode)) throw new BadRequestException('aiMode: auto or review.');
+      if (mode === 'review') {
+        if (c.channel !== 'whatsapp') throw new BadRequestException('Review mode is available for WhatsApp conversations answered by the AI.');
+        const o = await this.prisma.organization.findUnique({ where: { id: actor.org }, select: { vertical: true } });
+        if (o?.vertical === 'restaurant') throw new BadRequestException('Review mode is not available for restaurant ordering: an order confirmation must reach the customer at once. Take the conversation over instead.');
+      }
+      data.aiMode = mode;
+      changes.aiMode = mode;
+    }
+    if (body.aiGuidance !== undefined) {
+      const text = body.aiGuidance === null ? null : cleanGuidance(body.aiGuidance);
+      if (body.aiGuidance !== null && !text) throw new BadRequestException('Write the guidance (up to 500 characters), or clear it.');
+      const hours = body.aiGuidanceHours === undefined || body.aiGuidanceHours === null || body.aiGuidanceHours === '' ? null : Math.round(Number(body.aiGuidanceHours));
+      if (hours !== null && (!Number.isFinite(hours) || hours < 1 || hours > GUIDANCE_MAX_HOURS)) throw new BadRequestException(`Guidance lasts 1-${GUIDANCE_MAX_HOURS} hours (or until cleared).`);
+      data.aiGuidance = text;
+      data.aiGuidanceUntil = text && hours ? new Date(Date.now() + hours * 3600_000) : null;
+      // Field names / length only in the audit trail.
+      changes.aiGuidance = text ? { length: text.length, hours } : null;
     }
     if (!Object.keys(changes).length) throw new BadRequestException('Nothing to change.');
     await this.prisma.conversation.update({ where: { id: c.id }, data });
@@ -298,6 +327,67 @@ export class InboxService {
     await this.audit(actor, c.id, 'inbox.replied', { ok: !r.error, sent: r.sent, channel: c.channel });
     if (r.error) throw new BadRequestException(`${c.channel === 'instagram' ? 'Instagram' : 'Messenger'} did not accept the message${r.ambiguous ? ' (delivery unknown: not resent)' : ''}: ${r.error.slice(0, 200)}`);
     return { ...(await this.detail(actor.org, c.id)), sent: r.sent, ...(r.sent ? {} : { notSentReason: r.notSentReason }) };
+  }
+
+  /**
+   * Review mode: send the AI's held reply, as written or edited by a person. Same gates as a staff reply (opt-out, 24 h
+   * window, live gate). The original AI text is kept in the message metadata when it was edited.
+   */
+  async approveDraft(actor: Actor, id: string, messageId: string, body: { text?: unknown }) {
+    const { c, m } = await this.draft(actor.org, id, messageId);
+    const edited = typeof body.text === 'string' && body.text.trim() && body.text.trim() !== m.content ? body.text.trim() : null;
+    if (edited && edited.length > 4096) throw new BadRequestException('Up to 4096 characters.');
+    const customer = c.customerId ? await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: actor.org } }) : null;
+    if (!customer || !c.externalId) throw new BadRequestException('This conversation has no customer record.');
+    if (customer.optedOutAt || customer.doNotContact) throw new BadRequestException('The customer opted out (STOP) or is marked do-not-contact: no message can be sent. Discard the draft.');
+    if (!(await this.conversations.isWhatsAppWindowOpen(actor.org, customer.id))) throw new BadRequestException('More than 24 hours since the customer last wrote: WhatsApp allows only an approved template. Discard the draft.');
+    const text = edited ?? m.content;
+    const gate = liveGate(followUpConfig(), { phone: customer.phone, isDemo: customer.isDemo });
+    // Claim the draft first, so two people pressing Approve never send it twice.
+    const claimed = await this.prisma.message.updateMany({ where: { id: m.id, deliveryStatus: 'held' }, data: { deliveryStatus: 'sending' } });
+    if (!claimed.count) throw new BadRequestException('This draft was already handled by someone else.');
+    let providerMessageId: string | undefined;
+    let error: string | undefined;
+    if (gate.live) {
+      try {
+        providerMessageId = await this.sender.sendText(c.externalId, text);
+      } catch (e) {
+        error = describeError(e);
+      }
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
+    const md = (m.metadata ?? {}) as Record<string, unknown>;
+    await this.prisma.message.update({
+      where: { id: m.id },
+      data: {
+        content: text,
+        ...(providerMessageId ? { externalId: providerMessageId } : {}),
+        deliveryStatus: error ? 'failed' : gate.live ? 'accepted' : null,
+        deliveryError: error?.slice(0, 500) ?? null,
+        deliveryUpdatedAt: new Date(),
+        metadata: { ...md, review: { ...(md.review as object), status: edited ? 'edited' : 'approved', by: actor.sub, byName: user?.name ?? user?.email ?? 'Team member', at: new Date().toISOString(), ...(edited ? { originalAiText: m.content } : {}) }, ...(gate.live ? {} : { simulated: true, notSentReason: gate.reason }) } as Prisma.InputJsonValue,
+      },
+    });
+    await this.audit(actor, c.id, 'inbox.draft_approved', { messageId: m.id, edited: Boolean(edited), sent: gate.live && !error });
+    if (error) throw new BadRequestException(`WhatsApp did not accept the message: ${error.slice(0, 200)}`);
+    return { ...(await this.detail(actor.org, c.id)), sent: gate.live, ...(gate.live ? {} : { notSentReason: gate.reason }) };
+  }
+
+  /** Review mode: the AI's held reply is not sent; it stays in the thread marked as discarded. */
+  async discardDraft(actor: Actor, id: string, messageId: string) {
+    const { c, m } = await this.draft(actor.org, id, messageId);
+    const md = (m.metadata ?? {}) as Record<string, unknown>;
+    const r = await this.prisma.message.updateMany({ where: { id: m.id, deliveryStatus: 'held' }, data: { deliveryStatus: 'discarded', deliveryUpdatedAt: new Date(), metadata: { ...md, review: { ...(md.review as object), status: 'discarded', by: actor.sub, at: new Date().toISOString() } } as Prisma.InputJsonValue } });
+    if (!r.count) throw new BadRequestException('This draft was already handled by someone else.');
+    await this.audit(actor, c.id, 'inbox.draft_discarded', { messageId: m.id });
+    return this.detail(actor.org, c.id);
+  }
+
+  private async draft(org: string, id: string, messageId: string) {
+    const c = await this.get(org, id);
+    const m = await this.prisma.message.findFirst({ where: { id: messageId, organizationId: org, conversationId: c.id, role: 'assistant' } });
+    if (!m || m.deliveryStatus !== 'held') throw new NotFoundException('No held AI reply with this id in this conversation.');
+    return { c, m };
   }
 
   /** Round-robin: the person able to reply with the fewest open conversations (ties: alphabetical). */

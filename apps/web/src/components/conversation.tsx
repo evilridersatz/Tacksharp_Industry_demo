@@ -14,6 +14,9 @@ const DELIVERY: Record<string, { label: string; bad?: boolean }> = {
   read: { label: 'read' },
   failed: { label: 'not delivered', bad: true },
   unknown: { label: 'delivery unknown', bad: true },
+  held: { label: 'waiting for approval' },
+  sending: { label: 'sending' },
+  discarded: { label: 'discarded (not sent)' },
 };
 
 export function Thread({ messages, name }: { messages: Message[]; name: string }) {
