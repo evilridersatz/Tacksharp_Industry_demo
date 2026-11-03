@@ -12,6 +12,7 @@ import { recordWebhookFailure } from '../common/webhook-failures.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { SocialSenderService, type SocialChannel } from './social-sender.service.js';
+import { SocialAiService } from './social-ai.service.js';
 
 type Attachment = { type?: string; payload?: { url?: string } };
 type MessagingEvent = {
@@ -23,14 +24,15 @@ type MessagingEvent = {
 type Body = { object?: string; entry?: Array<{ id?: string; time?: number; messaging?: MessagingEvent[] }> };
 
 const LABEL: Record<string, string> = { image: '[Image]', video: '[Video]', audio: '[Voice message]', file: '[File]', story_mention: '[Story mention]', share: '[Shared post]', reel: '[Reel]', ig_reel: '[Reel]' };
-export const SOCIAL_HANDOFF_REASON = 'Instagram / Messenger: answered by the team (AI replies on this channel are pending)';
+export const SOCIAL_HANDOFF_REASON = 'Instagram / Messenger: answered by the team (no AI agent is chosen in the Instagram & Messenger settings)';
 
 /**
  * Instagram / Messenger inbound (Meta webhook, signature checked by the controller). The organization comes from the
  * Page id / Instagram account id Meta puts in the delivery, mapped when the business enabled the integration; an
  * unknown id is dropped (no default organization). Each message is stored once (Meta's message id, under a per-person
- * lock), linked to a customer record through SocialIdentity, and lands in the team inbox as an open conversation with
- * the AI off (AI replies on these channels are not built yet). STOP / START are honoured. Media is labelled, never
+ * lock), linked to a customer record through SocialIdentity, and lands in the team inbox. When the business chose an
+ * active agent (Instagram & Messenger settings) the AI answers (SocialAiService); otherwise the team does. STOP / START
+ * are honoured. Media is labelled, never
  * downloaded or stored. An optional automatic acknowledgement goes out after 24 h of silence, through the live gate.
  */
 @Injectable()
@@ -42,6 +44,7 @@ export class SocialWebhookService {
     private readonly creds: CredentialsService,
     private readonly sender: SocialSenderService,
     @Optional() private readonly inbox?: InboxService,
+    @Optional() private readonly ai?: SocialAiService,
   ) {}
 
   /** The channel and the organization for one entry (from Meta's ids, never from the message). */
@@ -108,15 +111,26 @@ export class SocialWebhookService {
       data: { lastInboundAt: new Date(), ...(kw === 'stop' ? { optedOutAt: new Date() } : kw === 'start' ? { optedOutAt: null } : {}) },
     });
 
+    const agent = (await this.ai?.agentFor(org).catch(() => null)) ?? null;
     const existing = await this.prisma.conversation.findFirst({ where: { organizationId: org, channel, externalId: from }, select: { id: true } });
     const conv = await this.conversations.getOrCreateConversation({ organizationId: org, channel, externalId: from, customerId: customer.id });
-    // The AI does not answer on these channels yet: every conversation is the team's, said plainly in the inbox.
-    if (!existing) await this.prisma.conversation.update({ where: { id: conv.id }, data: { aiEnabled: false, handoffReason: SOCIAL_HANDOFF_REASON, handoffAt: new Date() } });
-    await this.conversations.addMessage({ organizationId: org, conversationId: conv.id, role: 'user', content, externalId: m.mid!, metadata: { social: { channel, attachments: kinds } } as never });
+    // Without a chosen agent every new conversation is the team's, said plainly in the inbox.
+    if (!existing && !agent) await this.prisma.conversation.update({ where: { id: conv.id }, data: { aiEnabled: false, handoffReason: SOCIAL_HANDOFF_REASON, handoffAt: new Date() } });
+    const inbound = await this.conversations.addMessage({ organizationId: org, conversationId: conv.id, role: 'user', content, externalId: m.mid!, metadata: { social: { channel, attachments: kinds } } as never });
     await this.inbox?.onCustomerMessage(org, conv.id).catch((e) => log.warn('inbox.update_failed', { error: describeError(e) }));
 
     // STOP / START confirmation, or the optional acknowledgement after 24 h of silence.
     let reply: { text: string; kind: 'opt' | 'auto' } | null = null;
+    const current = await this.prisma.conversation.findUnique({ where: { id: conv.id } });
+    if (!kw && agent && current?.aiEnabled && !customer.optedOutAt && !customer.doNotContact) {
+      const did = await this.ai!.answer(org, channel, current, customer, from, text, inbound.id, agent).catch((e) => {
+        log.warn('social.ai_failed', { channel, error: describeError(e) });
+        return 'skipped' as const;
+      });
+      await this.inbox?.onCustomerMessage(org, conv.id).catch(() => undefined);
+      log.info('social.inbound', { channel, organizationId: org, attachments: kinds.length, ai: did });
+      return true;
+    }
     if (kw) {
       const o = await this.prisma.organization.findUnique({ where: { id: org }, select: { name: true } });
       reply = { text: optReply(kw, o?.name ?? 'us', customer.language), kind: 'opt' };

@@ -3,8 +3,12 @@ Instagram & Messenger through the real dashboard + API + MySQL (TEST database, D
 Settings: save (secrets masked), connection test against the real Graph API (unreachable from the sandbox: must show as
 failed), the passing test SEEDED in the test database, enable through the UI -> Page / Instagram account routed to the
 workspace. Webhook: unsigned and wrongly signed deliveries refused (401); signed Messenger and Instagram messages land
-in the Team inbox (channel filter, badges, masked id, "AI pending" badge, automatic acknowledgement marked not sent);
-a re-delivery is stored once; a staff reply is saved but NOT sent (DRY_RUN). Disabling stops routing.
+in the Team inbox (channel filter, badges, masked id, Return to AI refused while no agent is chosen, automatic
+acknowledgement marked not sent); a re-delivery is stored once; a staff reply is saved but NOT sent (DRY_RUN).
+AI replies: a published agent (real knowledge base, tested and published through the API) chosen in the settings
+card answers a new Messenger customer from its knowledge (DRY_RUN: recorded, not sent), a question it cannot answer
+is handed to the team and shows in the Knowledge studio, the earlier conversation can now return to the AI.
+Disabling stops routing.
 
   Run:   TEST_DB_NAME=tacksharp_test python3 -I apps/web/tests/ui-social.py
 """
@@ -24,7 +28,8 @@ def check(name, ok, detail=''):
 run = str(int(time.time()))[-6:]
 PAGE, IG = '8800' + run + '01', '1780' + run + '02'
 TOKEN, SECRET = f'EAAuisocial{run}Qz7', f'uiappsecret{run}k9'
-M_USER, I_USER = '3100' + run + '11', '3200' + run + '22'
+M_USER, I_USER, A_USER = '3100' + run + '11', '3200' + run + '22', '3300' + run + '33'
+agent_id = kb_id = ''
 
 def webhook(body, secret=SECRET, signed=True):
     raw = json.dumps(body).encode()
@@ -84,7 +89,9 @@ with sync_playwright() as p:
         items = pg.get_by_role('list', name='Conversations').get_by_role('listitem')
         check('Messenger filter shows the conversation with a "Messenger" badge and "AI off"', items.count() == 1 and 'Messenger' in items.first.inner_text() and 'AI off' in items.first.inner_text(), items.first.inner_text() if items.count() else '')
         items.first.click(); pg.wait_for_timeout(2000)
-        check('header: masked Meta id, channel, and "AI pending" badge (no Return to AI)', f'Messenger id ••{M_USER[-4:]}' in pg.get_by_test_id('contact-line').inner_text() and pg.get_by_text(re.compile('AI on Messenger pending')).count() == 1 and pg.get_by_role('button', name='Return to AI').count() == 0)
+        check('header: masked Meta id and channel', f'Messenger id ••{M_USER[-4:]}' in pg.get_by_test_id('contact-line').inner_text())
+        pg.get_by_role('button', name='Return to AI').click(); pg.wait_for_timeout(1500)
+        check('Return to AI refused while no agent answers Instagram / Messenger', pg.get_by_text(re.compile('No AI agent answers Instagram')).count() >= 1 and sql(f"SELECT aiEnabled FROM Conversation WHERE organizationId='{org}' AND externalId='{M_USER}'") == '0')
         check('thread: customer message and the automatic acknowledgement marked not sent', pg.get_by_text(f'Velachery 2BHK details please {run}').count() >= 1 and pg.get_by_text('Thanks! Our team will reply shortly.').count() >= 1 and pg.get_by_text(re.compile('not sent \\(test mode\\)')).count() >= 1)
         pg.get_by_role('tab', name='Reply to customer').click()
         pg.get_by_label('Reply message').fill(f'Sharing the brochure now {run}'); pg.get_by_role('button', name='Send').click(); pg.wait_for_timeout(2500)
@@ -94,14 +101,52 @@ with sync_playwright() as p:
         pg.get_by_label('Channel').select_option('instagram'); pg.wait_for_timeout(2500)
         check('Instagram filter shows the Instagram conversation', items.count() == 1 and 'Instagram' in items.first.inner_text())
 
+        # ---------------------------------------------------------------- AI replies
+        def api(path, body=None, method=None):
+            return pg.evaluate("""async ([u, b, m]) => { const r = await fetch(u, { method: m || (b ? 'POST' : 'GET'), credentials: 'include', headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; }""", [API + path, body, method])
+        kb_id = (api('/knowledge-bases', {'name': f'Social facts {run}'})['body'] or {}).get('id', '')
+        up = pg.evaluate("""async ([u]) => { const f = new FormData(); f.append('file', new Blob(['Broiler chicken costs Rs 240 per kg.\\nThe Velachery outlet closes at 8 PM.\\n'], { type: 'text/plain' }), 'facts.txt'); const r = await fetch(u, { method: 'POST', body: f, credentials: 'include' }); return r.status; }""", [f'{API}/knowledge-bases/{kb_id}/documents'])
+        for _ in range(20):
+            if sql(f"SELECT status FROM KnowledgeDocument WHERE knowledgeBaseId='{kb_id}'") == 'indexed': break
+            time.sleep(0.5)
+        a = api('/voice-agents', {'name': f'Chat desk {run}', 'industry': 'restaurant', 'instructions': 'Answer chicken price and timing questions from the facts.', 'greeting': 'Vanakkam!', 'fallbackMessage': 'Let me check with the team.', 'knowledgeBaseId': kb_id})
+        agent_id = (a['body'] or {}).get('id', '')
+        api(f'/voice-agents/{agent_id}/test', {'message': 'broiler price?'})
+        pub = api(f'/voice-agents/{agent_id}/publish', {'note': 'Social launch'})
+        check('agent with an indexed knowledge base tested and published (real API)', up == 201 and pub['status'] in (200, 201) and sql(f"SELECT status FROM VoiceAgent WHERE id='{agent_id}'") == 'active', str(pub['body'])[:200])
+        pg.goto(WEB + '/settings/integrations/meta-social'); card = pg.get_by_test_id('social-ai'); card.wait_for(timeout=8000); pg.wait_for_timeout(800)
+        check('settings: "AI replies" card, team only', 'Team only' in card.inner_text())
+        card.get_by_label('Agent').select_option(agent_id); card.get_by_role('button', name='Save').click(); pg.wait_for_timeout(1800)
+        check('agent chosen: card says "AI answering" and the choice is stored', 'AI answering' in card.inner_text() and agent_id in sql(f"SELECT config FROM IntegrationCredential WHERE organizationId='{org}' AND provider='meta_social'"))
+        time.sleep(1)
+        st, r = webhook(event('page', PAGE, A_USER, f'm.ui.{run}.ai1', 'What is the broiler price per kg?'))
+        ai_msg = sql(f"SELECT CONCAT(m.content,'|',JSON_EXTRACT(m.metadata,'$.ai.source'),'|',JSON_EXTRACT(m.metadata,'$.simulated')) FROM Message m JOIN Conversation c ON c.id=m.conversationId WHERE c.organizationId='{org}' AND c.externalId='{A_USER}' AND m.role='assistant'")
+        check('new Messenger customer answered by the agent from its knowledge (DRY_RUN: recorded, not sent)', st == 200 and '240' in ai_msg and '"knowledge"' in ai_msg and ai_msg.endswith('|true'), ai_msg)
+        webhook(event('page', PAGE, A_USER, f'm.ui.{run}.ai2', 'Do you deliver to Tambaram?'))
+        conv = sql(f"SELECT CONCAT(aiEnabled,'|',status) FROM Conversation WHERE organizationId='{org}' AND externalId='{A_USER}'")
+        check('a question it cannot answer: fallback sent, conversation handed to the team', conv == '0|human_handoff', conv)
+        pg.goto(WEB + '/knowledge'); pg.get_by_role('button', name=re.compile(f'Social facts {run}')).click(); pg.wait_for_timeout(1200)
+        pg.get_by_role('tab', name=re.compile(r'^Unanswered \(')).click(); pg.wait_for_timeout(1200)
+        gap = pg.get_by_test_id('kb-gap').filter(has_text='Tambaram')
+        check('the question shows in the Knowledge studio, from Instagram / Messenger', gap.count() == 1 and 'on Instagram / Messenger' in gap.inner_text())
+        pg.goto(WEB + '/inbox'); pg.wait_for_timeout(2000)
+        pg.get_by_label('Channel').select_option('messenger'); pg.get_by_label('Search conversations').fill(run); pg.wait_for_timeout(2500)
+        items = pg.get_by_role('list', name='Conversations').get_by_role('listitem')
+        items.filter(has_text=M_USER[-4:]).first.click(); pg.wait_for_timeout(1500)
+        pg.get_by_role('button', name='Return to AI').click(); pg.wait_for_timeout(1500)
+        check('the earlier conversation can now return to the AI; steering offers review mode', sql(f"SELECT aiEnabled FROM Conversation WHERE organizationId='{org}' AND externalId='{M_USER}'") == '1' and pg.get_by_test_id('ai-steering').count() == 1 and pg.get_by_role('button', name='Take over').count() == 1)
+        pg.screenshot(path=os.path.join(SHOTS, 'inbox-messenger-ai.png'))
+
         pg.goto(WEB + '/settings/integrations/meta-social'); pg.wait_for_timeout(2500)
         pg.get_by_role('button', name='Disable integration').click(); pg.wait_for_timeout(2000)
         check('disabling removes the routing', sql(f"SELECT COUNT(*) FROM OrganizationChannel WHERE organizationId='{org}' AND kind IN ('messenger_page_id','instagram_account_id')") == '0')
         time.sleep(1)
         check('no page errors', not errs, '; '.join(errs)[:200])
     finally:
-        cust = sql(f"SELECT GROUP_CONCAT(CONCAT('''', customerId, '''')) FROM SocialIdentity WHERE organizationId='{org}' AND externalUserId IN ('{M_USER}','{I_USER}')")
-        sql(f"DELETE FROM Conversation WHERE organizationId='{org}' AND externalId IN ('{M_USER}','{I_USER}')")
+        cust = sql(f"SELECT GROUP_CONCAT(CONCAT('''', customerId, '''')) FROM SocialIdentity WHERE organizationId='{org}' AND externalUserId IN ('{M_USER}','{I_USER}','{A_USER}')")
+        sql(f"DELETE FROM Conversation WHERE organizationId='{org}' AND externalId IN ('{M_USER}','{I_USER}','{A_USER}')")
+        if agent_id: sql(f"DELETE FROM VoiceAgent WHERE id='{agent_id}'")
+        if kb_id: sql(f"DELETE FROM KnowledgeBase WHERE id='{kb_id}'")
         if cust: sql(f"DELETE FROM Customer WHERE id IN ({cust})")
         sql(f"DELETE FROM OrganizationChannel WHERE organizationId='{org}' AND kind IN ('messenger_page_id','instagram_account_id')")
         sql(f"DELETE FROM IntegrationCredential WHERE organizationId='{org}' AND provider='meta_social'")

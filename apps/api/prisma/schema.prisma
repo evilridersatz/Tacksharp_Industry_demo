@@ -2470,7 +2470,7 @@ model KnowledgeGap {
   agentId         String?
   questionKey     String
   question        String        @db.Text
-  /// call | console
+  /// call | console | social
   channel         String
   count           Int           @default(1)
   /// open | answered | ignored

@@ -1,7 +1,7 @@
 import { errorMessage, log } from '../common/logger.js';
 import { detectStyle } from '../assistant/assistant.service.js';
 import type { Style } from '../assistant/knowledge.js';
-import { bm25 } from '../knowledge/text.js';
+import { bm25, tokens } from '../knowledge/text.js';
 
 /**
  * ONE engine for every custom agent conversation: the dashboard test console, the public template demos, website
@@ -106,10 +106,13 @@ export class AgentEngine {
       return done({ reply: p.spec.escalation?.handoffMessage || 'I will ask a team member to call you back shortly.', source: 'escalation', escalate: true, sources: [] });
     }
     const history = (p.history ?? []).filter((h) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }));
-    // Retrieval uses the last user turn too, so a follow-up ("evlo?") still finds the product asked about before.
+    // Retrieval: the question on its own first. Only a bare follow-up ("evlo?", "price?": at most one meaningful word)
+    // borrows the previous question, so it still finds the product asked about before; a new question that matches
+    // nothing gets the fallback instead of the previous topic's passage.
     const lastUser = [...history].reverse().find((h) => h.role === 'user')?.content ?? '';
     const r0 = Date.now();
-    const passages = await p.search(`${message} ${lastUser}`.trim()).catch(() => []);
+    let passages = await p.search(message).catch(() => [] as Passage[]);
+    if (!passages.length && lastUser && tokens(message).length <= 1) passages = await p.search(`${message} ${lastUser}`.trim()).catch(() => []);
     timings.retrievalMs = Date.now() - r0;
     const sources = dedupeSources(passages);
     const afterHours = !withinHours(p.spec.businessHours, p.now);

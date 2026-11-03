@@ -125,7 +125,7 @@ describe.skipIf(!enabled)('Instagram / Messenger (integration)', () => {
     expect(await post(msg('page', PAGE, from, { mid: `m.${run}.echo`, text: 'our own reply', is_echo: true }))).toMatchObject({ stored: 0 });
     expect(await post(msg('page', PAGE, from, { mid: `m.${run}.2`, attachments: [{ type: 'image', payload: { url: 'https://cdn.example/x.jpg' } }] }))).toMatchObject({ stored: 1 });
     const conv = await convOf(from);
-    expect(conv).toMatchObject({ aiEnabled: false, inboxStatus: 'open', handoffReason: expect.stringMatching(/pending/) });
+    expect(conv).toMatchObject({ aiEnabled: false, inboxStatus: 'open', handoffReason: expect.stringMatching(/no AI agent is chosen/) });
     expect(conv.Message.map((m: any) => `${m.role}:${m.content}`)).toEqual(['user:2BHK in Velachery available?', 'assistant:Thanks! Our team will reply shortly.', 'user:[Image]']);
     expect(conv.Message[1].metadata).toMatchObject({ autoReply: true, simulated: true, notSentReason: 'DRY_RUN is on' });
     expect(JSON.stringify(conv.Message)).not.toContain('cdn.example');
@@ -181,7 +181,7 @@ describe.skipIf(!enabled)('Instagram / Messenger (integration)', () => {
       process.env.DRY_RUN = prev.dry ?? 'true';
       if (prev.ids === undefined) delete process.env.LIVE_TEST_SOCIAL_IDS; else process.env.LIVE_TEST_SOCIAL_IDS = prev.ids;
     }
-    await expect(inbox.returnToAi(actor(), conv.id)).rejects.toThrow(/not available yet/);
+    await expect(inbox.returnToAi(actor(), conv.id)).rejects.toThrow(/No AI agent answers Instagram/);
   });
 
   it('STOP / START honoured; the acknowledgement is never sent to an opted-out customer; another organization cannot see it', async () => {

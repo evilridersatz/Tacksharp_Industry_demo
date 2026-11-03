@@ -24,7 +24,7 @@ export function isKnowledgeGap(fallbackMessage: string, r: { reply: string; sour
  * Records (or counts again) a question the agent could not answer. Never throws: gap tracking must not break a call.
  * Greetings and one-word messages are not gaps.
  */
-export async function recordKnowledgeGap(prisma: PrismaService, g: { organizationId: string; knowledgeBaseId: string | null; agentId: string; question: string; channel: 'call' | 'console' }) {
+export async function recordKnowledgeGap(prisma: PrismaService, g: { organizationId: string; knowledgeBaseId: string | null; agentId: string; question: string; channel: 'call' | 'console' | 'social' }) {
   if (!g.knowledgeBaseId) return;
   const key = questionKey(g.question);
   if (key.length < 6 || key.split(' ').length < 2) return;

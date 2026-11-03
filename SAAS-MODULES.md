@@ -259,19 +259,32 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 - Each message is stored once (Meta's message id, under a per-person lock); echoes of our own sends are ignored; images,
   video, audio and files are shown as labels (`[Image]` ...) and never downloaded or stored. A customer record is
   created on first contact (no phone; `SocialIdentity` links the Meta user id, the display name is read from Meta when
-  live) and the conversation opens in the inbox with the AI off and the reason shown.
+  live). Without a chosen AI agent the conversation opens in the inbox with the AI off and the reason shown.
 - STOP / START are honoured (confirmation sent through the live gate). The optional acknowledgement goes out once after
   24 hours of silence, never to an opted-out customer.
 - Staff replies: refused when the customer opted out or more than 24 hours after their last message (Meta's rule);
   sent through the Page (`POST /{page-id}/messages`, `messaging_type: RESPONSE`, token in the header). Live gate:
   `DRY_RUN` → saved but not sent; live only to ids in `LIVE_TEST_SOCIAL_IDS` until `LIVE_ALLOW_ALL_CUSTOMERS=true`;
   demo customers never. A rejected send is shown; a send with unknown delivery is marked "unknown" and never resent.
-- Inbox: channel filter (WhatsApp / Instagram / Messenger / Phone), channel badges, masked Meta id, "Team only · AI on
-  Messenger pending"; "Return to AI" is refused on these channels.
-- Tests: `test/social.integration.spec.ts` (6) and `tests/ui-social.py` (16; real signed webhooks to the running API;
-  the passing connection test is seeded because Meta is unreachable here).
-- **Pending:** AI replies on Instagram / Messenger (the AI engines identify customers by phone; extending them is a
-  separate change kept away from the GR Chicken launch), media download / viewing, delivery and read receipts,
+- Inbox: channel filter (WhatsApp / Instagram / Messenger / Phone), channel badges, masked Meta id; Take over /
+  Return to AI as on WhatsApp (Return to AI refused while no agent is chosen).
+- **AI replies** (`src/social/social-ai.service.ts`): the settings page has an "AI replies" card to choose one
+  **published** custom agent (stored as `aiAgentId` in the integration's config; kept when the form is saved again;
+  `GET|PUT /social/ai`). It answers with the same agent engine as calls and the test console: its instructions and its
+  knowledge base only, the last 12 messages as context, the conversation's team guidance. It does **not** use the
+  WhatsApp / phone ordering engines (GR Chicken is unaffected). A request for a person (escalation keywords), a question
+  the knowledge cannot answer (the agent's fallback reply; recorded in the Knowledge studio as "on Instagram /
+  Messenger"), an attachment without text, or a send Meta refuses hands the conversation to the team; the AI then stays
+  quiet until someone presses Return to AI. Review mode holds the reply; approving sends it on Instagram / Messenger
+  (same claim-then-send, live gate, 24 h window). STOP / START always win over the AI. The 24 h acknowledgement is not
+  sent while the AI answers.
+- Agent engine fix (all channels): retrieval searches the current question first and borrows the previous question
+  only for a bare follow-up (at most one meaningful word, e.g. "evlo?"); before, an unrelated new question could be
+  answered with the previous topic's passage when no AI model was available.
+- Tests: `test/social.integration.spec.ts` (6), `test/social-ai.integration.spec.ts` (8), `tests/ui-social.py` (24;
+  real signed webhooks to the running API; the passing connection test is seeded because Meta is unreachable here; the
+  agent is tested and published through the real API).
+- **Pending:** media download / viewing, delivery and read receipts,
   comments and story replies, the Human Agent tag (7-day window). **Not verified against Meta**: needs a Page, an app
   with `pages_messaging` / `instagram_manage_messages` and the webhook subscribed.
 
@@ -329,8 +342,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: AI replies on Instagram / Messenger, more
-integrations. P4 subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
+P3: more integrations. P4 subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production

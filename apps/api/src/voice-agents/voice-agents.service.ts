@@ -12,6 +12,7 @@ import { MAX_CASES, diffSnapshots, evaluateTurn, snapshotOf, validateTestCase, t
 import { TEMPLATES, templateByKey, templatePassages, type Template } from './templates.js';
 import { assertPlanAllows } from '../billing/entitlements.js';
 import { isKnowledgeGap, recordKnowledgeGap } from '../knowledge/knowledge-studio.service.js';
+import { guidanceBlock } from '../inbox/steering.js';
 
 type Actor = { sub: string; org: string };
 
@@ -128,12 +129,15 @@ export class VoiceAgentsService {
     return r;
   }
 
-  async converse(organizationId: string, agent: VoiceAgent, body: { message?: unknown; history?: unknown; lang?: unknown }, channel?: 'call' | 'console') {
+  async converse(organizationId: string, agent: VoiceAgent, body: { message?: unknown; history?: unknown; lang?: unknown; guidance?: string | null }, channel?: 'call' | 'console' | 'social') {
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message) throw new BadRequestException('Type or say something first.');
     const lang = ['ta', 'en', 'tanglish'].includes(String(body.lang)) ? (body.lang as Style) : null;
+    const spec = specOf(agent);
+    // Team guidance for this conversation (inbox steering): ranked below the agent's rules and knowledge.
+    if (body.guidance) spec.instructions += guidanceBlock(body.guidance);
     const r = await this.engine.reply({
-      spec: specOf(agent),
+      spec,
       message,
       history: Array.isArray(body.history) ? (body.history as ChatTurn[]) : [],
       lang,

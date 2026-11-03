@@ -29,11 +29,23 @@ describe('shared agent engine', () => {
     const e = new AgentEngine();
     let sent: any;
     e.fetchImpl = vi.fn(async (_u: string, init?: RequestInit) => { sent = JSON.parse(String(init?.body)); return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }); });
-    const search = vi.fn(async (_q: string) => passages);
+    // Like the real retrieval: only a query naming the product finds it.
+    const search = vi.fn(async (q: string) => (/broiler/i.test(q) ? passages : []));
     const history = Array.from({ length: 12 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: i === 10 ? 'broiler venum' : `m${i}` }));
     await e.reply({ spec, message: 'evlo?', history, search, model: { apiKey: 'k', model: 'm' } });
     expect(sent.messages).toHaveLength(1 + 8 + 1);
-    expect(search.mock.calls[0][0]).toMatch(/broiler venum/);
+    expect(search.mock.calls.map((c) => c[0])).toEqual(['evlo?', 'evlo? broiler venum']);
+  });
+
+  it('a new question that matches nothing gets the fallback, not the previous topic\'s passage', async () => {
+    const e = new AgentEngine();
+    const search = vi.fn(async (q: string) => (/broiler/i.test(q) ? passages : []));
+    const history = [{ role: 'user' as const, content: 'broiler price per kg?' }, { role: 'assistant' as const, content: 'Rs 240 per kg.' }];
+    const r = await e.reply({ spec, message: 'Do you deliver to Tambaram?', history, search, model: null });
+    expect(r).toMatchObject({ source: 'fallback', reply: spec.fallbackMessage });
+    expect(search.mock.calls.map((c) => c[0])).toEqual(['Do you deliver to Tambaram?']);
+    // A bare follow-up still borrows the previous question.
+    expect(await e.reply({ spec, message: 'evlo?', history, search, model: null })).toMatchObject({ source: 'knowledge' });
   });
   it('escalation keywords hand off without calling the model', async () => {
     const e = new AgentEngine();

@@ -41,7 +41,7 @@ export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrati
   sarvam: { name: 'Sarvam AI', group: 'AI providers', href: '/settings/ai-providers/sarvam', blurb: 'Speech recognition and Tamil / English voices for calls.' },
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
   sarvam_telephony: { name: 'Sarvam Voice Agents (telephony)', group: 'Integrations', href: '/settings/integrations/sarvam-telephony', blurb: 'Calls answered by an agent hosted on Sarvam: outbound calls and post-call results.' },
-  meta_social: { name: 'Instagram & Messenger', group: 'Integrations', href: '/settings/integrations/meta-social', blurb: 'Instagram and Facebook Messenger messages in the team inbox; your team replies from there.' },
+  meta_social: { name: 'Instagram & Messenger', group: 'Integrations', href: '/settings/integrations/meta-social', blurb: 'Instagram and Facebook Messenger messages in the team inbox; your team or a chosen AI agent replies.' },
   meta_capi: { name: 'Meta Conversions API', group: 'Integrations', href: '/settings/integrations/meta-capi', blurb: 'Report completed orders and new enquiries to your Meta ads dataset (hashed customer data only).' },
 };
 

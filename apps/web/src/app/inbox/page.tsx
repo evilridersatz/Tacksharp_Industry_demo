@@ -152,9 +152,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
             <p className="truncate text-[15px] font-semibold text-ink">{d.customer ? displayName(d.customer) : contactLine(d.channel, d.externalId)}</p>
             <p className="text-[12px] text-muted" data-testid="contact-line">{contactLine(d.channel, d.externalId)} · {CHANNEL_LABEL[d.channel] ?? d.channel}</p>
           </div>
-          {SOCIAL.includes(d.channel) ? (
-            <Badge tone="amber">Team only · AI on {CHANNEL_LABEL[d.channel]} pending</Badge>
-          ) : d.aiEnabled ? (
+          {d.aiEnabled ? (
             <Button disabled={!canReply} busy={busy === 'take'} onClick={() => void run('take', () => api.post(`/inbox/conversations/${id}/take-over`), 'You are handling this conversation. The AI will not reply.')}><Hand className="size-4" />Take over</Button>
           ) : (
             <Button disabled={!canReply} busy={busy === 'ai'} onClick={() => void run('ai', () => api.post(`/inbox/conversations/${id}/return-to-ai`), 'Returned to the AI.')}><Bot className="size-4" />Return to AI</Button>
@@ -271,7 +269,8 @@ function Steering({ d, id, canReply, busy, run }: { d: Detail; id: string; canRe
   const { workspace } = useWorkspace();
   const [text, setText] = useState(d.guidance?.text ?? '');
   const [hours, setHours] = useState('24');
-  const reviewable = d.channel === 'whatsapp' && workspace?.industry !== 'restaurant';
+  // Review mode: WhatsApp (not the restaurant ordering engine, which cannot hold a reply) and Instagram / Messenger.
+  const reviewable = SOCIAL.includes(d.channel) || (d.channel === 'whatsapp' && workspace?.industry !== 'restaurant');
   return (
     <div className="mx-4 mt-3 rounded-[10px] border border-violet-200 bg-violet-50/60 p-3 text-[12.5px]" data-testid="ai-steering">
       <div className="flex flex-wrap items-center gap-2">

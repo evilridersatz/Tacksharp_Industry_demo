@@ -183,7 +183,7 @@ function Gaps({ baseId, onAnswer, onChanged }: { baseId: string; onAnswer: (g: G
         <ul className="divide-y divide-line border-t border-line" aria-label="Unanswered questions">
           {gaps.map((g) => (
             <li key={g.id} data-testid="kb-gap" className="flex flex-wrap items-center gap-3 px-5 py-3 text-[13px]">
-              <div className="min-w-0 basis-full sm:basis-0 sm:flex-1"><p className="font-semibold break-words text-ink">{g.question}</p><p className="text-[12px] text-muted">Asked {g.count} time{g.count === 1 ? '' : 's'} · last {ago(g.lastAskedAt)} · {g.channel === 'call' ? 'on a call' : 'test console'}</p></div>
+              <div className="min-w-0 basis-full sm:basis-0 sm:flex-1"><p className="font-semibold break-words text-ink">{g.question}</p><p className="text-[12px] text-muted">Asked {g.count} time{g.count === 1 ? '' : 's'} · last {ago(g.lastAskedAt)} · {g.channel === 'call' ? 'on a call' : g.channel === 'social' ? 'on Instagram / Messenger' : 'test console'}</p></div>
               <span className="flex gap-1.5">
                 {status === 'open' && <Button variant="primary" onClick={() => onAnswer(g)}>Answer</Button>}
                 {status === 'open' && <Button onClick={() => void setGap(g, 'ignored')}>Ignore</Button>}

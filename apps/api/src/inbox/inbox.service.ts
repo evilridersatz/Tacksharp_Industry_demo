@@ -141,7 +141,7 @@ export class InboxService {
       replyWindow: c.channel === 'whatsapp'
         ? { open: windowOpen, note: windowOpen ? 'You can reply with free text (customer wrote in the last 24 h).' : 'More than 24 h since the customer wrote: WhatsApp allows only an approved template. Free-text replies are blocked.' }
         : isSocialChannel(c.channel)
-          ? (() => { const open = Boolean(this.social?.windowOpen(c.Customer?.lastInboundAt)); return { open, note: open ? 'You can reply (customer wrote in the last 24 h). The AI does not answer on this channel yet.' : 'More than 24 h since the customer wrote: Meta does not allow a reply until they write again.' }; })()
+          ? (() => { const open = Boolean(this.social?.windowOpen(c.Customer?.lastInboundAt)); return { open, note: open ? `You can reply (customer wrote in the last 24 h).${c.aiEnabled ? ' The AI agent chosen in the Instagram & Messenger settings answers while the AI is on.' : ''}` : 'More than 24 h since the customer wrote: Meta does not allow a reply until they write again.' }; })()
           : { open: false, note: 'Replies from the inbox are available for WhatsApp, Instagram and Messenger conversations.' },
       notes: c.notes.map((n) => ({ id: n.id, body: n.body, author: n.authorName ?? users.get(n.authorId) ?? 'Team member', createdAt: n.createdAt })),
       messages,
@@ -244,7 +244,7 @@ export class InboxService {
   /** Back to the AI with the full history kept; the "needs a person" flag is cleared. */
   async returnToAi(actor: Actor, id: string) {
     const c = await this.get(actor.org, id);
-    if (isSocialChannel(c.channel)) throw new BadRequestException('AI replies on Instagram / Messenger are not available yet: the team answers these conversations.');
+    if (isSocialChannel(c.channel) && !(await this.socialAgentActive(actor.org))) throw new BadRequestException('No AI agent answers Instagram / Messenger: choose a published agent in Settings → Integrations → Instagram & Messenger first.');
     await this.prisma.conversation.update({ where: { id: c.id }, data: { aiEnabled: true, status: c.status === 'human_handoff' ? 'active' : c.status, handoffReason: null, handoffAt: null } });
     await this.audit(actor, c.id, 'inbox.returned_to_ai', {});
     return this.detail(actor.org, c.id);
@@ -337,6 +337,7 @@ export class InboxService {
     const { c, m } = await this.draft(actor.org, id, messageId);
     const edited = typeof body.text === 'string' && body.text.trim() && body.text.trim() !== m.content ? body.text.trim() : null;
     if (edited && edited.length > 4096) throw new BadRequestException('Up to 4096 characters.');
+    if (isSocialChannel(c.channel)) return this.approveSocialDraft(actor, c, m, edited);
     const customer = c.customerId ? await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: actor.org } }) : null;
     if (!customer || !c.externalId) throw new BadRequestException('This conversation has no customer record.');
     if (customer.optedOutAt || customer.doNotContact) throw new BadRequestException('The customer opted out (STOP) or is marked do-not-contact: no message can be sent. Discard the draft.');
@@ -371,6 +372,40 @@ export class InboxService {
     await this.audit(actor, c.id, 'inbox.draft_approved', { messageId: m.id, edited: Boolean(edited), sent: gate.live && !error });
     if (error) throw new BadRequestException(`WhatsApp did not accept the message: ${error.slice(0, 200)}`);
     return { ...(await this.detail(actor.org, c.id)), sent: gate.live, ...(gate.live ? {} : { notSentReason: gate.reason }) };
+  }
+
+  /** Review mode on Instagram / Messenger: same claim-then-send, through the organization's Page and its live gate. */
+  private async approveSocialDraft(actor: Actor, c: Awaited<ReturnType<InboxService['get']>>, m: { id: string; content: string; metadata: unknown }, edited: string | null) {
+    if (!this.social || !isSocialChannel(c.channel)) throw new BadRequestException('Instagram / Messenger sending is not available.');
+    const ok = await this.social.check(actor.org, c);
+    if (!ok.ok) throw new BadRequestException(`${ok.reason} Discard the draft.`);
+    const claimed = await this.prisma.message.updateMany({ where: { id: m.id, deliveryStatus: 'held' }, data: { deliveryStatus: 'sending' } });
+    if (!claimed.count) throw new BadRequestException('This draft was already handled by someone else.');
+    const text = edited ?? m.content;
+    const r = await this.social.send(actor.org, c.channel, c.externalId!, ok.customer.isDemo, text);
+    const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
+    const md = (m.metadata ?? {}) as Record<string, unknown>;
+    await this.prisma.message.update({
+      where: { id: m.id },
+      data: {
+        content: text,
+        ...(r.messageId ? { externalId: r.messageId } : {}),
+        deliveryStatus: r.sent ? 'accepted' : r.error ? (r.ambiguous ? 'unknown' : 'failed') : null,
+        deliveryError: r.error?.slice(0, 500) ?? null,
+        deliveryUpdatedAt: new Date(),
+        metadata: { ...md, review: { ...(md.review as object), status: edited ? 'edited' : 'approved', by: actor.sub, byName: user?.name ?? user?.email ?? 'Team member', at: new Date().toISOString(), ...(edited ? { originalAiText: m.content } : {}) }, ...(r.sent || r.error ? {} : { simulated: true, notSentReason: r.notSentReason }) } as Prisma.InputJsonValue,
+      },
+    });
+    await this.audit(actor, c.id, 'inbox.draft_approved', { messageId: m.id, edited: Boolean(edited), sent: r.sent, channel: c.channel });
+    if (r.error) throw new BadRequestException(`${c.channel === 'instagram' ? 'Instagram' : 'Messenger'} did not accept the message${r.ambiguous ? ' (delivery unknown: not resent)' : ''}: ${r.error.slice(0, 200)}`);
+    return { ...(await this.detail(actor.org, c.id)), sent: r.sent, ...(r.sent ? {} : { notSentReason: r.notSentReason }) };
+  }
+
+  /** Is a published agent chosen for Instagram / Messenger? (The integration's config holds its id.) */
+  private async socialAgentActive(org: string) {
+    const row = await this.prisma.integrationCredential.findFirst({ where: { organizationId: org, provider: 'meta_social', enabled: true }, select: { config: true } });
+    const id = ((row?.config ?? {}) as Record<string, string>).aiAgentId;
+    return Boolean(id && (await this.prisma.voiceAgent.count({ where: { id, organizationId: org, status: 'active' } })));
   }
 
   /** Review mode: the AI's held reply is not sent; it stays in the thread marked as discarded. */
