@@ -9,12 +9,13 @@ import { Label, inputCls } from '@/components/textile';
 import { toast } from '@/components/toast';
 import type { Tone } from '@/lib/format';
 
-type Step = { day: number; channel: 'whatsapp' | 'voice'; text?: string; templateName?: string; templateLanguage?: string };
+type Step = { day: number; channel: 'whatsapp' | 'voice'; text?: string; textB?: string; templateName?: string; templateLanguage?: string };
+type VariantStat = { stepIndex: number; A: { runs: number; delivered: number; responded: number }; B: { runs: number; delivered: number; responded: number } };
 type Counts = { active: number; completed: number; stopped: number };
 type Sequence = { id: string; name: string; description: string | null; status: 'draft' | 'active' | 'paused'; steps: Step[]; stopOnReply: boolean; sendStartHour: number; sendEndHour: number; counts: Counts };
 type Run = { stepIndex: number; channel: string; status: string; reason: string | null; at: string };
 type Enrollment = { id: string; status: string; stepIndex: number; nextRunAt: string | null; stopReason: string | null; lastError: string | null; enrolledAt: string; customer: { id: string; name: string | null; phone: string | null }; runs: Run[] };
-type Detail = Sequence & { stepStats: Array<Record<string, number>>; enrollments: Enrollment[] };
+type Detail = Sequence & { stepStats: Array<Record<string, number>>; variantStats?: VariantStat[]; enrollments: Enrollment[] };
 type Draft = { name: string; description: string; steps: Step[]; stopOnReply: boolean; sendStartHour: number; sendEndHour: number };
 
 const STATUS_TONE: Record<string, Tone> = { active: 'brand', paused: 'amber', draft: 'slate', completed: 'violet', stopped: 'rose' };
@@ -137,7 +138,8 @@ function Editor({ draft, setDraft, errors }: { draft: Draft; setDraft: (d: Draft
               <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_200px]">
                 <textarea aria-label={`Step ${i + 1} message`} rows={2} className={cx(inputCls, 'h-auto py-2')} placeholder="Message ({name} and {business} are filled in)" value={s.text ?? ''} onChange={(e) => setStep(i, { text: e.target.value })} />
                 <input aria-label={`Step ${i + 1} template`} className={inputCls} placeholder="Approved template (optional)" value={s.templateName ?? ''} onChange={(e) => setStep(i, { templateName: e.target.value })} />
-                <div className="sm:col-span-2">{err(`steps.${i}.text`)}{err(`steps.${i}.templateName`)}<p className="text-[11.5px] text-faint">The message is used while the customer&apos;s 24-hour WhatsApp window is open; after that only an approved template can be sent, otherwise the step is skipped.</p></div>
+                <textarea aria-label={`Step ${i + 1} variant B`} rows={2} className={cx(inputCls, 'h-auto py-2 sm:col-span-2')} placeholder="Variant B (optional A/B test): half of the customers get this message instead" value={s.textB ?? ''} onChange={(e) => setStep(i, { textB: e.target.value || undefined })} />
+                <div className="sm:col-span-2">{err(`steps.${i}.text`)}{err(`steps.${i}.textB`)}{err(`steps.${i}.templateName`)}<p className="text-[11.5px] text-faint">The message is used while the customer&apos;s 24-hour WhatsApp window is open; after that only an approved template can be sent, otherwise the step is skipped.</p></div>
               </div>
             ) : (
               <p className="mt-2 text-[12.5px] text-muted">The organization&apos;s automatic-call Sarvam agent calls the customer (within calling hours and only with calling consent or an enquiry).</p>
@@ -207,17 +209,30 @@ function SequenceView({ id, onChanged }: { id: string; onChanged: () => void }) 
                   {s.channel === 'voice' ? <Phone className="size-4 text-brand" /> : <MessageCircle className="size-4 text-emerald-700" />}
                   Day {s.day} · {s.channel === 'voice' ? 'AI call' : 'WhatsApp'}
                 </div>
-                {s.text && <p className="mt-1 line-clamp-3 text-[12.5px] text-body">{s.text}</p>}
+                {s.text && <p className="mt-1 line-clamp-3 text-[12.5px] text-body">{s.textB && <b>A: </b>}{s.text}</p>}
+                {s.textB && <p className="mt-1 line-clamp-3 text-[12.5px] text-body"><b>B: </b>{s.textB}</p>}
                 {s.templateName && <p className="mt-1 text-[11.5px] text-faint">Template: {s.templateName}</p>}
                 <div className="mt-2 flex flex-wrap gap-1">
                   {Object.entries(data.stepStats[i] ?? {}).map(([k, v]) => <span key={k} className={cx('rounded-full px-2 py-0.5 text-[11px] font-semibold', RUN_TONE[k])}>{v} {k}</span>)}
                 </div>
+                {(() => {
+                  const v = data.variantStats?.find((x) => x.stepIndex === i);
+                  if (!v) return null;
+                  const rate = (x: VariantStat['A']) => (x.delivered ? `${Math.round((x.responded / x.delivered) * 100)}%` : '—');
+                  return (
+                    <table className="mt-2 w-full text-[11.5px]" data-testid={`ab-${i}`} aria-label={`A/B results for step ${i + 1}`}>
+                      <thead className="text-left text-faint"><tr><th>Variant</th><th className="text-right">Delivered</th><th className="text-right">Responded</th><th className="text-right">Rate</th></tr></thead>
+                      <tbody>{(['A', 'B'] as const).map((k) => <tr key={k}><td className="font-semibold">{k}</td><td className="text-right tabular">{v[k].delivered}</td><td className="text-right tabular">{v[k].responded}</td><td className="text-right tabular">{rate(v[k])}</td></tr>)}</tbody>
+                    </table>
+                  );
+                })()}
               </li>
             ))}
           </ol>
         )}
       </Card>
       <Enrol id={id} active={data.status === 'active'} onDone={() => { reload(); onChanged(); }} />
+      <AutoEnrol id={id} name={data.name} />
       <Card className="p-5">
         <h3 className="mb-2 text-[14px] font-bold text-ink">Enrolled customers <span className="font-normal text-muted">({data.counts.active} running · {data.counts.completed} done · {data.counts.stopped} stopped)</span></h3>
         {data.enrollments.length === 0 ? (
@@ -284,6 +299,54 @@ function Enrol({ id, active, onDone }: { id: string; active: boolean; onDone: ()
         <Button variant="primary" busy={busy} disabled={mode === 'tag' && !tag.trim()} onClick={go}>Enrol</Button>
       </div>
       {result && <p className="mt-2 text-[12.5px] text-body" data-testid="enrol-result">{result}</p>}
+    </Card>
+  );
+}
+
+type WorkflowRow = { id: string; name: string; status: string; graph: { trigger: { type: string; stage?: string; keywords?: string[] }; steps: Array<{ type: string; sequenceId?: string }> } };
+const TRIGGER_LABEL: Record<string, string> = { lead_created: 'a new lead arrives', order_completed: 'an order is completed', stage_reached: 'a customer reaches a stage', needs_human: 'a conversation needs a person', message_keyword: 'a message contains a keyword' };
+const describeTrigger = (t: WorkflowRow['graph']['trigger']) => t.type === 'stage_reached' ? `a customer reaches "${t.stage}"` : t.type === 'message_keyword' ? `a message says ${(t.keywords ?? []).map((k) => `"${k}"`).join(' or ')}` : TRIGGER_LABEL[t.type] ?? t.type;
+const usesSequence = (steps: WorkflowRow['graph']['steps'], id: string): boolean => steps.some((s) => (s.type === 'enroll_drip' && s.sequenceId === id) || ['yes', 'no'].some((b) => Array.isArray((s as Record<string, unknown>)[b]) && usesSequence((s as Record<string, unknown>)[b] as WorkflowRow['graph']['steps'], id)));
+
+/**
+ * Automatic enrolment: a one-step workflow ("when <trigger>, enrol in this sequence") created in the Workflow Studio,
+ * so there is one trigger engine for everything. Lists every workflow that already enrols into this sequence.
+ */
+function AutoEnrol({ id, name }: { id: string; name: string }) {
+  const { data: flows, reload } = useApi<WorkflowRow[]>('/workflows', 0);
+  const [type, setType] = useState('lead_created');
+  const [stage, setStage] = useState('interested');
+  const [keyword, setKeyword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const mine = (flows ?? []).filter((w) => usesSequence(w.graph?.steps ?? [], id));
+  async function create() {
+    setBusy(true);
+    try {
+      const trigger = type === 'stage_reached' ? { type, stage } : type === 'message_keyword' ? { type, keywords: [keyword.trim()] } : { type };
+      const w = await api.post<{ id: string }>('/workflows', { name: `Enrol in ${name} when ${describeTrigger(trigger)}`.slice(0, 120), description: 'Created from the drip sequence page.', graph: { trigger, steps: [{ id: 's1', type: 'enroll_drip', sequenceId: id }] } });
+      await api.post(`/workflows/${w.id}/activate`, {});
+      toast('Automatic enrolment is on.');
+      await reload();
+    } catch (e) { toast(e instanceof ApiError || e instanceof Error ? e.message : String(e), 'error'); } finally { setBusy(false); }
+  }
+  return (
+    <Card className="p-5" data-testid="drip-auto">
+      <h3 className="text-[14px] font-bold text-ink">Start automatically</h3>
+      <p className="mt-1 text-[12.5px] text-muted">Enrol customers by themselves when something happens. This creates a workflow you can change in the Workflow studio. Opted-out customers and customers already in a drip are still skipped.</p>
+      {mine.length > 0 && (
+        <ul className="mt-3 grid gap-1 text-[13px]" aria-label="Automatic enrolment rules">
+          {mine.map((w) => <li key={w.id} data-testid="drip-auto-rule" className="flex flex-wrap items-center gap-2"><Badge tone={w.status === 'active' ? 'brand' : 'slate'}>{w.status}</Badge>When {describeTrigger(w.graph.trigger)} · <a className="font-semibold text-brand underline" href="/workflows">{w.name}</a></li>)}
+        </ul>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-[13px]">When</span>
+        <select aria-label="Start when" className={cx(fitCls, 'w-64')} value={type} onChange={(e) => setType(e.target.value)}>
+          {Object.entries(TRIGGER_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        {type === 'stage_reached' && <select aria-label="Trigger stage" className={cx(fitCls, 'w-40')} value={stage} onChange={(e) => setStage(e.target.value)}>{['interested', 'qualified', 'converted', 'lost'].map((x) => <option key={x}>{x}</option>)}</select>}
+        {type === 'message_keyword' && <input aria-label="Trigger keyword" className={cx(fitCls, 'w-48')} placeholder="e.g. offer" value={keyword} onChange={(e) => setKeyword(e.target.value)} />}
+        <Button variant="primary" busy={busy} disabled={type === 'message_keyword' && keyword.trim().length < 2} onClick={() => void create()}><Workflow className="size-4" />Turn on</Button>
+      </div>
     </Card>
   );
 }

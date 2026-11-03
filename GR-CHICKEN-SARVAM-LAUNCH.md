@@ -107,6 +107,7 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 - `20261104200000_invoice_payment_links`: nullable `PlatformInvoice.paymentLinkId` (unique) / `paymentLinkUrl` /
   `paymentLinkStatus`, `PaymentWebhookEvent` (new table). Additive. **Approved by the owner on 2026-11-03 (20:18 IST).**
   All fourteen migrations above are approved; apply them in timestamp order, only after the verified backup below.
+- `20261104300000_drip_variants`: nullable `DripStepRun.variant`. Additive. **Awaiting the owner's approval.**
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

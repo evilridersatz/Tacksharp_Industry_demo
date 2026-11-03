@@ -2629,6 +2629,8 @@ model DripStepRun {
   status            String         @db.VarChar(20)
   reason            String?        @db.VarChar(500)
   providerMessageId String?
+  /// A | B when the step has two message variants (A/B test); null otherwise.
+  variant           String?        @db.VarChar(1)
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   enrollment        DripEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)

@@ -2,7 +2,9 @@
 Drip automation through the real dashboard + API + worker + MySQL (TEST database, DRY_RUN=true: nothing is sent).
 Create a sequence from the industry starting template (Day 0/1/3/5 call/7), field validation, enrol by tag (opted-out
 customer skipped), activate, the worker runs Day 0 within a minute and records it as simulated (message saved in the
-conversation, labelled not sent), edit re-times, stop one enrolment, pause; nav link; no page errors.
+conversation, labelled not sent), A/B variant on Day 0 (stable choice, the chosen text saved, results per variant),
+automatic enrolment (creates an active Workflow Studio rule), edit re-times, stop one enrolment, pause; nav link; no
+page errors.
 
   Run:   TEST_DB_NAME=tacksharp_test python3 -I apps/web/tests/ui-drips.py
 """
@@ -49,6 +51,7 @@ with sync_playwright() as p:
         ed.get_by_role('button', name='Save draft').click(); pg.wait_for_timeout(1500)
         check('validation: a WhatsApp step without a message or template is refused with the reason', 'needs a message' in ed.inner_text() and sql(f"SELECT COUNT(*) FROM DripSequence WHERE name='{name}'") == '0')
         ed.get_by_label('Step 1 message').fill(first)
+        ed.get_by_label('Step 1 variant B').fill(f'Variant B hello {run}')
         ed.get_by_role('button', name='Save draft').click(); pg.wait_for_timeout(2500)
         sid = sql(f"SELECT id FROM DripSequence WHERE name='{name}'")
         check('saved as a draft and selected', bool(sid) and sql(f"SELECT status FROM DripSequence WHERE id='{sid}'") == 'draft' and pg.get_by_test_id('drip-detail').count() == 1)
@@ -74,6 +77,16 @@ with sync_playwright() as p:
         rows = pg.get_by_test_id('drip-enrollment')
         check('enrolments table shows the customer and "1: simulated"', rows.count() == 1 and f'Drip Kavya {run}' in rows.first.inner_text() and '1: simulated' in rows.first.inner_text(), rows.first.inner_text() if rows.count() else '')
         check('step stats on the timeline', '1 simulated' in pg.get_by_test_id('drip-timeline').inner_text())
+        variant = sql(f"SELECT r.variant FROM DripStepRun r JOIN DripEnrollment e ON e.id=r.enrollmentId WHERE e.sequenceId='{sid}' AND r.stepIndex=0")
+        sent_text = sql(f"SELECT m.content FROM Message m JOIN Conversation c ON c.id=m.conversationId WHERE c.customerId='{a['id']}' AND m.role='assistant' ORDER BY m.createdAt DESC LIMIT 1")
+        check('A/B: the run records its variant and the customer got that text', variant in ('A', 'B') and ((variant == 'B') == sent_text.startswith(f'Variant B hello {run}')), f'{variant} {sent_text[:60]}')
+        ab = pg.get_by_test_id('ab-0')
+        check('A/B results table on Day 0: one delivered in the chosen variant', ab.count() == 1 and ab.get_by_role('row').filter(has_text=variant).first.inner_text().split()[1] == '1', ab.inner_text() if ab.count() else '')
+        auto = pg.get_by_test_id('drip-auto')
+        auto.get_by_label('Start when').select_option('stage_reached'); auto.get_by_label('Trigger stage').select_option('qualified')
+        auto.get_by_role('button', name='Turn on').click(); pg.wait_for_timeout(2500)
+        wf = sql(f"SELECT CONCAT(status,'|',JSON_UNQUOTE(JSON_EXTRACT(graph,'$.trigger.type')),'|',JSON_UNQUOTE(JSON_EXTRACT(graph,'$.steps[0].sequenceId'))) FROM Workflow WHERE name LIKE 'Enrol in {name}%'")
+        check('automatic enrolment: an active workflow "stage reached qualified -> enrol in this sequence"', wf == f'active|stage_reached|{sid}' and auto.get_by_test_id('drip-auto-rule').count() == 1 and 'qualified' in auto.inner_text(), wf)
         pg.screenshot(path=os.path.join(SHOTS, 'drips.png'), full_page=True)
         pg.get_by_test_id('drip-detail').get_by_role('button', name='Edit').click(); pg.wait_for_timeout(800)
         pg.get_by_label('Step 2 day').fill('2'); pg.get_by_role('button', name='Save', exact=True).click(); pg.wait_for_timeout(2000)
@@ -86,6 +99,7 @@ with sync_playwright() as p:
         check('list shows the sequence with its counts', f'{name}' in pg.get_by_test_id('drip-list').inner_text() and '1 stopped' in pg.get_by_test_id('drip-list').inner_text())
         check('no page errors', not errs, '; '.join(errs)[:200])
     finally:
+        sql(f"DELETE FROM Workflow WHERE name LIKE 'Enrol in {name}%'")
         sql(f"DELETE FROM DripSequence WHERE name='{name}'")
         for c in (a, o):
             if c and c.get('id'): sql(f"DELETE FROM Customer WHERE id='{c['id']}'")

@@ -71,6 +71,17 @@ Sarvam agent through `placeSystemCall`, so every telephony gate applies).
   sequence moves on. A send whose delivery is unknown (timeout after sending), or a run interrupted mid-send, is marked
   failed and **not repeated**. Enrolments are leased in the database, so several API instances can run the minute tick.
 - Pause stops all steps of the sequence; Activate resumes them. Editing steps or hours re-times running enrolments.
+- **A/B variants:** a WhatsApp step can have a second message ("variant B"). Each enrolment gets A or B per step from a
+  hash of (enrolment, step): stable on retries, an even split overall. The run records the variant (`DripStepRun.variant`)
+  and the chosen text is what is sent / saved. Results per variant on the timeline: delivered (sent or simulated) and
+  responded (the enrolment then stopped because the customer replied, converted or ordered while that step was its
+  latest message). The approved template used outside the 24 h window is the same for both variants.
+- **Start automatically:** the sequence page creates and activates a one-step Workflow Studio rule "when <a new lead
+  arrives | an order is completed | a customer reaches a stage | a conversation needs a person | a message contains a
+  keyword>, enrol in this sequence", and lists every workflow that already enrols into it. One trigger engine (the
+  Workflow Studio); the enrolment rules above (opt-out, one drip at a time) still apply.
+- Migration `20261104300000_drip_variants` (nullable `DripStepRun.variant`; additive; awaiting the owner's approval).
+- Tests: `test/drip.integration.spec.ts` (10, incl. A/B), `tests/ui-drips.py` (20, incl. A/B and automatic enrolment).
 - In test mode every step is recorded as **simulated** and the message is saved in the conversation labelled
   "not sent (test mode)".
 - API: `GET /drips`, `GET /drips/preset`, `GET /drips/:id`, `POST /drips`, `PATCH /drips/:id`,
@@ -363,8 +374,8 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: more integrations. P4 subscriptions: GST e-invoicing (IRN), metered pricing, self-service plan change. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
-is manual (by stage, tag or customer).
+P3: more integrations. P4 subscriptions: GST e-invoicing (IRN), metered pricing, self-service plan change. Drip: a
+trigger on "tag added" (the Workflow Studio has no tag trigger yet).
 
 ## Production
 

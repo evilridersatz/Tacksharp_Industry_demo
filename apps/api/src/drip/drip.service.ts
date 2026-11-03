@@ -8,7 +8,7 @@ import { queueRedis } from '../queues/queues.js';
 import { config } from '../common/config.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
-import { dueAt, presetFor, validateHours, validateSteps, type DripStep } from './drip-plan.js';
+import { dueAt, presetFor, validateHours, validateSteps, variantFor, type DripStep } from './drip-plan.js';
 import { assertPlanAllows } from '../billing/entitlements.js';
 
 type Actor = { sub: string; org: string };
@@ -63,6 +63,7 @@ export class DripService {
       ...s,
       counts: countsFor(counts),
       stepStats: steps.map((_, i) => Object.fromEntries(runs.filter((r) => r.stepIndex === i).map((r) => [r.status, r._count._all]))),
+      variantStats: await this.variantStats(s.id, steps),
       enrollments: enrollments.map((e) => ({
         id: e.id, status: e.status, stepIndex: e.stepIndex, nextRunAt: e.nextRunAt, stopReason: e.stopReason, lastError: e.lastError,
         enrolledAt: e.enrolledAt, completedAt: e.completedAt,
@@ -231,13 +232,15 @@ export class DripService {
       throw err;
     }
 
-    const outcome = step.channel === 'voice' ? await this.runVoice(e, step) : await this.runWhatsApp(e, step);
+    const variant = step.channel === 'whatsapp' && step.textB ? variantFor(e.id, e.stepIndex) : null;
+    if (variant) await this.prisma.dripStepRun.update({ where: { id: run.id }, data: { variant } });
+    const outcome = step.channel === 'voice' ? await this.runVoice(e, step) : await this.runWhatsApp(e, variant === 'B' ? { ...step, text: step.textB } : step);
     if (outcome.retryAt) {
       // Temporary: the run row goes so the step can run again later (nothing was sent).
       await this.prisma.dripStepRun.delete({ where: { id: run.id } });
       const attempts = e.attempts + 1;
       if (outcome.countsAsAttempt && attempts > RETRY_MINUTES.length) {
-        await this.prisma.dripStepRun.create({ data: { organizationId: e.organizationId, enrollmentId: e.id, stepIndex: e.stepIndex, channel: step.channel, status: 'failed', reason: `Gave up after ${attempts} attempts: ${outcome.reason}`.slice(0, 500) } });
+        await this.prisma.dripStepRun.create({ data: { organizationId: e.organizationId, enrollmentId: e.id, stepIndex: e.stepIndex, channel: step.channel, variant, status: 'failed', reason: `Gave up after ${attempts} attempts: ${outcome.reason}`.slice(0, 500) } });
         return this.advance(e, steps, now, "failed");
       }
       await this.prisma.dripEnrollment.update({
@@ -312,6 +315,32 @@ export class DripService {
         data: step ? { nextRunAt: dueAt(r.enrolledAt, step, hoursOf(s), config.followUp.timeScale, now) } : { status: 'completed', completedAt: now, nextRunAt: null },
       });
     }
+  }
+
+  /**
+   * A/B results per step with a variant B: runs per variant (sent / simulated / skipped / failed) and responses, i.e.
+   * enrolments that replied, converted or ordered while that step was their latest message (attributed to its variant).
+   */
+  private async variantStats(sequenceId: string, steps: DripStep[]) {
+    const abSteps = steps.map((s, i) => (s.textB ? i : -1)).filter((i) => i >= 0);
+    if (!abSteps.length) return [];
+    const runs = await this.prisma.dripStepRun.findMany({
+      where: { enrollment: { sequenceId }, stepIndex: { in: abSteps }, variant: { not: null } },
+      select: { enrollmentId: true, stepIndex: true, variant: true, status: true },
+    });
+    const ended = await this.prisma.dripEnrollment.findMany({ where: { sequenceId, stopReason: { in: ['customer_replied', 'converted', 'ordered'] } }, select: { id: true, runs: { select: { stepIndex: true }, orderBy: { stepIndex: 'desc' }, take: 1 } } });
+    const lastStep = new Map(ended.map((e) => [e.id, e.runs[0]?.stepIndex ?? -1]));
+    return abSteps.map((stepIndex) => {
+      const per = { A: { runs: 0, delivered: 0, responded: 0 }, B: { runs: 0, delivered: 0, responded: 0 } };
+      for (const r of runs.filter((x) => x.stepIndex === stepIndex)) {
+        const v = per[r.variant as 'A' | 'B'];
+        if (!v) continue;
+        v.runs++;
+        if (r.status === 'sent' || r.status === 'simulated') v.delivered++;
+        if (lastStep.get(r.enrollmentId) === stepIndex) v.responded++;
+      }
+      return { stepIndex, A: per.A, B: per.B };
+    });
   }
 
   // ----------------------------------------------------------------------------------------------- helpers

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { nextAllowedCallTime } from '../common/time.js';
 
 export type DripChannel = 'whatsapp' | 'voice';
@@ -7,6 +8,8 @@ export interface DripStep {
   channel: DripChannel;
   /** WhatsApp text (used while the customer's 24 h window is open). {name} and {business} are filled in. */
   text?: string;
+  /** Optional second message (A/B test): half of the enrolments get it instead of `text`, chosen once per enrolment. */
+  textB?: string;
   /** Approved WhatsApp template used when the 24 h window is closed (body variables: {{1}} name, {{2}} business). */
   templateName?: string;
   templateLanguage?: string;
@@ -32,6 +35,9 @@ export function validateSteps(input: unknown): { steps: DripStep[]; errors: Reco
     const channel = s.channel === 'voice' ? 'voice' : s.channel === 'whatsapp' ? 'whatsapp' : null;
     if (!channel) errors[`steps.${i}.channel`] = 'Channel must be whatsapp or voice';
     const text = typeof s.text === 'string' ? s.text.trim().slice(0, 1000) : '';
+    const textB = typeof s.textB === 'string' ? s.textB.trim().slice(0, 1000) : '';
+    if (textB && channel === 'whatsapp' && !text) errors[`steps.${i}.textB`] = 'Write message A before adding a variant B';
+    if (textB && text && textB === text) errors[`steps.${i}.textB`] = 'Variant B must differ from message A';
     const templateName = typeof s.templateName === 'string' ? s.templateName.trim() : '';
     if (templateName && !/^[a-z0-9_]{1,512}$/.test(templateName)) errors[`steps.${i}.templateName`] = 'Template names are lower-case letters, digits and _';
     if (channel === 'whatsapp' && !text && !templateName) errors[`steps.${i}.text`] = 'A WhatsApp step needs a message or an approved template';
@@ -40,6 +46,7 @@ export function validateSteps(input: unknown): { steps: DripStep[]; errors: Reco
       day: Number.isInteger(day) ? day : 0,
       channel: channel ?? 'whatsapp',
       ...(channel === 'whatsapp' && text ? { text } : {}),
+      ...(channel === 'whatsapp' && text && textB ? { textB } : {}),
       ...(channel === 'whatsapp' && templateName ? { templateName, templateLanguage: templateLanguage ?? 'en' } : {}),
     });
   });
@@ -57,6 +64,14 @@ export function dueAt(enrolledAt: Date, step: DripStep, hours: { start: number; 
   const raw = new Date(enrolledAt.getTime() + step.day * 86_400_000 * timeScale);
   const at = raw < now ? now : raw;
   return nextAllowedCallTime(at, hours.start, hours.end);
+}
+
+/**
+ * A / B for one enrolment and step: stable (the same enrolment always gets the same variant, also on a retry) and an
+ * even split across enrolments. Steps without a variant B are always 'A' (recorded as null).
+ */
+export function variantFor(enrollmentId: string, stepIndex: number): 'A' | 'B' {
+  return createHash('sha256').update(`${enrollmentId}:${stepIndex}`).digest()[0] % 2 === 0 ? 'A' : 'B';
 }
 
 export function fill(text: string, v: { name: string; business: string }) {

@@ -264,4 +264,36 @@ describe.skipIf(!enabled)('drip automation (integration)', () => {
     const actions = (await prisma.auditEvent.findMany({ where: { organizationId: ORG, entityId: s.id } })).map((a: any) => a.action);
     expect(actions).toEqual(expect.arrayContaining(['drip.created', 'drip.activated', 'drip.enrolled', 'drip.updated']));
   });
+
+  it('A/B variants: validation; a stable, roughly even split; the chosen message is sent; results per variant', async () => {
+    await expect(svc.create(actor, { name: `AB bad ${run}`, steps: [{ day: 0, channel: 'whatsapp', templateName: 'drip_intro', textB: 'B only' }] })).rejects.toMatchObject({ response: { errors: { 'steps.0.textB': expect.stringMatching(/message A/) } } });
+    await expect(svc.create(actor, { name: `AB same ${run}`, steps: [{ day: 0, channel: 'whatsapp', text: 'Same', textB: 'Same' }] })).rejects.toMatchObject({ response: { errors: { 'steps.0.textB': expect.stringMatching(/differ/) } } });
+    const s = await sequence({ steps: [{ day: 0, channel: 'whatsapp', text: 'Offer A for {name}', textB: 'Offer B for {name}' }, { day: 2, channel: 'whatsapp', text: 'Second step (no variant)' }] });
+    const cs = [] as any[];
+    for (let i = 0; i < 12; i++) cs.push(await customer());
+    await svc.enroll(actor, s.id, { customerIds: cs.map((c) => c.id) });
+    const at = new Date(Date.now() + 60_000);
+    for (const c of cs) await svc.runOne((await enrollment(s.id, c.id)).id, at);
+    const runs = await prisma.dripStepRun.findMany({ where: { enrollment: { sequenceId: s.id } }, include: { enrollment: true } });
+    const { variantFor } = await import('../src/drip/drip-plan.js');
+    for (const r of runs) expect(r.variant).toBe(variantFor(r.enrollmentId, 0));
+    const a = runs.filter((r: any) => r.variant === 'A').length;
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(12);
+    // The message stored for each customer is the variant it was given.
+    for (const r of runs) {
+      const m = await prisma.message.findFirst({ where: { Conversation: { customerId: r.enrollment.customerId }, role: 'assistant' }, orderBy: { createdAt: 'desc' } });
+      expect(m.content).toMatch(r.variant === 'B' ? /^Offer B/ : /^Offer A/);
+    }
+    // One B customer replies: the response counts for B at step 0.
+    const bRun = runs.find((r: any) => r.variant === 'B');
+    await prisma.customer.update({ where: { id: bRun.enrollment.customerId }, data: { lastInboundAt: new Date(Date.now() + 120_000) } });
+    await svc.runOne(bRun.enrollmentId, new Date(Date.now() + 3 * DAY));
+    const d = await svc.detail(ORG, s.id);
+    expect(d.variantStats).toEqual([{ stepIndex: 0, A: { runs: a, delivered: a, responded: 0 }, B: { runs: 12 - a, delivered: 12 - a, responded: 1 } }]);
+    // The second step has no variant: recorded without one.
+    const later = cs.find((c) => c.id !== bRun.enrollment.customerId);
+    await svc.runOne((await enrollment(s.id, later.id)).id, new Date(Date.now() + 3 * DAY));
+    expect((await prisma.dripStepRun.findFirst({ where: { enrollment: { sequenceId: s.id, customerId: later.id }, stepIndex: 1 } })).variant).toBeNull();
+  });
 });
