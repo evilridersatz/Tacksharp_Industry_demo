@@ -1,14 +1,15 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useState } from 'react';
-import { MessageCircle, Phone, Plus, ShieldAlert, ShieldCheck, Upload, UserPlus, Users } from 'lucide-react';
-import { ApiError, api, useApi } from '@/lib/api';
+import { Download, MessageCircle, Phone, Plus, ShieldAlert, ShieldCheck, Upload, UserPlus, Users } from 'lucide-react';
+import { API_URL, ApiError, api, useApi } from '@/lib/api';
 import { useWorkspace } from '@/lib/industry';
 import { industryDef } from '@/lib/industries';
 import { PageHeader } from '@/components/shell';
 import { Button, Card, Empty, ErrorBanner, Skeleton, cx } from '@/components/ui';
 import { DataList, Pill, SearchBox, SourceNote, Timeline, Toolbar } from '@/components/vertical-ui';
 import { Dialog, Label, inputCls } from '@/components/textile';
+import { toast } from '@/components/toast';
 import { Pager } from '@/components/visionops';
 
 type Customer = {
@@ -16,6 +17,7 @@ type Customer = {
   tags: string[] | null; messagingConsent: boolean; callingConsent: boolean; optedOutAt: string | null; doNotContact: boolean; isDemo: boolean;
   lastInboundAt: string | null; createdAt: string; updatedAt: string; contactable: { whatsapp: boolean; call: boolean };
   _count?: { leads: number; Conversation: number; calls: number };
+  stage: string | null; attributes: Record<string, string | number | boolean> | null; followUpAt: string | null; lead?: { score: number; reasons: string[] };
 };
 type Readiness = { live: boolean; liveReason: string | null; whatsapp: { blockers: string[]; windowOpen: boolean; needsTemplate: boolean; templateConfigured: boolean }; call: { blockers: string[] } };
 type Detail = {
@@ -29,7 +31,11 @@ type Detail = {
   appointments: Array<{ id: string; reference: string; status: string; startAt: string }>;
   salesOrders: Array<{ id: string; number: string; status: string; total: string; createdAt: string }>;
   audit: Array<{ id: string; action: string; actor: string; createdAt: string; data: Record<string, unknown> | null }>;
+  notes: Array<{ id: string; body: string; authorName: string | null; createdAt: string }>;
+  tasks: Array<{ id: string; title: string; status: string; dueAt: string | null }>;
 };
+const STAGES: Array<[string, string]> = [['new', 'New'], ['interested', 'Interested'], ['qualified', 'Qualified'], ['converted', 'Converted'], ['lost', 'Lost']];
+const scoreTone = (n: number) => (n >= 60 ? 'bg-emerald-50 text-emerald-800' : n >= 30 ? 'bg-amber-50 text-amber-900' : 'bg-slate-100 text-muted');
 
 /** What this list is called in each industry (the records are the same tenant-scoped customers). */
 const NOUN: Record<string, { many: string; one: string }> = {
@@ -50,22 +56,48 @@ function ContactsPage() {
   const noun = NOUN[workspace?.industry ?? ''] ?? { many: 'Customers', one: 'customer' };
   const [q, setQ] = useState('');
   const [consent, setConsent] = useState('');
+  const [stage, setStage] = useState('');
+  const [due, setDue] = useState(false);
+  const [dupes, setDupes] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  /** Downloads the CSV with the session cookie (same filters as the list); the server limits it to this workspace. */
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const res = await fetch(`${API_URL}/customers/export?${new URLSearchParams(filters)}`, { credentials: 'include' });
+      if (!res.ok) throw new Error(res.status === 403 ? 'Your role cannot export customers.' : `Export failed (HTTP ${res.status}).`);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = `customers-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+      URL.revokeObjectURL(url);
+      toast(`Exported ${res.headers.get('X-Rows') ?? ''} rows${res.headers.get('X-Truncated') === 'true' ? ' (first 5000)' : ''}.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => { const id = new URLSearchParams(window.location.search).get('open'); if (id) setOpen(id); }, []);
-  const path = `/customers?${new URLSearchParams({ ...(q.trim() ? { q: q.trim() } : {}), ...(consent ? { consent } : {}), page: String(page), pageSize: '25' })}`;
+  const filters = { ...(q.trim() ? { q: q.trim() } : {}), ...(consent ? { consent } : {}), ...(stage ? { stage } : {}), ...(due ? { followUpDue: 'true' } : {}) };
+  const path = `/customers?${new URLSearchParams({ ...filters, page: String(page), pageSize: '25' })}`;
   const { data, error, reload } = useApi<{ total: number; page: number; pageSize: number; rows: Customer[] }>(path, 20_000);
-  const filtered = Boolean(q.trim() || consent);
+  const filtered = Boolean(q.trim() || consent || stage || due);
 
   return (
     <>
-      <PageHeader title={noun.many} actions={<Button variant="primary" onClick={() => setAdding(true)}><UserPlus className="size-4" /> Add {noun.one}</Button>} />
+      <PageHeader title={noun.many} actions={<div className="flex flex-wrap gap-2"><Button onClick={() => setDupes(true)}>Possible duplicates</Button><Button busy={exporting} onClick={() => void exportCsv()}><Download className="size-4" /> Export CSV</Button><Button variant="primary" onClick={() => setAdding(true)}><UserPlus className="size-4" /> Add {noun.one}</Button></div>} />
       <Toolbar>
         <SearchBox value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder="Name, phone or email" />
         <select aria-label="Consent filter" className={cx(inputCls.replace('w-full', 'w-auto min-w-[190px]'), 'h-10')} value={consent} onChange={(e) => { setConsent(e.target.value); setPage(1); }}>
           <option value="">Everyone</option><option value="messaging">Can message on WhatsApp</option><option value="calling">Can be called</option><option value="none">No consent recorded</option><option value="opted_out">Opted out / do not contact</option>
         </select>
+        <select aria-label="Stage filter" className={cx(inputCls.replace('w-full', 'w-auto min-w-[150px]'), 'h-10')} value={stage} onChange={(e) => { setStage(e.target.value); setPage(1); }}>
+          <option value="">All stages</option>{STAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" checked={due} onChange={(e) => { setDue(e.target.checked); setPage(1); }} />Follow-up due</label>
       </Toolbar>
       {error && !data ? <ErrorBanner message={error} onRetry={reload} /> : !data ? <Skeleton className="h-72" /> : data.total === 0 && !filtered ? (
         <Card>
@@ -85,6 +117,8 @@ function ContactsPage() {
               { head: 'Name', cell: (r) => <div><p className="font-semibold text-ink">{r.name ?? 'Unnamed'}{r.isDemo && <Pill tone="slate" className="ml-1.5">demo</Pill>}</p><p className="text-[11.5px] text-muted">{r.email ?? r.location ?? ''}</p></div> },
               { head: 'Phone', cell: (r) => <span className="tabular-nums">{r.phone ? `+${r.phone}` : '—'}</span> },
               { head: 'Consent', cell: (r) => <ConsentPills c={r} /> },
+              { head: 'Stage', cell: (r) => <span className="text-[12px]">{STAGES.find(([v]) => v === (r.stage ?? 'new'))?.[1]}{r.followUpAt && <span className={cx('ml-1', Date.parse(r.followUpAt) <= Date.now() && 'font-semibold text-amber-800')}>· follow up {new Date(r.followUpAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}</span> },
+              { head: 'Score', cell: (r) => r.lead ? <span className={cx('rounded-full px-2 py-0.5 text-[11.5px] font-semibold', scoreTone(r.lead.score))} title={r.lead.reasons.join(' · ') || 'No signals yet'}>{r.lead.score}</span> : null },
               { head: 'Source', cell: (r) => <span className="text-[12px]">{r.source ?? '—'}</span> },
               { head: 'Activity', cell: (r) => <span className="text-[12px] text-muted">{r._count ? `${r._count.Conversation} chats · ${r._count.calls} calls · ${r._count.leads} enquiries` : ''}</span> },
               { head: 'Updated', cell: (r) => <span className="text-[12px] text-muted">{ago(r.updatedAt)}</span> },
@@ -97,6 +131,7 @@ function ContactsPage() {
       <SourceNote api="GET /customers · POST /customers · PATCH /customers/:id" />
       <AddCustomer open={adding} noun={noun.one} onClose={() => setAdding(false)} onSaved={(id) => { setAdding(false); void reload(); setOpen(id); }} />
       {open && <CustomerDrawer id={open} onClose={() => setOpen(null)} onChanged={reload} />}
+      {dupes && <Duplicates onClose={() => setDupes(false)} onOpen={(id) => { setDupes(false); setOpen(id); }} />}
     </>
   );
 }
@@ -319,6 +354,8 @@ function CustomerDrawer({ id, onClose, onChanged }: { id: string; onClose: () =>
             <div className="mt-4 flex justify-end gap-2"><Button onClick={() => setConfirming(null)}>Cancel</Button><Button variant={r?.live ? 'danger' : 'primary'} onClick={() => confirming && void contact(confirming)}>{r?.live ? 'Yes, send it' : 'Continue'}</Button></div>
           </Dialog>
 
+          <CrmPanel id={id} c={c} notes={data.notes} tasks={data.tasks} onSaved={async () => { await reload(); onChanged(); }} />
+
           <div>
             <p className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">History</p>
             <Timeline items={history} />
@@ -348,5 +385,88 @@ export default function Page() {
     <Suspense>
       <ContactsPage />
     </Suspense>
+  );
+}
+
+/** Stage, follow-up date, custom attributes, lead score with its reasons, notes and tasks. */
+function CrmPanel({ id, c, notes, tasks, onSaved }: { id: string; c: Customer; notes: Detail['notes']; tasks: Detail['tasks']; onSaved: () => Promise<void> }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [task, setTask] = useState('');
+  const [taskDue, setTaskDue] = useState('');
+  const [attr, setAttr] = useState({ k: '', v: '' });
+  const [err, setErr] = useState<string | null>(null);
+  async function go(key: string, fn: () => Promise<unknown>) {
+    setBusy(key); setErr(null);
+    try { await fn(); await onSaved(); return true; } catch (e) {
+      const fields = e instanceof ApiError ? (e.body as { errors?: Record<string, string> } | undefined)?.errors : undefined;
+      setErr(fields && Object.keys(fields).length ? Object.values(fields).join(' ') : e instanceof Error ? e.message : String(e));
+      return false;
+    } finally { setBusy(null); }
+  }
+  const attrs = c.attributes ?? {};
+  return (
+    <Card className="space-y-3 p-3" data-testid="crm-panel">
+      <div className="flex flex-wrap items-end gap-3 text-[12.5px]">
+        <label><span className="block font-semibold text-ink">Stage</span>
+          <select aria-label="Stage" className={cx(inputCls, 'h-9 w-auto')} value={c.stage ?? 'new'} disabled={busy !== null} onChange={(e) => void go('stage', () => api.patch(`/customers/${id}`, { stage: e.target.value }))}>{STAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        </label>
+        <label><span className="block font-semibold text-ink">Next follow-up</span>
+          <input aria-label="Next follow-up" type="date" className={cx(inputCls, 'h-9 w-auto')} value={c.followUpAt ? c.followUpAt.slice(0, 10) : ''} disabled={busy !== null} onChange={(e) => void go('fu', () => api.patch(`/customers/${id}`, { followUpAt: e.target.value ? new Date(`${e.target.value}T09:00:00+05:30`).toISOString() : null }))} />
+        </label>
+        {c.lead && <p className="ml-auto" data-testid="lead-score"><span className={cx('rounded-full px-2 py-0.5 font-semibold', scoreTone(c.lead.score))}>Score {c.lead.score}</span> <span className="text-muted">{c.lead.reasons.join(' · ') || 'No signals yet'}</span></p>}
+      </div>
+      <div className="text-[12.5px]">
+        <p className="font-semibold text-ink">Custom attributes</p>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {Object.entries(attrs).map(([k, v]) => <button key={k} className="rounded-full bg-sky-50 px-2 py-0.5 text-[11.5px] text-sky-900" title="Remove" onClick={() => { const next = { ...attrs }; delete next[k]; void go('attr', () => api.patch(`/customers/${id}`, { attributes: next })); }}>{k}: {String(v)} ×</button>)}
+          {!Object.keys(attrs).length && <span className="text-muted">None</span>}
+        </div>
+        <form className="mt-1 flex gap-1" onSubmit={(e) => { e.preventDefault(); if (attr.k.trim()) void go('attr', () => api.patch(`/customers/${id}`, { attributes: { ...attrs, [attr.k.trim()]: attr.v.trim() } })).then((ok) => ok && setAttr({ k: '', v: '' })); }}>
+          <input aria-label="Attribute name" className={cx(inputCls, 'h-8')} placeholder="name (e.g. budget_band)" value={attr.k} onChange={(e) => setAttr({ ...attr, k: e.target.value })} />
+          <input aria-label="Attribute value" className={cx(inputCls, 'h-8')} placeholder="value" value={attr.v} onChange={(e) => setAttr({ ...attr, v: e.target.value })} />
+          <Button type="submit" className="h-8" busy={busy === 'attr'}>Add</Button>
+        </form>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 text-[12.5px]">
+        <div>
+          <p className="font-semibold text-ink">Notes</p>
+          <form className="mt-1 flex gap-1" onSubmit={(e) => { e.preventDefault(); if (note.trim()) void go('note', () => api.post(`/customers/${id}/notes`, { body: note.trim() })).then((ok) => ok && setNote('')); }}>
+            <input aria-label="New note" className={cx(inputCls, 'h-8')} placeholder="Add a note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Button type="submit" className="h-8" busy={busy === 'note'}>Add</Button>
+          </form>
+          <ul className="mt-1 space-y-1">{notes.slice(0, 5).map((n) => <li key={n.id} className="rounded-[8px] bg-amber-50 px-2 py-1">{n.body}<span className="block text-[10.5px] text-muted">{n.authorName ?? 'Team'} · {ago(n.createdAt)}</span></li>)}</ul>
+        </div>
+        <div>
+          <p className="font-semibold text-ink">Tasks</p>
+          <form className="mt-1 flex flex-wrap gap-1" onSubmit={(e) => { e.preventDefault(); if (task.trim()) void go('task', () => api.post(`/customers/${id}/tasks`, { title: task.trim(), dueAt: taskDue ? new Date(`${taskDue}T09:00:00+05:30`).toISOString() : undefined })).then((ok) => ok && (setTask(''), setTaskDue(''))); }}>
+            <input aria-label="New task" className={cx(inputCls, 'h-8 min-w-0 flex-1')} placeholder="e.g. Send brochure" value={task} onChange={(e) => setTask(e.target.value)} />
+            <input aria-label="Task due" type="date" className={cx(inputCls, 'h-8 w-auto')} value={taskDue} onChange={(e) => setTaskDue(e.target.value)} />
+            <Button type="submit" className="h-8" busy={busy === 'task'}>Add</Button>
+          </form>
+          <ul className="mt-1 space-y-1">{tasks.map((t) => <li key={t.id} className="flex justify-between gap-2"><span>{t.title}</span><span className="text-muted">{t.status}{t.dueAt ? ` · due ${new Date(t.dueAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}</span></li>)}</ul>
+        </div>
+      </div>
+      {err && <p role="alert" className="text-[12px] text-rose-700">{err}</p>}
+    </Card>
+  );
+}
+
+function Duplicates({ onClose, onOpen }: { onClose: () => void; onOpen: (id: string) => void }) {
+  const { data, error } = useApi<Array<{ match: string; value: string; customers: Array<{ id: string; name: string | null; phone: string | null; email: string | null }> }>>('/customers/duplicates', 0);
+  return (
+    <Dialog open onClose={onClose} title="Possible duplicates" wide>
+      <p className="mb-3 text-[12.5px] text-muted">Records with the same email or the same name. Nothing is merged automatically: open each record and correct it.</p>
+      {error ? <ErrorBanner message={error} /> : !data ? <Skeleton className="h-40" /> : data.length === 0 ? <p className="text-[13px]">No possible duplicates found.</p> : (
+        <ul className="space-y-3" data-testid="duplicates">
+          {data.map((g) => (
+            <li key={`${g.match}:${g.value}`} className="rounded-[10px] border border-line p-3 text-[12.5px]">
+              <p className="font-semibold text-ink">{g.match}: {g.value}</p>
+              <ul className="mt-1 space-y-0.5">{g.customers.map((c) => <li key={c.id}><button className="text-brand-dark underline" onClick={() => onOpen(c.id)}>{c.name ?? 'Unnamed'}</button> <span className="text-muted">{c.phone ? `+${c.phone}` : ''} {c.email ?? ''}</span></li>)}</ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Dialog>
   );
 }

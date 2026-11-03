@@ -175,6 +175,13 @@ model Customer {
   isDemo               Boolean         @default(false)
   /// Marketing labels / segments ("saree_buyer", "wedding", "festival"...): a JSON string array.
   tags                 Json?
+  /// CRM: custom attributes {key: string|number|boolean} (up to 20, keys a-z0-9_).
+  attributes           Json?
+  /// CRM stage: interested | qualified | converted | lost (null = new).
+  stage                String?
+  /// Next follow-up date set by the team (shown in "Follow-up due").
+  followUpAt           DateTime?
+  crmNotes             CustomerNote[]
   organization         Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls                Call[]
   Conversation         Conversation[]
@@ -198,6 +205,8 @@ model Customer {
   @@unique([organizationId, phone])
   @@index([organizationId])
   @@index([organizationId, email])
+  @@index([organizationId, stage])
+  @@index([organizationId, followUpAt])
 }
 
 model Lead {
@@ -2503,4 +2512,18 @@ model SavedReply {
 
   @@unique([organizationId, title])
   @@index([organizationId])
+}
+
+/// CRM note on a customer (team only).
+model CustomerNote {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String
+  authorId       String
+  authorName     String?  @db.VarChar(120)
+  body           String   @db.Text
+  createdAt      DateTime @default(now())
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, customerId, createdAt])
 }

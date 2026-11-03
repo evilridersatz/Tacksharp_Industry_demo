@@ -8,6 +8,7 @@ import { WhatsAppSenderService } from '../whatsapp/whatsapp-sender.service.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
 import { config } from '../common/config.js';
+import { STAGES, leadScore, toCsv, validateAttributes } from './crm.js';
 
 const LANGS = ['english', 'tamil', 'tanglish', 'hindi', 'malayalam', 'telugu', 'kannada'];
 const CONSENT_SOURCES = ['customer_message', 'website_form', 'in_person', 'phone_call', 'import_with_proof', 'other'];
@@ -15,7 +16,7 @@ const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 const WINDOW_MS = 24 * 3_600_000;
 
 export type CustomerInput = {
-  name?: unknown; phone?: unknown; email?: unknown; language?: unknown; location?: unknown; source?: unknown; tags?: unknown;
+  name?: unknown; phone?: unknown; email?: unknown; language?: unknown; location?: unknown; source?: unknown; tags?: unknown; attributes?: unknown; stage?: unknown; followUpAt?: unknown;
   messagingConsent?: unknown; callingConsent?: unknown; consentSource?: unknown; doNotContact?: unknown; optedOut?: unknown;
 };
 type Actor = { sub: string; role?: string };
@@ -44,7 +45,7 @@ export class CustomersService {
     return this.prisma.auditEvent.create({ data: { organizationId: org, actor: `user:${actor.sub}`, entityType: 'customer', entityId, action, data: data as never } }).catch(() => undefined);
   }
 
-  async list(org: string, q: { q?: string; consent?: string; source?: string; page?: number; pageSize?: number }) {
+  async list(org: string, q: { q?: string; consent?: string; source?: string; tag?: string; stage?: string; followUpDue?: string; page?: number; pageSize?: number }) {
     const pageSize = Math.min(100, Math.max(5, Math.round(q.pageSize ?? 25)));
     const page = Math.max(1, Math.round(q.page ?? 1));
     const and: Prisma.CustomerWhereInput[] = [{ organizationId: org }];
@@ -58,12 +59,77 @@ export class CustomersService {
     else if (q.consent === 'none') and.push({ messagingConsent: false, callingConsent: false });
     else if (q.consent === 'opted_out') and.push({ OR: [{ optedOutAt: { not: null } }, { doNotContact: true }] });
     if (q.source) and.push({ source: q.source.slice(0, 40) });
-    const where: Prisma.CustomerWhereInput = { AND: and };
+    const where: Prisma.CustomerWhereInput = { AND: [...and, ...this.crmFilters(q)] };
     const [total, rows] = await Promise.all([
       this.prisma.customer.count({ where }),
-      this.prisma.customer.findMany({ where, orderBy: [{ updatedAt: 'desc' }], skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { leads: true, Conversation: true, calls: true } } } }),
+      this.prisma.customer.findMany({ where, orderBy: [{ updatedAt: 'desc' }], skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { leads: true, Conversation: true, calls: true, orders: true } } } }),
     ]);
-    return { total, page, pageSize, rows: rows.map((c) => this.view(c)) };
+    return { total, page, pageSize, rows: rows.map((c) => ({ ...this.view(c), lead: leadScore({ ...c, orders: c._count.orders }) })) };
+  }
+
+  private crmFilters(q: { tag?: string; stage?: string; followUpDue?: string }): Prisma.CustomerWhereInput[] {
+    const out: Prisma.CustomerWhereInput[] = [];
+    if (q.tag) out.push({ tags: { array_contains: q.tag.toLowerCase().slice(0, 30) } as never });
+    if (q.stage === 'new') out.push({ stage: null });
+    else if (q.stage && (STAGES as readonly string[]).includes(q.stage)) out.push({ stage: q.stage });
+    if (q.followUpDue === 'true') out.push({ followUpAt: { lte: new Date() } });
+    return out;
+  }
+
+  /** CSV of the filtered customers (max 5000 rows; formula-injection safe). */
+  async exportCsv(org: string, actor: Actor, q: { q?: string; consent?: string; source?: string; tag?: string; stage?: string; followUpDue?: string }) {
+    const first = await this.list(org, { ...q, page: 1, pageSize: 1 });
+    const total = Math.min(first.total, 5000);
+    const rows: Array<Record<string, unknown>> = [];
+    for (let page = 1; rows.length < total; page++) {
+      const r = await this.list(org, { ...q, page, pageSize: 100 });
+      if (!r.rows.length) break;
+      rows.push(...(r.rows as Array<Record<string, unknown>>));
+    }
+    const header = ['name', 'phone', 'email', 'language', 'source', 'stage', 'tags', 'whatsapp_consent', 'calling_consent', 'opted_out', 'do_not_contact', 'follow_up_at', 'lead_score', 'attributes', 'created_at'];
+    const csv = toCsv(header, rows.slice(0, total).map((c) => [c.name, c.phone, c.email, c.language, c.source, c.stage ?? 'new', c.tags, c.messagingConsent, c.callingConsent, Boolean(c.optedOutAt), c.doNotContact, c.followUpAt, (c.lead as { score: number }).score, c.attributes, c.createdAt]));
+    await this.audit(org, actor, org, 'exported', { rows: Math.min(rows.length, total), filters: q });
+    return { csv, rows: Math.min(rows.length, total), truncated: first.total > 5000 };
+  }
+
+  /** Possible duplicates: the same email, or the same name, on different customer records. Reported, never merged. */
+  async duplicates(org: string) {
+    const rows = await this.prisma.customer.findMany({ where: { organizationId: org }, select: { id: true, name: true, phone: true, email: true, createdAt: true }, take: 20000 });
+    const groups = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const keys = [r.email ? `email:${r.email.toLowerCase()}` : null, r.name && r.name.trim().length >= 3 ? `name:${r.name.trim().toLowerCase().replace(/\s+/g, ' ')}` : null].filter((k): k is string => Boolean(k));
+      for (const k of keys) groups.set(k, [...(groups.get(k) ?? []), r]);
+    }
+    return [...groups.entries()]
+      .filter(([, g]) => g.length > 1)
+      .map(([key, g]) => ({ match: key.startsWith('email:') ? 'same email' : 'same name', value: key.slice(key.indexOf(':') + 1), customers: g.map((c) => ({ id: c.id, name: c.name, phone: c.phone, email: c.email, createdAt: c.createdAt })) }))
+      // Newest first: a duplicate created today is the one worth fixing now.
+      .sort((a, b) => Math.max(...b.customers.map((c) => c.createdAt.getTime())) - Math.max(...a.customers.map((c) => c.createdAt.getTime())))
+      .slice(0, 50);
+  }
+
+  async addNote(org: string, actor: Actor, id: string, body: unknown) {
+    const c = await this.prisma.customer.findFirst({ where: { id, organizationId: org }, select: { id: true } });
+    if (!c) throw new NotFoundException('Customer not found');
+    const text = typeof body === 'string' ? body.trim() : '';
+    if (!text || text.length > 4000) throw new BadRequestException('Write a note (up to 4000 characters).');
+    const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
+    const note = await this.prisma.customerNote.create({ data: { organizationId: org, customerId: c.id, authorId: actor.sub, authorName: user?.name ?? user?.email ?? null, body: text } });
+    await this.audit(org, actor, c.id, 'note_added', { length: text.length });
+    return note;
+  }
+
+  /** A follow-up task for the team (Tasks list), linked to the customer. */
+  async addTask(org: string, actor: Actor, id: string, body: { title?: unknown; dueAt?: unknown }) {
+    const c = await this.prisma.customer.findFirst({ where: { id, organizationId: org }, select: { id: true, name: true } });
+    if (!c) throw new NotFoundException('Customer not found');
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (title.length < 3 || title.length > 200) throw new BadRequestException('Task title: 3 to 200 characters.');
+    const due = body.dueAt ? new Date(String(body.dueAt)) : null;
+    if (due && Number.isNaN(due.getTime())) throw new BadRequestException('dueAt must be a date.');
+    const task = await this.prisma.workTask.create({ data: { organizationId: org, agent: 'crm', kind: 'review', title, detail: `Customer: ${c.name ?? c.id}`, status: 'open', priority: 'normal', dueAt: due, entityType: 'customer', entityId: c.id, createdBy: `user:${actor.sub}` } });
+    await this.audit(org, actor, c.id, 'task_added', { taskId: task.id });
+    return task;
   }
 
   private view<T extends { phone: string | null; optedOutAt: Date | null; doNotContact: boolean; messagingConsent: boolean; callingConsent: boolean }>(c: T) {
@@ -98,6 +164,21 @@ export class CustomersService {
     if (input.tags !== undefined) {
       if (!Array.isArray(input.tags)) errors.tags = 'Tags must be a list.';
       else data.tags = [...new Set(input.tags.map((t) => str(t, 30).toLowerCase().replace(/[^a-z0-9_ -]/g, '')).filter(Boolean))].slice(0, 10) as never;
+    }
+    if (input.attributes !== undefined) {
+      const a = validateAttributes(input.attributes);
+      if (!a.ok) errors.attributes = a.error;
+      else data.attributes = (a.value ?? Prisma.DbNull) as never;
+    }
+    if (input.stage !== undefined) {
+      const st = input.stage === null || input.stage === '' || input.stage === 'new' ? null : String(input.stage);
+      if (st && !(STAGES as readonly string[]).includes(st)) errors.stage = `Stage must be new, ${STAGES.join(', ')}.`;
+      else data.stage = st;
+    }
+    if (input.followUpAt !== undefined) {
+      const d = input.followUpAt === null || input.followUpAt === '' ? null : new Date(String(input.followUpAt));
+      if (d && Number.isNaN(d.getTime())) errors.followUpAt = 'Follow-up date must be a date.';
+      else data.followUpAt = d;
     }
     for (const k of ['messagingConsent', 'callingConsent', 'doNotContact'] as const) {
       if (input[k] !== undefined) {
@@ -159,7 +240,13 @@ export class CustomersService {
       this.prisma.salesOrder.findMany({ where: { organizationId: org, customerId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, number: true, status: true, total: true, createdAt: true } }),
       this.prisma.auditEvent.findMany({ where: { organizationId: org, entityType: 'customer', entityId: id }, orderBy: { createdAt: 'desc' }, take: 30 }),
     ]);
-    return { customer: this.view(c), leads, conversations, calls, followUps, orders, reservations, appointments, salesOrders, audit, contactReadiness: await this.readiness(org, c) };
+    const [notes, tasks, orderCount] = await Promise.all([
+      this.prisma.customerNote.findMany({ where: { organizationId: org, customerId: id }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      this.prisma.workTask.findMany({ where: { organizationId: org, entityType: 'customer', entityId: id }, orderBy: [{ status: 'asc' }, { dueAt: 'asc' }], take: 20, select: { id: true, title: true, status: true, dueAt: true, createdAt: true } }),
+      this.prisma.order.count({ where: { organizationId: org, customerId: id } }),
+    ]);
+    const lead = leadScore({ ...c, orders: orderCount, leadStatus: leads[0]?.status ?? null });
+    return { customer: { ...this.view(c), lead }, leads, conversations, calls, followUps, orders, reservations, appointments, salesOrders, audit, notes, tasks, contactReadiness: await this.readiness(org, c) };
   }
 
   /** What a test message / call would do right now, and why (shown before the user confirms). */

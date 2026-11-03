@@ -14,6 +14,8 @@ export function configureApp(app: NestExpressApplication) {
   app.enableCors({
     origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3001').split(','),
     credentials: true,
+    // Readable by the dashboard (CSV export row count).
+    exposedHeaders: ['X-Rows', 'X-Truncated', 'Content-Disposition'],
   });
   app.use(createRateLimiter());
   // Voice uploads (assistant speech-to-text, Sarvam recognition tests) send up to ~2 MB of base64 WAV. Still bounded;
