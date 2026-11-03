@@ -2,6 +2,7 @@
 
 import { Toaster } from './toast';
 import { LiveAgent } from './live-agent';
+import { BusinessAssistant } from './business-assistant';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -281,9 +282,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Tara (the AI assistant) is on the website and in the dashboard; not on the one-time invitation page.
   const agent = pathname === '/invite' ? null : <LiveAgent />;
   if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster />{agent}</>;
-  // Signed in: the assistant can also be the business's own assistant (its menu, orders and customers). The key gives
-  // it fresh state after signing in (the login page's website assistant sits at the same place in the tree).
-  return <><Shell>{children}</Shell><Toaster /><LiveAgent key="business" business /></>;
+  // Signed in: the business's own assistant (its phone agent, menu, orders and customers); Tara where it is not
+  // available. The key gives it fresh state after signing in (the login page's assistant sits at the same place).
+  return <><Shell>{children}</Shell><Toaster /><BusinessAssistant key="business" /></>;
 }
 
 /** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */

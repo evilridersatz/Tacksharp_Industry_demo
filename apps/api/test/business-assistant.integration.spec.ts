@@ -20,6 +20,12 @@ if (enabled) {
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_BASE_URL;
   process.env.SARVAM_API_KEY = 'test-sarvam-key-not-real';
+  process.env.TELEPHONY_WEBHOOK_SECRET = 'y'.repeat(16) + 'business-assistant-live-secret';
+  process.env.SARVAM_AGENTS_API_KEY = 'agents-key-not-real';
+  process.env.SARVAM_AGENTS_ORG_ID = 'sv-org';
+  process.env.SARVAM_AGENTS_WORKSPACE_ID = 'sv-ws';
+  process.env.SARVAM_AGENTS_CONNECTION_ID = 'sv-conn';
+  process.env.SARVAM_AGENTS_PHONE_NUMBER = '918000000000';
 }
 
 const ORG = 'org_test_ba_a';
@@ -186,6 +192,52 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     expect(sent[0].text).toContain('12,500');
     expect(sent[1].language_code).toBe('ta-IN');
     await prisma.voiceAgent.deleteMany({ where: { organizationId: ORG } });
+  });
+
+  it('live call: a ticket for the business\'s own Sarvam phone agent; the SDK URL request is checked and forwarded', async () => {
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: ORG } });
+    await expect(ctl.liveSession(ORG, staff, { phone: '9876500001' })).rejects.toThrow(/not set up/);
+    expect((await ctl.status(ORG, 'en')).liveAgent).toBeNull();
+    await prisma.voiceAgent.create({ data: { organizationId: ORG, name: 'GR Phone Agent', industry: 'restaurant', instructions: 'x', languages: ['ta'], greeting: 'Vanakkam!', fallbackMessage: 'x', status: 'active', telephonyProvider: 'sarvam', sarvamAppId: 'GR-app-1', sarvamAppVersion: 3 } });
+    expect((await ctl.status(ORG, 'en')).liveAgent).toEqual({ name: 'GR Phone Agent', version: 3 });
+    await expect(ctl.liveSession(ORG, { ...staff, role: 'viewer' }, { phone: '9876500001' })).rejects.toThrow(/only view/);
+    const s = await ctl.liveSession(ORG, staff, { phone: '9876500001' });
+    expect(s.config).toEqual({ org_id: 'sv-org', workspace_id: 'sv-ws', app_id: 'GR-app-1', version: 3, user_identifier: '+919876500001', user_identifier_type: 'phone_number' });
+    expect(JSON.stringify(s)).not.toContain('agents-key-not-real');
+    const calls: any[] = [];
+    ctl.fetchImpl = async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response(JSON.stringify({ url: 'wss://example.test/signed', reference_id: 'ref-1' }), { status: 200 }); };
+    const req = (ticket: string) => ({ headers: { 'x-assistant-ticket': ticket } }) as any;
+    const p = { tenant: ORG, org: 'sv-org', ws: 'sv-ws', app: 'GR-app-1' };
+    const r = await ctl.liveUrl(p, { interaction_type: 'call', version: '3' }, req(s.ticket));
+    expect(r).toEqual({ url: 'wss://example.test/signed', reference_id: 'ref-1' });
+    expect(calls[0].url).toBe('https://apps.sarvam.ai/api/app-runtime/orgs/sv-org/workspaces/sv-ws/apps/GR-app-1/url?interaction_type=call&version=3');
+    expect(calls[0].init.headers['X-API-Key']).toBe('agents-key-not-real');
+    // Refused: no / forged / expired ticket, another app, another tenant's ticket.
+    await expect(ctl.liveUrl(p, {}, req(''))).rejects.toThrow(/expired|ticket/i);
+    await expect(ctl.liveUrl(p, {}, req(s.ticket.replace(/.$/, (c: string) => (c === 'a' ? 'b' : 'a'))))).rejects.toThrow(/Invalid ticket/);
+    await expect(ctl.liveUrl(p, {}, req(`${Date.now() - 1}.${s.ticket.split('.')[1]}`))).rejects.toThrow(/expired/i);
+    await expect(ctl.liveUrl({ ...p, app: 'Other-app' }, {}, req(s.ticket))).rejects.toThrow(/Invalid ticket/);
+    await expect(ctl.liveUrl({ ...p, tenant: ORG_B }, {}, req(s.ticket))).rejects.toThrow(/Invalid ticket/);
+    expect(calls.length).toBe(1);
+    // Sarvam refusing (no committed version) is reported, not hidden.
+    ctl.fetchImpl = async () => new Response('{}', { status: 404 });
+    await expect(ctl.liveUrl(p, {}, req(s.ticket))).rejects.toThrow(/committed version/);
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: ORG } });
+  });
+
+  it('live call transcript is saved once on the customer (AI voice calls + voice conversation)', async () => {
+    const p = phone();
+    const lines = [{ role: 'assistant', content: 'Vanakkam! GR Chicken.' }, { role: 'user', content: 'broiler price evlo?' }, { role: 'assistant', content: 'Broiler kilo 220 rupees.' }];
+    const r = await ctl.liveTranscript(ORG, staff, { phone: p, interactionId: `int-${p}`, durationSec: 42, lines });
+    expect(r.saved).toBe(true);
+    expect((await ctl.liveTranscript(ORG, staff, { phone: p, interactionId: `int-${p}`, durationSec: 42, lines })).duplicate).toBe(true);
+    const call = await prisma.call.findFirst({ where: { organizationId: ORG, providerCallId: `int-${p}` } });
+    expect(call).toMatchObject({ direction: 'inbound', status: 'completed', provider: 'sarvam', durationSec: 42 });
+    expect(call.summary).toContain('broiler price evlo?');
+    expect(await prisma.message.count({ where: { organizationId: ORG, metadata: { path: '$.callId', equals: call.id } } })).toBe(3);
+    expect((await ctl.customer(ORG, p)).channels).toContain('voice');
+    await prisma.message.deleteMany({ where: { organizationId: ORG, conversation: { externalId: `91${p.slice(-10)}`, channel: 'voice' } } }).catch(() => undefined);
+    await prisma.call.deleteMany({ where: { id: call.id } });
   });
 
   it('refuses: viewers, a missing number, and a live non-restaurant workspace', async () => {

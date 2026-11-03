@@ -1,5 +1,8 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, Post, Query } from '@nestjs/common';
-import { CurrentUser, Org } from '../auth/decorators.js';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpException, Param, Post, Query, Req, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import type { Request } from 'express';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { CurrentUser, Org, Public } from '../auth/decorators.js';
+import { webhookSecret } from '../telephony/webhook-token.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
@@ -24,6 +27,15 @@ const greeting = (name: string, ordering: boolean): Record<Style, string> => ord
       ta: `வணக்கம்! ${name} assistant பேசுறேன். ஒரு customer கேட்கற மாதிரி எதுவேணாலும் கேளுங்க.`,
       tanglish: `Vanakkam! ${name} assistant pesuren. Customer kekura maadhiri edhu venaalum kelunga.`,
     };
+
+/** Sarvam Voice Agents runtime (the base the official web SDK uses: sarvam-conv-ai-sdk SocketManager). */
+const SARVAM_RUNTIME = 'https://apps.sarvam.ai/api/app-runtime/';
+const LIVE_TOKEN_TTL_MS = 2 * 60_000;
+
+/** A short-lived ticket for ONE live-call URL request: bound to the organization and the Sarvam app it may open. */
+function liveTicket(organizationId: string, appId: string, exp: number, secret: string) {
+  return createHmac('sha256', secret).update(`webcall|${organizationId}|${appId}|${exp}`).digest('hex');
+}
 
 /**
  * The dashboard assistant in "business" mode: staff talk to THEIR business's assistant as a customer would, by chat,
@@ -57,7 +69,7 @@ export class BusinessAssistantController {
   private async phoneAgent(organizationId: string) {
     const st = await this.prisma.organizationSettings.findUnique({ where: { organizationId } }).catch(() => null);
     const chosen = (st?.data as { telephony?: { systemAgentId?: string } } | null)?.telephony?.systemAgentId;
-    const select = { id: true, name: true, voice: true, greeting: true } as const;
+    const select = { id: true, name: true, voice: true, greeting: true, sarvamAppId: true, sarvamAppVersion: true } as const;
     if (chosen) {
       const a = await this.prisma.voiceAgent.findFirst({ where: { id: chosen, organizationId }, select });
       if (a) return a;
@@ -101,6 +113,8 @@ export class BusinessAssistantController {
       // The phone agent's own opening line when it has one: the assistant opens exactly like a call.
       greeting: agent?.greeting?.replace(/\{\{[^}]*\}\}/g, '').replace(/\s+([,.!?])/g, '$1').replace(/\s{2,}/g, ' ').trim() || greeting(ws.name, ws.ordering)[style],
       phoneVoice: { agent: voice.agentName, speaker: voice.speaker, pace: voice.pace, model: voice.model, source: voice.source },
+      // Voice / video calls go to the business's real Sarvam phone agent when it is set up (same as a phone call).
+      liveAgent: await this.liveAccount(organizationId).then((a) => (a ? { name: a.agentName, version: a.version } : null)).catch(() => null),
     };
   }
 
@@ -159,6 +173,109 @@ export class BusinessAssistantController {
       throw new BadRequestException('The assistant could not answer just now. Please try again.');
     }
   }
+
+  // ---- Live call: the business's own Sarvam phone agent, in the browser -------------------------------------------
+  //
+  // Same agent, voice, speed, speech recognition and tools as a phone call (Sarvam's official web SDK streams the
+  // microphone and the agent's audio over a WebSocket). The browser never sees the Sarvam key: it asks our API for a
+  // two-minute ticket, and the SDK's one "signed URL" request comes to us; we check the ticket and ask Sarvam with the
+  // key. The agent's tools answer from our database for the customer number given as the caller (user identifier).
+
+  private async liveAccount(organizationId: string) {
+    const [agent, cred] = await Promise.all([this.phoneAgent(organizationId), providerCredentials('sarvam_telephony', organizationId).catch(() => null)]);
+    const apiKey = cred && cred.source !== 'none' && !cred.reason ? String(cred.secrets.apiKey ?? '') : '';
+    const orgId = String(cred?.config.orgId ?? '');
+    const workspaceId = String(cred?.config.workspaceId ?? '');
+    if (!agent?.sarvamAppId || !apiKey || !orgId || !workspaceId || !webhookSecret()) return null;
+    return { apiKey, orgId, workspaceId, appId: agent.sarvamAppId, version: agent.sarvamAppVersion ?? null, agentName: agent.name };
+  }
+
+  @Post('live/session')
+  @HttpCode(200)
+  async liveSession(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown }) {
+    if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    const ws = await this.workspace(organizationId);
+    if (!ws.enabled) throw new ForbiddenException('Your business assistant can be tried here in a demo workspace.');
+    const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
+    if (!phone) throw new BadRequestException('Enter the customer’s 10-digit mobile number first.');
+    const acct = await this.liveAccount(organizationId);
+    if (!acct) throw new ServiceUnavailableException('The live phone agent is not set up for this business (Sarvam agent id on the voice agent, and the Sarvam calling account).');
+    const exp = Date.now() + LIVE_TOKEN_TTL_MS;
+    const ticket = `${exp}.${liveTicket(organizationId, acct.appId, exp, webhookSecret()!)}`;
+    log.info('business_assistant.live_session', { organizationId, appId: acct.appId, version: acct.version });
+    return {
+      ticket,
+      organizationId,
+      agentName: acct.agentName,
+      config: { org_id: acct.orgId, workspace_id: acct.workspaceId, app_id: acct.appId, ...(acct.version ? { version: acct.version } : {}), user_identifier: `+${phone}`, user_identifier_type: 'phone_number' },
+    };
+  }
+
+  /** The SDK's signed-URL request (GET {base}orgs/{org}/workspaces/{ws}/apps/{app}/url), checked and forwarded. */
+  @Public()
+  @Get('live/runtime/:tenant/orgs/:org/workspaces/:ws/apps/:app/url')
+  async liveUrl(@Param() p: { tenant: string; org: string; ws: string; app: string }, @Query() q: Record<string, unknown>, @Req() req: Request) {
+    const secret = webhookSecret();
+    const [expRaw, mac] = String(req.headers['x-assistant-ticket'] ?? '').split('.');
+    const exp = Number(expRaw);
+    if (!secret || !mac || !Number.isFinite(exp) || exp < Date.now() || exp > Date.now() + LIVE_TOKEN_TTL_MS + 5_000) throw new UnauthorizedException('Ticket expired. Start the call again.');
+    const expected = liveTicket(p.tenant, p.app, exp, secret);
+    if (mac.length !== expected.length || !timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) throw new UnauthorizedException('Invalid ticket.');
+    const acct = await this.liveAccount(p.tenant);
+    if (!acct || acct.appId !== p.app || acct.orgId !== p.org || acct.workspaceId !== p.ws) throw new ForbiddenException('This agent is not the business’s phone agent.');
+    const qs = new URLSearchParams();
+    if (q.interaction_type === 'call' || q.interaction_type === 'chat') qs.set('interaction_type', q.interaction_type);
+    if (/^\d{1,6}$/.test(String(q.version ?? ''))) qs.set('version', String(q.version));
+    const url = `${SARVAM_RUNTIME}orgs/${encodeURIComponent(acct.orgId)}/workspaces/${encodeURIComponent(acct.workspaceId)}/apps/${encodeURIComponent(acct.appId)}/url${qs.size ? `?${qs}` : ''}`;
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, { method: 'GET', headers: { 'X-API-Key': acct.apiKey }, signal: AbortSignal.timeout(10_000) });
+    } catch (e) {
+      log.warn('business_assistant.live_unreachable', { organizationId: p.tenant, error: errorMessage(e) });
+      throw new ServiceUnavailableException('Sarvam is not reachable right now.');
+    }
+    const data = (await res.json().catch(() => null)) as { url?: string; reference_id?: string } | null;
+    if (!res.ok || !data?.url || !data.reference_id) {
+      log.warn('business_assistant.live_refused', { organizationId: p.tenant, status: res.status, ms: Date.now() - started });
+      throw new HttpException(res.status === 404 ? 'Sarvam could not find a committed version of this agent.' : 'Sarvam refused the live call.', res.status >= 400 && res.status < 600 ? res.status : 502);
+    }
+    log.info('business_assistant.live_url', { organizationId: p.tenant, ms: Date.now() - started });
+    return { url: data.url, reference_id: data.reference_id };
+  }
+
+  /**
+   * After a live call from the dashboard: the call and its transcript go on the customer's record (AI voice calls and
+   * the customer's voice conversation), like a phone call. Saved once per Sarvam interaction.
+   */
+  @Post('live/transcript')
+  @HttpCode(200)
+  async liveTranscript(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown; interactionId?: unknown; durationSec?: unknown; lines?: unknown }) {
+    if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
+    if (!phone) throw new BadRequestException('Mobile number required.');
+    const lines = (Array.isArray(body?.lines) ? body.lines : [])
+      .filter((l): l is { role: string; content: string } => Boolean(l) && typeof (l as { content?: unknown }).content === 'string')
+      .slice(0, 200)
+      .map((l) => ({ role: l.role === 'user' ? ('user' as const) : ('assistant' as const), content: l.content.trim().slice(0, 4000) }))
+      .filter((l) => l.content);
+    if (!lines.length) return { saved: false };
+    const interactionId = typeof body?.interactionId === 'string' && /^[\w-]{1,120}$/.test(body.interactionId) ? body.interactionId : `web-${randomUUID()}`;
+    if (await this.prisma.call.findFirst({ where: { organizationId, providerCallId: interactionId }, select: { id: true } })) return { saved: false, duplicate: true };
+    const durationSec = Number.isFinite(Number(body?.durationSec)) ? Math.max(0, Math.min(7200, Math.round(Number(body.durationSec)))) : null;
+    const customer = (await this.prisma.customer.findFirst({ where: { organizationId, phone } })) ?? (await this.prisma.customer.create({ data: { organizationId, phone, source: 'voice_web' } }));
+    const since = new Date(Date.now() - ((durationSec ?? 0) + 120) * 1000);
+    const orders = await this.prisma.order.findMany({ where: { organizationId, customerId: customer.id, createdAt: { gte: since } }, select: { orderNumber: true, total: true }, take: 5 });
+    const first = lines.find((l) => l.role === 'user' && l.content.length > 3);
+    const summary = [`Dashboard live call by staff (user:${user.sub}).`, first ? `Caller: "${first.content.slice(0, 160)}"` : '', ...orders.map((o) => `Order ${o.orderNumber} placed (₹${Number(o.total)}).`), orders.length ? '' : 'No order placed.'].filter(Boolean).join(' ');
+    const call = await this.prisma.call.create({ data: { organizationId, customerId: customer.id, direction: 'inbound', status: 'completed', outcome: 'web_call', toNumber: '', fromNumber: phone, providerCallId: interactionId, durationSec, provider: 'sarvam', endedAt: new Date(), summary: summary.slice(0, 1000) } });
+    const conv = (await this.prisma.conversation.findFirst({ where: { organizationId, channel: 'voice', externalId: phone } })) ?? (await this.prisma.conversation.create({ data: { id: randomUUID(), organizationId, channel: 'voice', externalId: phone, customerId: customer.id, updatedAt: new Date() } }));
+    await this.prisma.message.createMany({ data: lines.map((l, i) => ({ id: `${call.id}-${i}`.slice(0, 191), organizationId, conversationId: conv.id, role: l.role, content: l.content, metadata: { callId: call.id, provider: 'sarvam', via: 'dashboard' } })) });
+    log.info('business_assistant.live_saved', { organizationId, callId: call.id, lines: lines.length, durationSec });
+    return { saved: true, callId: call.id };
+  }
+
+  fetchImpl: (url: string, init?: RequestInit) => Promise<Response> = (url, init) => fetch(url, init);
 
   // Speech for the business assistant (signed-in staff; not the public per-visitor allowance).
   @Post('stt')

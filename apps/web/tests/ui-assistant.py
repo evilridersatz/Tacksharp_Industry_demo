@@ -236,7 +236,7 @@ with sync_playwright() as p:
     ctx = b.new_context(viewport={'width': 1440, 'height': 900}); pg = ctx.new_page()
     pg.goto(WEB + '/login'); pg.get_by_label('Email').fill('owner@tacksharp.test'); pg.get_by_label('Password', exact=True).fill('correct-horse-battery')
     pg.get_by_role('button', name='Log in').click(); pg.wait_for_timeout(3000)
-    check('dashboard: the assistant button is present for signed-in users', pg.get_by_role('button', name=re.compile('Open the AI assistant')).is_visible())
+    check('dashboard: Ask Tara button present for signed-in users', pg.get_by_role('button', name=re.compile('Chat or talk with Tara')).is_visible())
     ctx.close()
     b.close()
 
