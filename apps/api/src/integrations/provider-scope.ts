@@ -68,6 +68,9 @@ export function environmentCredentials(provider: Provider): ResolvedCredentials 
         { orgId: process.env.SARVAM_AGENTS_ORG_ID ?? '', workspaceId: process.env.SARVAM_AGENTS_WORKSPACE_ID ?? '', connectionId: process.env.SARVAM_AGENTS_CONNECTION_ID ?? '', agentPhoneNumber: process.env.SARVAM_AGENTS_PHONE_NUMBER ?? '' },
         ['apiKey', 'orgId', 'workspaceId', 'connectionId', 'agentPhoneNumber'],
       );
+    case 'meta_capi':
+      // Per organization only: conversions are reported to that business's own ad account, never a shared one.
+      return { source: 'none', secrets: {}, config: {}, reason: 'Configured per organization only' };
   }
 }
 

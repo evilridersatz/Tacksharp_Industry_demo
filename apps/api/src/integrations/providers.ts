@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
  * Provider definitions: which fields are SECRET (encrypted, never returned) and which are plain configuration
  * (returned as-is), with validation. The backend decides what is allowed; the browser only renders it.
  */
-export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony'] as const;
+export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony', 'meta_capi'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
@@ -18,6 +18,9 @@ export const SARVAM_TTS_MODELS = ['bulbul:v3', 'bulbul:v2'] as const;
 export const SARVAM_LANGUAGES = ['ta-IN', 'en-IN', 'hi-IN', 'te-IN', 'kn-IN', 'ml-IN', 'unknown'] as const;
 export const SARVAM_SPEAKERS = ['roopa', 'anushka', 'manisha', 'vidya', 'arya', 'abhilash', 'karun', 'hitesh'] as const;
 export const SARVAM_STT_MODES = ['codemix', 'transcribe', 'translit'] as const;
+
+/** Which conversions are reported to Meta (Conversions API). */
+export const CAPI_EVENT_SETS = ['purchase_and_lead', 'purchase', 'lead'] as const;
 
 export type FieldDef = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: readonly string[] };
 
@@ -48,6 +51,12 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
     { key: 'phoneNumberId', label: 'Phone number ID', secret: false, required: true },
     { key: 'businessAccountId', label: 'WhatsApp Business Account ID', secret: false, required: true, help: 'Needed to read template status.' },
   ],
+  meta_capi: [
+    { key: 'accessToken', label: 'Conversions API access token', secret: true, required: true, help: 'Events Manager → your dataset (pixel) → Settings → Conversions API → Generate access token.' },
+    { key: 'pixelId', label: 'Dataset (pixel) ID', secret: false, required: true, help: 'Events Manager → Data sources → the dataset ID (digits).' },
+    { key: 'events', label: 'Events to send', secret: false, required: true, options: CAPI_EVENT_SETS, help: 'Purchase = a completed order; Lead = a new enquiry.' },
+    { key: 'testEventCode', label: 'Test event code', secret: false, required: false, help: 'From Events Manager → Test events. While set, events appear only under Test events and are not used for ads. Clear it to go live.' },
+  ],
 };
 
 export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
@@ -55,6 +64,7 @@ export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
   openai: { model: 'gpt-5.4-mini' },
   whatsapp: {},
   sarvam_telephony: {},
+  meta_capi: { events: 'purchase_and_lead' },
 };
 
 const digits = (v: string) => v.replace(/[\s()+-]/g, '');
@@ -87,6 +97,8 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
         if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }
       }
       if (provider === 'sarvam_telephony' && ['orgId', 'workspaceId', 'connectionId'].includes(f.key) && v && !/^[\w-]{2,100}$/.test(v)) { errors[f.key] = 'Letters, digits, - and _ only (copy it from Sarvam).'; continue; }
+      if (provider === 'meta_capi' && f.key === 'pixelId' && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy the dataset ID from Events Manager).'; continue; }
+      if (provider === 'meta_capi' && f.key === 'testEventCode' && v && !/^[A-Za-z0-9]{4,40}$/.test(v)) { errors[f.key] = 'Letters and digits only (copy it from Test events).'; continue; }
       if (provider === 'whatsapp' && (f.key === 'phoneNumberId' || f.key === 'businessAccountId') && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy it from WhatsApp Manager).'; continue; }
       config[f.key] = v;
     }

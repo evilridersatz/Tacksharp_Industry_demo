@@ -178,3 +178,42 @@ export async function sarvamOutboundCall(
 }
 
 const plus = (n: string) => (n.startsWith('+') ? n : `+${n}`);
+
+// ------------------------------------------------------------------------------------------------ Meta Conversions API
+/**
+ * Documented Graph API endpoints (developers.facebook.com/docs/marketing-api/conversions-api):
+ *   GET  https://graph.facebook.com/{version}/{pixel-id}?fields=id,name        (read the dataset: proves token + id)
+ *   POST https://graph.facebook.com/{version}/{pixel-id}/events               body { data: [...], test_event_code?, access_token }
+ *        200 -> { events_received, messages, fbtrace_id }
+ * The token is sent in the Authorization header / request body, never in the URL. Meta drops duplicates by
+ * (event_name, event_id), so re-sending after a timeout is safe.
+ */
+const GRAPH = () => `https://graph.facebook.com/${process.env.WHATSAPP_API_VERSION ?? 'v23.0'}`;
+
+export async function metaPixel(fetchImpl: FetchLike, accessToken: string, pixelId: string): Promise<ProviderResult> {
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(pixelId)}?fields=id,name`, { headers: { Authorization: `Bearer ${accessToken}` } }, [accessToken]);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { id?: string; name?: string };
+    if (j.id !== pixelId) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered, but not with this dataset.' };
+    return { ok: true, latencyMs: r.ms, message: `Dataset "${j.name ?? j.id}" is readable with this token.` };
+  }
+  return fail(r, 'Reading the dataset', 'Check the dataset ID and that the token was generated for this dataset.');
+}
+
+export async function metaCapiSend(
+  fetchImpl: FetchLike,
+  accessToken: string,
+  pixelId: string,
+  data: Array<Record<string, unknown>>,
+  testEventCode?: string,
+): Promise<ProviderResult & { eventsReceived?: number; fbtraceId?: string; retryable?: boolean }> {
+  const body = { data, ...(testEventCode ? { test_event_code: testEventCode } : {}), access_token: accessToken };
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(pixelId)}/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, [accessToken], false);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { events_received?: number; fbtrace_id?: string };
+    if (typeof j.events_received !== 'number') return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered without events_received.', retryable: true };
+    return { ok: true, latencyMs: r.ms, eventsReceived: j.events_received, fbtraceId: j.fbtrace_id, message: `Meta received ${j.events_received} event(s)${testEventCode ? ' under Test events' : ''}.`, units: data.length, unitType: 'events' };
+  }
+  const res = fail(r, 'Sending conversions');
+  return { ...res, retryable: r.status === 0 || r.status === 429 || r.status >= 500 };
+}

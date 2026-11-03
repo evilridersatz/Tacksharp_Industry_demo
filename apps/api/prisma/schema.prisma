@@ -2595,3 +2595,37 @@ model DripStepRun {
   @@unique([enrollmentId, stepIndex])
   @@index([organizationId, createdAt])
 }
+
+/// Meta Conversions API outbox: Purchase (completed order) and Lead (new enquiry) events per organization. event_id is
+/// unique per organization (Meta also de-duplicates on it). Customer data is hashed at send time and never stored here.
+model MetaCapiEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  eventId        String
+  /// Purchase | Lead
+  eventName      String    @db.VarChar(40)
+  /// order | sales_order | lead
+  sourceType     String    @db.VarChar(30)
+  sourceId       String
+  customerId     String
+  eventTime      DateTime
+  actionSource   String    @db.VarChar(30)
+  value          Decimal?  @db.Decimal(14, 2)
+  currency       String?   @db.VarChar(3)
+  orderRef       String?
+  /// queued | sent | simulated | failed | skipped
+  status         String    @default("queued") @db.VarChar(20)
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime?
+  lastError      String?   @db.VarChar(500)
+  fbtraceId      String?
+  /// Sent with the test event code: shown under Test events only, not used for ads.
+  testEvent      Boolean   @default(false)
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, eventId])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, createdAt])
+}

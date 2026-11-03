@@ -10,6 +10,7 @@ import { VaultUnavailableError } from './vault.js';
 import { DEFAULT_CONFIG, FIELDS, PROVIDERS, priceFromEnv, validateSave, type Provider } from './providers.js';
 import * as clients from './provider-clients.js';
 import type { FetchLike, ProviderResult } from './provider-clients.js';
+import { testEvent } from '../meta-capi/capi-payload.js';
 
 type Actor = { sub: string; org: string };
 const who = (a: Actor) => `user:${a.sub}`;
@@ -22,6 +23,8 @@ export const OPERATIONS: Record<Provider, string[]> = {
   // Sarvam documents no read-only credential check for Voice Agents, so the only proof is a real test call to an
   // approved test number (DRY_RUN off). It costs a call; it is never automatic.
   sarvam_telephony: ['call'],
+  // connection = read the dataset with the token (no event sent); test_event = one event under Test events only.
+  meta_capi: ['connection', 'test_event'],
 };
 
 const SAMPLE_TEXT: Record<string, string> = {
@@ -229,6 +232,15 @@ export class IntegrationsService {
         result = t.ok
           ? { ...n, latencyMs: n.latencyMs + t.latencyMs, message: `${n.message} ${t.message}`, templates: t.templates }
           : { ...t, latencyMs: n.latencyMs + t.latencyMs, message: `The number works, but templates could not be read: ${t.message}` };
+        break;
+      }
+      case 'meta_capi:connection':
+        result = await clients.metaPixel(this.fetchImpl, secrets.accessToken, cfg.pixelId);
+        break;
+      case 'meta_capi:test_event': {
+        if (!cfg.testEventCode) throw new BadRequestException('Set a test event code first (Events Manager → Test events), so the test never counts as a real conversion.');
+        if (process.env.DRY_RUN !== 'false') { result = { ok: false, latencyMs: 0, errorCode: 'dry_run', message: 'DRY_RUN is on: no request was sent to Meta.' }; break; }
+        result = await clients.metaCapiSend(this.fetchImpl, secrets.accessToken, cfg.pixelId, [testEvent()], cfg.testEventCode);
         break;
       }
       case 'sarvam_telephony:call':

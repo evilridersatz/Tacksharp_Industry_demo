@@ -9,7 +9,7 @@ import { Badge, Button, Card, CardHeader, ErrorBanner, Skeleton, cx } from './ui
 import { Dialog, inputCls } from './textile';
 import { toast } from './toast';
 
-export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony';
+export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony' | 'meta_capi';
 type Field = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: string[] };
 type Usage = {
   days: number; total: number; failed: number; costEstimate: number | null; costNote: string;
@@ -41,6 +41,7 @@ export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrati
   sarvam: { name: 'Sarvam AI', group: 'AI providers', href: '/settings/ai-providers/sarvam', blurb: 'Speech recognition and Tamil / English voices for calls.' },
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
   sarvam_telephony: { name: 'Sarvam Voice Agents (telephony)', group: 'Integrations', href: '/settings/integrations/sarvam-telephony', blurb: 'Calls answered by an agent hosted on Sarvam: outbound calls and post-call results.' },
+  meta_capi: { name: 'Meta Conversions API', group: 'Integrations', href: '/settings/integrations/meta-capi', blurb: 'Report completed orders and new enquiries to your Meta ads dataset (hashed customer data only).' },
 };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
@@ -267,6 +268,7 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
         </Card>
 
         {provider === 'sarvam_telephony' && <SarvamTestCall data={data} canManage={canManage} busy={busy} test={test} />}
+        {provider === 'meta_capi' && <CapiPanel data={data} canManage={canManage} busy={busy} test={test} />}
         <UsageCard usage={data.usage} />
       </div>
 
@@ -478,5 +480,65 @@ export function ProviderList({ group }: { group: 'Integrations' | 'AI providers'
       </div>
       <p className="text-[12px] text-muted">Sending mode on this server: {data.deployment.mode.dryRun ? 'test mode (nothing is sent, no call is placed)' : `live (${data.deployment.mode.liveTestRecipients} approved test number(s))`}.</p>
     </div>
+  );
+}
+
+type CapiEvent = { id: string; eventName: string; sourceType: string; customerId: string; orderRef: string | null; value: string | null; currency: string | null; actionSource: string; eventTime: string; status: string; attempts: number; lastError: string | null; testEvent: boolean; sentAt: string | null };
+const CAPI_TONE: Record<string, string> = { sent: 'bg-emerald-50 text-emerald-800', simulated: 'bg-amber-50 text-amber-900', queued: 'bg-sky-50 text-sky-800', sending: 'bg-sky-50 text-sky-800', skipped: 'bg-slate-100 text-muted', failed: 'bg-rose-50 text-rose-700' };
+
+/** Meta Conversions API: test event (Test events only) and the log of conversions recorded / sent. */
+function CapiPanel({ data, canManage, busy, test }: { data: Integration; canManage: boolean; busy: string | null; test: (op: string, body?: Record<string, unknown>) => Promise<void> }) {
+  const log = useApi<{ items: CapiEvent[]; counts: Record<string, number> }>('/meta-capi/events', 30_000);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [shown, setShown] = useState(20);
+  const retry = async (id: string) => {
+    setRetrying(id);
+    try {
+      await api.post(`/meta-capi/events/${id}/retry`, {});
+      toast('Queued again. It is sent within a minute.');
+      await log.reload();
+    } catch (e) {
+      toast(errText(e), 'error');
+    } finally {
+      setRetrying(null);
+    }
+  };
+  return (
+    <Card data-testid="capi-panel">
+      <CardHeader title="Conversions sent to Meta" subtitle="Purchase = an order completed (collected / delivered). Lead = a new enquiry. Recorded every minute for the last 7 days; each is sent once." />
+      <div className="px-5 pb-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button busy={busy === 'test-test_event'} disabled={!canManage || data.status !== 'ok' || !data.config.testEventCode} title={!data.config.testEventCode ? 'Set a test event code first' : undefined} onClick={() => void test('test_event')}>
+          <Play className="size-4" /> Send test event
+        </Button>
+        <span className="text-[12px] text-muted">{data.config.testEventCode ? 'While a test event code is set, every event shows only under Test events in Events Manager (not used for ads).' : 'No test event code: events count as real conversions.'}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5" data-testid="capi-counts">
+        {Object.entries(log.data?.counts ?? {}).filter(([, v]) => v > 0).map(([k, v]) => <span key={k} className={cx('rounded-full px-2 py-0.5 text-[11.5px] font-semibold', CAPI_TONE[k])}>{v} {k}</span>)}
+      </div>
+      {log.error && <ErrorBanner message={log.error} onRetry={log.reload} />}
+      {log.data && log.data.items.length === 0 && <p className="mt-3 text-[13px] text-muted">Nothing recorded yet. Events appear here once the integration is enabled and an order is completed or an enquiry arrives.</p>}
+      {log.data && log.data.items.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-[12.5px]" data-testid="capi-events">
+            <thead className="text-muted"><tr><th className="py-1.5 pr-3">Event</th><th className="pr-3">Reference</th><th className="pr-3">Value</th><th className="pr-3">When</th><th className="pr-3">Status</th><th /></tr></thead>
+            <tbody>
+              {log.data.items.slice(0, shown).map((e) => (
+                <tr key={e.id} className="border-t border-line align-top" data-testid="capi-event">
+                  <td className="py-2 pr-3 font-semibold text-ink">{e.eventName}<div className="font-normal text-faint">{e.actionSource.replace('_', ' ')}</div></td>
+                  <td className="pr-3">{e.orderRef ?? e.sourceType}</td>
+                  <td className="pr-3">{e.value ? `${e.currency === 'INR' ? '₹' : `${e.currency} `}${e.value}` : '—'}</td>
+                  <td className="pr-3">{when(e.eventTime)}</td>
+                  <td className="pr-3"><span className={cx('rounded-full px-2 py-0.5 text-[11px] font-semibold', CAPI_TONE[e.status])}>{e.status}{e.testEvent ? ' (test)' : ''}</span>{e.lastError && <div className="mt-0.5 max-w-[320px] text-muted">{e.lastError}</div>}</td>
+                  <td>{canManage && ['failed', 'skipped'].includes(e.status) && <Button variant="ghost" busy={retrying === e.id} onClick={() => void retry(e.id)}>Retry</Button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {log.data.items.length > shown && <Button variant="ghost" className="mt-2" onClick={() => setShown((n) => n + 40)}>Show more ({log.data.items.length - shown} more of the latest 200)</Button>}
+        </div>
+      )}
+      </div>
+    </Card>
   );
 }

@@ -83,12 +83,19 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 `SARVAM_AGENTS_WORKSPACE_ID`, `SARVAM_AGENTS_CONNECTION_ID`, `SARVAM_AGENTS_PHONE_NUMBER`. `PLIVO_*` can be deleted
 (ignored; startup warns while they are present). Keep `DRY_RUN=true` until the live call test.
 
-**Migrations (database change: backup + written approval first, DEPLOY.md step 2):** from `531e3d4` two are pending,
-both additive (no drop, rename or rewrite):
+**Migrations (database change: backup first, DEPLOY.md step 2).** Approved by the owner on 2026-11-03 for production
+(all five, after a verified backup). From `531e3d4` five are pending, all additive (no drop, rename or rewrite):
 - `20261029000000_enterprise_platform`: `IntegrationCredential`, `IntegrationEvent`, defaulted `Organization` / `User` columns;
 - `20261030000000_voice_agents`: knowledge bases/documents/chunks, `VoiceAgent`, `TelephonyCallRequest`, `TelephonyWebhookEvent`, nullable `Call.agentId`, and `Call.provider` (existing rows read `plivo`, which is true for them).
+- `20261103000000_team_inbox`: `Conversation` inbox columns (status, priority, assignee, labels, AI on/off, hand-off
+  reason/time, last customer message; defaults keep today's behaviour), `ConversationNote`, `SavedReply`;
+- `20261103100000_crm`: nullable `Customer.attributes` / `stage` / `followUpAt` + indexes, `CustomerNote`;
+- `20261103200000_drip`: `DripSequence`, `DripEnrollment`, `DripStepRun` (new tables only);
+- `20261103300000_meta_capi`: `MetaCapiEvent` (new table only). **Awaiting the owner's approval** (added after the
+  2026-11-03 approval of the five above).
 
-This release adds **no** migration. Historical Plivo calls, credentials and number mappings stay in the database.
+Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
+created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.
 
 ```bash
 npx prisma migrate status && npx prisma migrate deploy && npx prisma migrate status

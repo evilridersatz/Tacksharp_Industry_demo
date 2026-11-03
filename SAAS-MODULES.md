@@ -1,4 +1,4 @@
-# Essential SaaS modules (P2): team inbox, CRM, Campaign Studio, drip automation
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API (P3)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,9 +10,10 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`.
 
 ## Team inbox and human hand-over
 
@@ -74,14 +75,42 @@ Sarvam agent through `placeSystemCall`, so every telephony gate applies).
   consent, live path with retry limit / ambiguous / interrupted, concurrency, re-timing) and `tests/ui-drips.py` (17:
   the real worker runs Day 0 within a minute).
 
+## Meta Conversions API (P3)
+
+Reports conversions to the business's **own** Meta dataset (pixel): there is no shared account and no environment
+fallback.
+
+- Setup (Settings → Integrations): access token (encrypted, never shown again), dataset ID, which events (Purchase and
+  Lead / Purchase / Lead), optional test event code. **Test connection** reads the dataset (`GET /{pixel-id}?fields=id,name`)
+  and sends no event; the integration can be enabled only after it passes. **Send test event** needs a test event code
+  (the event shows only under Test events, never used for ads) and is refused while `DRY_RUN` is on.
+- Events: **Purchase** when an order is completed (restaurant / food) or a sales order is delivered (textile / retail),
+  with value, INR and the order number; **Lead** for each new enquiry. Recorded every minute from the last 7 days,
+  newest first; `event_id` = `order:<id>` / `sales_order:<id>` / `lead:<id>` is unique per organization, and Meta also
+  de-duplicates on it.
+- Privacy: only SHA-256 hashes leave the server (phone normalised with country code, lower-cased email, customer id,
+  country). Names, raw numbers and emails are never sent or stored in the outbox. Opted-out, do-not-contact and demo
+  customers are never reported (re-checked at send time). The token goes in the request body / Authorization header,
+  never in a URL.
+- Delivery: batches of 100 to `POST /{pixel-id}/events`. `DRY_RUN` → "simulated", nothing sent. Network / 429 / 5xx
+  retry after 5 / 15 / 60 minutes then "failed"; a rejected request is "failed" with Meta's message; events older than
+  7 days are "skipped". Failed / skipped events can be retried from the log. Rows are claimed before sending
+  (multi-instance safe); a row stuck after a crash is re-queued (safe because of Meta's de-duplication).
+- API: `GET /meta-capi/events`, `POST /meta-capi/events/:id/retry`; credentials through `/integrations/meta_capi`.
+- Tests: `test/meta-capi.integration.spec.ts` (6: setup and tests, collect / idempotency / skips, DRY_RUN, live request
+  shape with hashes only, retries / rejection / opt-out / stale / manual retry, concurrency and event set, isolation)
+  and `tests/ui-capi.py` (15, real worker; the passing connection test is seeded because Meta is unreachable here).
+- **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
+  only, set the test event code, press Send test event, and check Events Manager → Test events.
+
 ## Not done (pending)
 
-P3: Visual Workflow Studio, Instagram / Messenger, Meta Conversions API, live AI steering, advanced analytics, more
+P3: Visual Workflow Studio, Instagram / Messenger, live AI steering, advanced analytics, more
 integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production
 
-Apply the three migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
+Apply the four migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
 add columns and tables. Drip sends nothing until a sequence is created, activated and customers are enrolled.
