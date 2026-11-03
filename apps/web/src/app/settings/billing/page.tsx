@@ -33,7 +33,7 @@ export default function PlanAndBilling() {
           </Card>
           <Card className="overflow-hidden">
             <CardHeader title="Invoices from Tacksharp" />
-            <InvoiceTable invoices={b.invoices} />
+            <InvoiceTable invoices={b.invoices} viewHref={(i) => `/settings/billing/invoices/${i.id}`} />
           </Card>
         </div>
       )}

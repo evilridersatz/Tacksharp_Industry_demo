@@ -2861,6 +2861,11 @@ model PlatformInvoice {
   paidAt           DateTime?
   paymentReference String?      @db.VarChar(120)
   voidReason       String?      @db.VarChar(300)
+  /// Razorpay payment link (Tacksharp's own account); paid only by a signed, matching webhook.
+  paymentLinkId     String?      @unique @db.VarChar(64)
+  paymentLinkUrl    String?      @db.VarChar(300)
+  /// created | paid | partially_paid | expired | cancelled
+  paymentLinkStatus String?      @db.VarChar(20)
   createdBy        String?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
@@ -2869,4 +2874,16 @@ model PlatformInvoice {
   @@unique([subscriptionId, periodStart])
   @@index([organizationId, issuedAt])
   @@index([status, dueAt])
+}
+
+/// A payment-provider webhook event already applied (idempotency by the provider's event id).
+model PaymentWebhookEvent {
+  id         String   @id @default(cuid())
+  provider   String   @db.VarChar(20)
+  eventId    String   @db.VarChar(100)
+  event      String   @db.VarChar(60)
+  outcome    String   @db.VarChar(200)
+  receivedAt DateTime @default(now())
+
+  @@unique([provider, eventId])
 }

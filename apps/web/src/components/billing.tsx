@@ -14,6 +14,7 @@ export type Sub = {
 export type Invoice = {
   id: string; number: string; description: string; periodStart: string; periodEnd: string; subtotal: number; taxRatePct: number; tax: number; total: number; status: string;
   issuedAt: string; dueAt: string; paidAt: string | null; paymentReference: string | null; voidReason: string | null; overdue: boolean;
+  paymentLinkStatus: string | null; payUrl: string | null;
 };
 export type Summary = { subscription: Sub | null; limits: Limits | null; usage: Record<keyof Limits, number>; invoices: Invoice[]; note: string };
 type OrgBilling = Summary & { organization: { id: string; name: string }; plans: Array<{ code: string; name: string; limits: Limits }>; contracts: Array<{ id: string; name: string }> };
@@ -45,7 +46,7 @@ export function UsageBars({ limits, usage }: { limits: Limits | null; usage: Sum
   );
 }
 
-export function InvoiceTable({ invoices, actions }: { invoices: Invoice[]; actions?: (i: Invoice) => React.ReactNode }) {
+export function InvoiceTable({ invoices, actions, viewHref }: { invoices: Invoice[]; actions?: (i: Invoice) => React.ReactNode; viewHref: (i: Invoice) => string }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[13px]" aria-label="Invoices">
@@ -53,10 +54,10 @@ export function InvoiceTable({ invoices, actions }: { invoices: Invoice[]; actio
         <tbody>
           {invoices.map((i) => (
             <tr key={i.id} data-testid="invoice-row" className="border-t border-line align-top">
-              <td className="px-4 py-2.5"><p className="font-semibold text-ink">{i.number}</p><p className="text-[12px] text-muted">Issued {day(i.issuedAt)} · due {day(i.dueAt)}</p></td>
+              <td className="px-4 py-2.5"><a className="font-semibold text-ink underline-offset-2 hover:underline" href={viewHref(i)} aria-label={`View invoice ${i.number}`}>{i.number}</a><p className="text-[12px] text-muted">Issued {day(i.issuedAt)} · due {day(i.dueAt)}</p></td>
               <td className="px-4 py-2.5">{day(i.periodStart)} – {day(i.periodEnd)}</td>
               <td className="px-4 py-2.5 text-right tabular"><p className="font-semibold">{inr(i.total)}</p><p className="text-[12px] text-muted">{inr(i.subtotal)} + {i.taxRatePct}% GST {inr(i.tax)}</p></td>
-              <td className="px-4 py-2.5"><StatusBadge status={i.status} overdue={i.overdue} />{i.status === 'paid' && <p className="mt-1 text-[12px] text-muted">{day(i.paidAt)} · ref {i.paymentReference}</p>}{i.status === 'void' && <p className="mt-1 text-[12px] text-muted">{i.voidReason}</p>}</td>
+              <td className="px-4 py-2.5"><StatusBadge status={i.status} overdue={i.overdue} />{i.status === 'paid' && <p className="mt-1 text-[12px] text-muted">{day(i.paidAt)} · ref {i.paymentReference}</p>}{i.status === 'void' && <p className="mt-1 text-[12px] text-muted">{i.voidReason}</p>}{i.payUrl && <p className="mt-1"><a className="text-[12.5px] font-semibold text-brand underline" href={i.payUrl} target="_blank" rel="noreferrer">Pay online</a></p>}{i.paymentLinkStatus && i.paymentLinkStatus !== 'created' && i.status === 'issued' && <p className="mt-1 text-[12px] text-muted">Payment link {i.paymentLinkStatus.replace('_', ' ')}</p>}</td>
               {actions && <td className="px-4 py-2.5"><span className="flex justify-end gap-1.5">{actions(i)}</span></td>}
             </tr>
           ))}
@@ -141,7 +142,7 @@ export function SubscriptionAdmin({ orgId }: { orgId: string }) {
             <Button busy={busy === 'renew'} onClick={() => void run('renew', () => api.post(`${path}/renew`), 'Renewed: the period moved forward.')}>Renew period</Button>
             <span className="text-[12px] text-muted">Usage: {(Object.keys(RESOURCE_LABEL) as Array<keyof Limits>).map((k) => `${RESOURCE_LABEL[k].toLowerCase()} ${b.usage[k]}/${b.limits?.[k] ?? '∞'}`).join(' · ')}</span>
           </div>
-          <InvoiceTable invoices={b.invoices} actions={(i) => i.status === 'issued' ? (<><Button onClick={() => { setPay(i); setText(''); }}>Mark paid</Button><Button variant="danger" onClick={() => { setVoiding(i); setText(''); }}>Void</Button></>) : null} />
+          <InvoiceTable invoices={b.invoices} viewHref={(i) => `/platform/billing/invoices/${i.id}`} actions={(i) => i.status === 'issued' ? (<>{i.paymentLinkStatus !== 'created' && <Button busy={busy === `link-${i.id}`} onClick={() => void run(`link-${i.id}`, () => api.post(`/platform/billing/invoices/${i.id}/payment-link`), 'Payment link created: share it with the customer.')}>Payment link</Button>}{i.payUrl && <Button onClick={() => navigator.clipboard.writeText(i.payUrl!).then(() => toast('Payment link copied.'), () => toast(i.payUrl!, 'error'))}>Copy link</Button>}<Button onClick={() => { setPay(i); setText(''); }}>Mark paid</Button><Button variant="danger" onClick={() => { setVoiding(i); setText(''); }}>Void</Button></>) : null} />
         </>
       )}
       <Dialog open={pay !== null} onClose={() => setPay(null)} title={`Record payment for ${pay?.number ?? ''}`}>

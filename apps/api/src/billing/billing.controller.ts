@@ -3,6 +3,7 @@ import { CurrentUser } from '../auth/decorators.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
 import { BillingService } from './billing.service.js';
+import { PaymentsService } from './payments.service.js';
 
 /** The organization's own plan, usage and invoices (read-only). Organization from the session. */
 @Controller('billing')
@@ -14,12 +15,21 @@ export class BillingController {
     requirePermission(u, PERMISSIONS.integrationsView);
     return this.svc.summary(u.org);
   }
+
+  @Get('invoices/:id')
+  invoice(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.integrationsView);
+    return this.svc.invoiceDocument(u.org, id);
+  }
 }
 
 /** Tacksharp staff only (User.isPlatformAdmin re-checked in the database on every call). */
 @Controller('platform/billing')
 export class PlatformBillingController {
-  constructor(private readonly svc: BillingService) {}
+  constructor(
+    private readonly svc: BillingService,
+    private readonly payments: PaymentsService,
+  ) {}
 
   private async admin(u: SessionClaims) {
     await this.svc.requireAdmin(u.sub);
@@ -64,6 +74,23 @@ export class PlatformBillingController {
   @HttpCode(200)
   async void(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Body() body: { reason?: unknown }) {
     return this.svc.voidInvoice(await this.admin(u), id, body ?? {});
+  }
+
+  @Get('invoices/:id')
+  async invoice(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    await this.admin(u);
+    return this.svc.invoiceDocument(null, id);
+  }
+
+  @Get('payments')
+  async paymentsStatus(@CurrentUser() u: SessionClaims) {
+    await this.admin(u);
+    return this.payments.status();
+  }
+
+  @Post('invoices/:id/payment-link')
+  async paymentLink(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    return this.payments.createLink(await this.admin(u), id);
   }
 
   @Post('contracts')

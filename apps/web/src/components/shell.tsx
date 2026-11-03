@@ -425,10 +425,10 @@ function Shell({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen lg:pl-[256px]" style={def ? ({ '--industry-accent': def.accent, '--industry-soft': def.accentSoft } as React.CSSProperties) : undefined}>
-      <aside className="fixed inset-y-0 left-0 hidden w-[256px] overflow-y-auto bg-sidebar lg:block">{sidebar()}</aside>
+    <div className="min-h-screen lg:pl-[256px] print:pl-0" style={def ? ({ '--industry-accent': def.accent, '--industry-soft': def.accentSoft } as React.CSSProperties) : undefined}>
+      <aside className="fixed inset-y-0 left-0 hidden w-[256px] overflow-y-auto bg-sidebar lg:block print:hidden">{sidebar()}</aside>
 
-      <div className="sticky top-0 z-40 flex h-14 items-center gap-2 bg-sidebar px-2 lg:hidden">
+      <div className="sticky top-0 z-40 flex h-14 items-center gap-2 bg-sidebar px-2 lg:hidden print:hidden">
         <button aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)} className="grid size-11 place-items-center text-white">
           <Menu className="size-5" />
         </button>

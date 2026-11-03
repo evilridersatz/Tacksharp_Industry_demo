@@ -78,3 +78,8 @@ body {
   transform-origin: center;
   animation: tara-blink 4.2s infinite;
 }
+
+/* Printing (invoices): plain white paper, no app chrome. */
+@media print {
+  body { background: #fff !important; }
+}

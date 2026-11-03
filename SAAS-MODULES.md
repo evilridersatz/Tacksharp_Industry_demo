@@ -309,12 +309,33 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
   An overdue unpaid invoice puts the subscription in past_due; paying or voiding it returns it to active. All audited.
 - Organization: **Plan & billing** (`/settings/billing`, read-only): plan, period, price, usage bars per resource,
   invoices from Tacksharp.
-- **No payment gateway is connected.** Nothing is ever charged or marked paid automatically; invoices are records
-  (no PDF / e-invoice IRN yet).
-- Migration `20261103900000_subscriptions` (new tables only; approved 2026-11-03).
-- Tests: `src/billing/plans.spec.ts` (4), `test/billing.integration.spec.ts` (6), `tests/ui-billing.py` (23).
-- **Pending:** payment gateway (Razorpay) and automatic dunning, invoice PDF / GST e-invoicing, usage-based (metered)
-  pricing for calls and messages, self-service plan change.
+- **Online payment (Razorpay Payment Links, Tacksharp's own account):** staff press "Payment link" on an issued invoice
+  (`POST /platform/billing/invoices/:id/payment-link`): `POST https://api.razorpay.com/v1/payment_links` with basic auth
+  from `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` (server environment only, never a tenant's), amount in paise, a unique
+  `reference_id` (`<invoice number>-<suffix>`, ≤ 40 characters), no partial payment, no Razorpay SMS / email (staff
+  share the link; the organization also sees "Pay online"). Refused without keys, without `RAZORPAY_WEBHOOK_SECRET`, and
+  in `DRY_RUN`. One open link per invoice; voiding is refused while a link is open (cancel it in Razorpay first).
+- Webhook `POST /webhooks/razorpay` (configure it in Razorpay with the same secret; events `payment_link.paid`,
+  `payment_link.expired`, `payment_link.cancelled`, `payment_link.partially_paid`): `X-Razorpay-Signature` (hex
+  HMAC-SHA256 of the raw body) always required, every event applied once (`x-razorpay-event-id`, `PaymentWebhookEvent`).
+  An invoice is marked paid (reference `razorpay:<payment id>`, actor `razorpay`, past_due cleared) **only** when link,
+  invoice number, amount in paise and currency all match; any mismatch, or a payment on a void / already-paid invoice,
+  changes nothing and is recorded in the audit log for staff (refund / reconcile). Expired / cancelled links free the
+  invoice for a new link or a void.
+- **Printable invoice** (`/settings/billing/invoices/:id` for the organization, `/platform/billing/invoices/:id` for
+  staff; browser "Save as PDF"): buyer from the enterprise contract (name, GSTIN, address, email), seller from
+  `PLATFORM_LEGAL_NAME`, `PLATFORM_GSTIN`, `PLATFORM_ADDRESS`, `PLATFORM_BILLING_EMAIL` (never invented; shown as
+  "not configured" otherwise), GST line, total, payment reference. Labelled honestly: without seller details it is a
+  payment request, not a tax invoice; with them, "not a GST e-invoice (no IRN)".
+- **Not verified against Razorpay** from here (no network access to it): needs the keys, the webhook URL registered in
+  the Razorpay dashboard, and one test-mode payment end to end before going live.
+- Migrations `20261103900000_subscriptions` (approved 2026-11-03) and `20261104200000_invoice_payment_links`
+  (`PlatformInvoice.paymentLinkId / paymentLinkUrl / paymentLinkStatus`, `PaymentWebhookEvent`; additive; confirm
+  before applying).
+- Tests: `src/billing/plans.spec.ts` (4), `test/billing.integration.spec.ts` (6), `test/payments.integration.spec.ts`
+  (6; fake Razorpay API, real signed webhooks), `tests/ui-billing.py` (28).
+- **Not built (needs business decisions):** GST e-invoicing (IRN through an IRP / GSP account), usage-based (metered)
+  pricing for calls and messages (needs a price list), self-service plan change and automatic dunning e-mails.
 
 ## Knowledge studio (P4)
 
@@ -342,7 +363,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: more integrations. P4 subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
+P3: more integrations. P4 subscriptions: GST e-invoicing (IRN), metered pricing, self-service plan change. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production

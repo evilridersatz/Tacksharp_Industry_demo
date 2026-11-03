@@ -105,6 +105,8 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 - `20261104100000_knowledge_studio`: `KnowledgeDocument.authored` (default false), `KnowledgeGap` (new table).
   Additive; written after that approval under the owner's "finish everything" instruction. **Confirm it with the owner
   before applying.**
+- `20261104200000_invoice_payment_links`: nullable `PlatformInvoice.paymentLinkId` (unique) / `paymentLinkUrl` /
+  `paymentLinkStatus`, `PaymentWebhookEvent` (new table). Additive; **confirm with the owner before applying.**
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

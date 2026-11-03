@@ -186,6 +186,7 @@ export class BillingService {
     const i = await this.prisma.platformInvoice.findUnique({ where: { id: invoiceId } });
     if (!i) throw new NotFoundException('Invoice not found.');
     if (i.status !== 'issued') throw new BadRequestException(`Only an unpaid invoice can be voided (this one is ${i.status}).`);
+    if (i.paymentLinkStatus === 'created') throw new BadRequestException('This invoice has an open Razorpay payment link: cancel it in the Razorpay dashboard first (the customer could still pay it), then void.');
     const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
     if (reason.length < 3) throw new BadRequestException('Give the reason for voiding it.');
     await this.prisma.platformInvoice.update({ where: { id: i.id }, data: { status: 'void', voidReason: reason.slice(0, 300) } });
@@ -231,6 +232,25 @@ export class BillingService {
     }
   }
 
+  /**
+   * Everything a printable invoice needs. `org` given = the organization's own view (scoped); null = platform staff.
+   * Seller details come from configuration (PLATFORM_LEGAL_NAME, PLATFORM_GSTIN, PLATFORM_ADDRESS, PLATFORM_BILLING_EMAIL),
+   * never invented; it is labelled as not a GST e-invoice (no IRN is generated).
+   */
+  async invoiceDocument(org: string | null, invoiceId: string) {
+    const i = await this.prisma.platformInvoice.findFirst({ where: { id: invoiceId, ...(org ? { organizationId: org } : {}) }, include: { organization: { select: { id: true, name: true } } } });
+    if (!i) throw new NotFoundException('Invoice not found.');
+    const sub = i.subscriptionId ? await this.prisma.subscription.findUnique({ where: { id: i.subscriptionId }, include: { contract: true } }) : null;
+    const env = process.env;
+    const seller = { name: env.PLATFORM_LEGAL_NAME?.trim() || null, gstin: env.PLATFORM_GSTIN?.trim() || null, address: env.PLATFORM_ADDRESS?.trim() || null, email: env.PLATFORM_BILLING_EMAIL?.trim() || null };
+    return {
+      invoice: inv(i),
+      buyer: { organizationId: i.organization.id, name: sub?.contract?.name ?? i.organization.name, workspace: i.organization.name, gstin: sub?.contract?.gstin ?? null, address: sub?.contract?.billingAddress ?? null, email: sub?.contract?.billingEmail ?? null },
+      seller,
+      note: seller.name && seller.gstin ? 'This is not a GST e-invoice (no IRN). Keep it for your records.' : 'Seller details are not configured yet (PLATFORM_LEGAL_NAME, PLATFORM_GSTIN): this is a payment request, not a tax invoice.',
+    };
+  }
+
   private audit(org: string, actor: Actor, entityType: string, entityId: string, action: string, data: Record<string, unknown>) {
     return this.prisma.auditEvent.create({ data: { organizationId: org, actor: `platform:${actor.sub}`, entityType, entityId, action, data: data as Prisma.InputJsonValue } }).catch(() => undefined);
   }
@@ -250,6 +270,7 @@ function inv(i: Prisma.PlatformInvoiceGetPayload<object>) {
   return {
     id: i.id, number: i.number, description: i.description, periodStart: i.periodStart, periodEnd: i.periodEnd, subtotal: Number(i.subtotal), taxRatePct: Number(i.taxRatePct), tax: Number(i.tax), total: Number(i.total),
     status: i.status, issuedAt: i.issuedAt, dueAt: i.dueAt, paidAt: i.paidAt, paymentReference: i.paymentReference, voidReason: i.voidReason, overdue: i.status === 'issued' && i.dueAt < new Date(),
+    paymentLinkStatus: i.paymentLinkStatus, payUrl: i.status === 'issued' && i.paymentLinkStatus === 'created' ? i.paymentLinkUrl : null,
   };
 }
 
