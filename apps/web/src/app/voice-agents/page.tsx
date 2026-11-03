@@ -22,7 +22,7 @@ export type Agent = {
   escalation: { keywords: string[]; handoffMessage: string; phone: string | null } | null;
   callLimits: { maxCallSeconds: number; maxConcurrent: number; dailyLimit: number } | null;
   status: 'draft' | 'active' | 'archived'; telephonyProvider: string; sarvamAppId: string | null; sarvamAppVersion: number | null;
-  lastTestedAt: string | null; publishedAt: string | null; updatedAt: string;
+  lastTestedAt: string | null; publishedAt: string | null; updatedAt: string; requireTestsToPublish?: boolean;
 };
 type Caps = { provider: string; configured: boolean; outbound: boolean; inbound: boolean; conversation: string; instructionsSource: string; knowledgeSource: string; webhookAuth: string; realtimeAudio: string; numberProvisioning: string; pricing: string; limits: string; verifiedFrom: string[]; notes: string[] };
 type Overview = { defaultProvider: 'sarvam'; dryRun: boolean; providers: { sarvam: Caps }; systemAgentId: string | null; sarvamOrgInboundWebhook: string | null; sarvamInboundWebhooks: Array<{ agentId: string; agentName: string; url: string | null }> };

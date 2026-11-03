@@ -13,6 +13,7 @@ import { toast } from '@/components/toast';
 import { AgentConsole, type AgentReply } from '@/components/agent-console';
 import type { Agent } from '../page';
 import { explainCallReason } from '@/lib/call-reasons';
+import { TestSuite, Versions } from '@/components/agent-builder-extra';
 
 const STEPS = ['Purpose', 'Business', 'Assistant', 'Knowledge', 'Channels', 'Safety', 'Test', 'Launch'] as const;
 const INDUSTRIES: Array<[string, string]> = [['retail', 'Retail'], ['restaurant', 'Restaurant / chicken shop'], ['real_estate', 'Real estate'], ['healthcare', 'Healthcare'], ['education', 'Education'], ['automotive', 'Automotive'], ['banking', 'Banking'], ['manufacturing', 'Manufacturing / B2B'], ['hospitality', 'Hospitality'], ['general', 'General support'], ['other', 'Other']];
@@ -54,6 +55,7 @@ export default function AgentBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
   const [voiceOn, setVoiceOn] = useState(false);
+  const [note, setNote] = useState('');
   useEffect(() => { if (agent && !form) setForm(agent); }, [agent, form]);
   useEffect(() => { api.get<{ voice: boolean }>('/assistant/status').then((s) => setVoiceOn(Boolean(s.voice))).catch(() => setVoiceOn(false)); }, []);
   const set = <K extends keyof Agent>(k: K, v: Agent[K]) => setForm((f) => (f ? { ...f, [k]: v } : f));
@@ -78,7 +80,8 @@ export default function AgentBuilderPage() {
   async function lifecycle(action: 'publish' | 'archive' | 'restore') {
     setSaving(true); setProblems([]);
     try {
-      const updated = await api.post<Agent>(`/voice-agents/${id}/${action}`);
+      const updated = await api.post<Agent>(`/voice-agents/${id}/${action}`, action === 'publish' && note.trim() ? { note: note.trim() } : undefined);
+      if (action === 'publish') setNote('');
       setForm(updated); await reload(); await reloadReadiness();
       toast(action === 'publish' ? 'Published: your assistant is live on the channels you chose.' : action === 'archive' ? 'Archived.' : 'Restored as a draft.');
     } catch (e) {
@@ -258,6 +261,7 @@ export default function AgentBuilderPage() {
               <p>{dirty ? 'You have unsaved changes: they are saved when you leave this step.' : form.lastTestedAt ? <span className="inline-flex items-center gap-1 text-brand-dark"><Check className="size-3.5" />Tested after the latest changes.</span> : 'Not tested since the latest changes.'}</p>
               {form.outbound?.enabled && <TestCall agent={form} readiness={readiness} />}
             </div>
+            <div className="lg:col-span-2"><TestSuite agentId={id} canManage={canManage && !ro} onRan={() => { void reload().then(() => setForm(null)); void reloadReadiness(); }} /></div>
           </div>
         )}
 
@@ -275,9 +279,19 @@ export default function AgentBuilderPage() {
             {problems.length > 0 && <ul role="alert" className="list-disc space-y-1 rounded-[10px] bg-rose-50 py-2 pr-3 pl-7 text-[13px] text-rose-900">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {readiness?.dryRun && <p className="text-[12.5px] text-muted">Test mode is on for this server: after launch, calls are still checked but not placed until Tacksharp switches live calling on.</p>}
             {canManage && form.status !== 'archived' && (
-              <Button variant="primary" busy={saving} disabled={launchBlocking.length > 0} onClick={() => void lifecycle('publish')}><Rocket className="size-4" />{form.status === 'active' ? 'Re-publish' : 'Publish agent'}</Button>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-[13px] text-body">
+                  <input type="checkbox" checked={Boolean(form.requireTestsToPublish)} onChange={async (e) => { const on = e.target.checked; set('requireTestsToPublish', on); try { await api.patch<Agent>(`/voice-agents/${id}`, { requireTestsToPublish: on }); await reload(); toast(on ? 'Publishing now runs the saved tests and stops if one fails.' : 'Tests are no longer required to publish.'); } catch (err) { set('requireTestsToPublish', !on); toast(errMsg(err), 'error'); } }} />
+                  Require the saved test cases to pass before publishing
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input className={cx(inputCls, 'max-w-md')} aria-label="Version note" placeholder="What changed in this version (optional)" maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+                  <Button variant="primary" busy={saving} disabled={launchBlocking.length > 0} onClick={() => void lifecycle('publish')}><Rocket className="size-4" />{form.status === 'active' ? 'Re-publish' : 'Publish agent'}</Button>
+                </div>
+              </div>
             )}
             {form.status === 'active' && form.publishedAt && <p className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-dark"><Check className="size-4" />Active since {new Date(form.publishedAt).toLocaleString()}.</p>}
+            <Versions key={form.publishedAt ?? 'none'} agentId={id} canManage={canManage && !ro} onRestored={() => { void reload().then(() => setForm(null)); void reloadReadiness(); }} />
           </div>
         )}
 

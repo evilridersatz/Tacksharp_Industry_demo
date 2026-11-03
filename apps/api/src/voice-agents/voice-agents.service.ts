@@ -8,6 +8,7 @@ import { log } from '../common/logger.js';
 import type { Style } from '../assistant/knowledge.js';
 import { AgentEngine, type AgentSpec, type ChatTurn, type ModelAccess } from './agent-engine.js';
 import { validateAgent } from './agent-validation.js';
+import { MAX_CASES, diffSnapshots, evaluateTurn, snapshotOf, validateTestCase, type Snapshot, type TestTurn, type TurnResult } from './agent-tests.js';
 import { TEMPLATES, templateByKey, templatePassages, type Template } from './templates.js';
 
 type Actor = { sub: string; org: string };
@@ -101,6 +102,12 @@ export class VoiceAgentsService {
   async update(actor: Actor, id: string, body: Record<string, unknown>) {
     const existing = await this.get(actor.org, id);
     if (existing.status === 'archived') throw new ConflictException('Restore the agent before editing it.');
+    // Publish policy only (no change to what the agent says): no new test needed.
+    if (body.requireTestsToPublish !== undefined && Object.keys(body).length === 1) {
+      await this.prisma.voiceAgent.update({ where: { id }, data: { requireTestsToPublish: body.requireTestsToPublish === true } });
+      await this.audit(actor, id, 'agent.publish_policy', { requireTestsToPublish: body.requireTestsToPublish === true });
+      return this.get(actor.org, id);
+    }
     const d = validateAgent(body, false);
     if (d.knowledgeBaseId) await this.assertBase(actor.org, d.knowledgeBaseId as string);
     // Any change to what the agent says needs a new test before (re)publishing; an active agent stays active but
@@ -166,7 +173,7 @@ export class VoiceAgentsService {
    * draft -> active. Requires: a test conversation since the last edit; an attached knowledge base fully indexed;
    * a Sarvam agent id when Sarvam places the calls; an inbound number that this organization owns.
    */
-  async publish(actor: Actor, id: string) {
+  async publish(actor: Actor, id: string, body: { note?: unknown } = {}) {
     const a = await this.get(actor.org, id);
     if (a.status === 'archived') throw new ConflictException('Restore the agent first.');
     const problems: string[] = [];
@@ -185,9 +192,29 @@ export class VoiceAgentsService {
       const clash = await this.prisma.voiceAgent.findFirst({ where: { organizationId: actor.org, status: 'active', id: { not: id }, inbound: { path: '$.phoneNumber', equals: inbound.phoneNumber } } });
       if (clash) problems.push(`Another active agent (${clash.name}) already answers ${inbound.phoneNumber}.`);
     }
+    // Saved test cases as a publish gate, when the agent asks for it.
+    let testSummary: { total: number; passed: number; failed: number } | null = null;
+    if (a.requireTestsToPublish && !problems.length) {
+      const r = await this.runTests(actor, id);
+      testSummary = { total: r.total, passed: r.passed, failed: r.failed };
+      if (!r.total) problems.push('Add at least one test case: this agent requires passing tests to publish.');
+      for (const c of r.cases.filter((x) => !x.ok)) problems.push(`Test "${c.name}" failed: ${c.turns.flatMap((t) => t.checks.filter((k) => !k.ok).map((k) => k.check)).slice(0, 3).join('; ')}.`);
+    }
     if (problems.length) throw new BadRequestException({ statusCode: 400, message: 'The agent cannot be published yet.', problems });
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 300) : null;
+    // A numbered version of exactly what was published (retried once if two publishes race for the same number).
+    let version = 0;
+    for (let attempt = 0; attempt < 2 && !version; attempt++) {
+      const last = await this.prisma.agentVersion.findFirst({ where: { agentId: id }, orderBy: { version: 'desc' }, select: { version: true } });
+      try {
+        await this.prisma.agentVersion.create({ data: { organizationId: actor.org, agentId: id, version: (last?.version ?? 0) + 1, snapshot: snapshotOf(a as unknown as Record<string, unknown>) as Prisma.InputJsonValue, note, publishedBy: actor.sub, ...(testSummary ? { testSummary } : {}) } });
+        version = (last?.version ?? 0) + 1;
+      } catch (e) {
+        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
+      }
+    }
     await this.prisma.voiceAgent.update({ where: { id }, data: { status: 'active', publishedAt: new Date(), archivedAt: null } });
-    await this.audit(actor, id, 'agent.published', {});
+    await this.audit(actor, id, 'agent.published', { version, note: Boolean(note) });
     log.info('agent.published', { agentId: id });
     return this.get(actor.org, id);
   }
@@ -205,6 +232,101 @@ export class VoiceAgentsService {
     await this.prisma.voiceAgent.update({ where: { id }, data: { status: 'draft', archivedAt: null, lastTestedAt: null } });
     await this.audit(actor, id, 'agent.restored', {});
     return this.get(actor.org, id);
+  }
+
+  // ------------------------------------------------------------------------------------- versions
+  async versions(organizationId: string, id: string) {
+    await this.get(organizationId, id);
+    const rows = await this.prisma.agentVersion.findMany({ where: { agentId: id, organizationId }, orderBy: { version: 'desc' } });
+    return rows.map((v) => ({ id: v.id, version: v.version, note: v.note, publishedBy: v.publishedBy, testSummary: v.testSummary, createdAt: v.createdAt }));
+  }
+
+  /** Differences between a version and another version, or the current (possibly unpublished) configuration. */
+  async diff(organizationId: string, id: string, from: string, to: string) {
+    const a = await this.get(organizationId, id);
+    const snap = async (v: string): Promise<Snapshot> => {
+      if (v === 'current') return snapshotOf(a as unknown as Record<string, unknown>);
+      const row = await this.prisma.agentVersion.findFirst({ where: { agentId: id, organizationId, version: Number(v) } });
+      if (!row) throw new NotFoundException(`Version ${v} not found.`);
+      return row.snapshot as Snapshot;
+    };
+    return { from, to, changes: diffSnapshots(await snap(from), await snap(to)) };
+  }
+
+  /** Restores a version's configuration. Like any edit, the agent must be tested (and published) again. */
+  async rollback(actor: Actor, id: string, version: number) {
+    const a = await this.get(actor.org, id);
+    if (a.status === 'archived') throw new ConflictException('Restore the agent before editing it.');
+    const row = await this.prisma.agentVersion.findFirst({ where: { agentId: id, organizationId: actor.org, version } });
+    if (!row) throw new NotFoundException(`Version ${version} not found.`);
+    const snap = row.snapshot as Record<string, unknown>;
+    if (snap.knowledgeBaseId) await this.assertBase(actor.org, String(snap.knowledgeBaseId)).catch(() => (snap.knowledgeBaseId = null));
+    const data: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(snap)) data[k] = v === null && ['voice', 'inbound', 'outbound', 'businessHours', 'escalation', 'callLimits'].includes(k) ? Prisma.DbNull : v;
+    await this.prisma.voiceAgent.update({ where: { id }, data: { ...(data as Prisma.VoiceAgentUncheckedUpdateInput), lastTestedAt: null } });
+    await this.audit(actor, id, 'agent.rolled_back', { version });
+    return this.get(actor.org, id);
+  }
+
+  // ------------------------------------------------------------------------------------- test cases
+  async listTests(organizationId: string, id: string) {
+    await this.get(organizationId, id);
+    return this.prisma.agentTestCase.findMany({ where: { agentId: id, organizationId }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async createTest(actor: Actor, id: string, body: Record<string, unknown>) {
+    await this.get(actor.org, id);
+    if ((await this.prisma.agentTestCase.count({ where: { agentId: id } })) >= MAX_CASES) throw new BadRequestException(`At most ${MAX_CASES} test cases per agent.`);
+    const v = validateTestCase(body);
+    if (Object.keys(v.errors).length) throw new BadRequestException({ statusCode: 400, message: 'Please fix the test case.', errors: v.errors });
+    try {
+      return await this.prisma.agentTestCase.create({ data: { organizationId: actor.org, agentId: id, name: v.value.name, lang: v.value.lang, turns: v.value.turns as unknown as Prisma.InputJsonValue } });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new ConflictException({ message: 'A test with this name already exists.', errors: { name: 'Name already used' } });
+      throw e;
+    }
+  }
+
+  async updateTest(actor: Actor, id: string, testId: string, body: Record<string, unknown>) {
+    const t = await this.prisma.agentTestCase.findFirst({ where: { id: testId, agentId: id, organizationId: actor.org } });
+    if (!t) throw new NotFoundException('Test case not found.');
+    const v = validateTestCase({ name: t.name, lang: t.lang, turns: t.turns, ...body });
+    if (Object.keys(v.errors).length) throw new BadRequestException({ statusCode: 400, message: 'Please fix the test case.', errors: v.errors });
+    return this.prisma.agentTestCase.update({ where: { id: t.id }, data: { name: v.value.name, lang: v.value.lang, turns: v.value.turns as unknown as Prisma.InputJsonValue, lastResult: Prisma.DbNull, lastRunAt: null } });
+  }
+
+  async deleteTest(actor: Actor, id: string, testId: string) {
+    const r = await this.prisma.agentTestCase.deleteMany({ where: { id: testId, agentId: id, organizationId: actor.org } });
+    if (!r.count) throw new NotFoundException('Test case not found.');
+    return { ok: true };
+  }
+
+  /**
+   * Runs every saved test case through the same engine, instructions, knowledge base and model as live conversations
+   * (nothing is sent to anyone; with an AI model configured, each turn is a real model call). A full run counts as
+   * testing the agent.
+   */
+  async runTests(actor: Actor, id: string) {
+    const agent = await this.get(actor.org, id);
+    const cases = await this.prisma.agentTestCase.findMany({ where: { agentId: id, organizationId: actor.org }, orderBy: { createdAt: 'asc' } });
+    const out: Array<{ id: string; name: string; ok: boolean; turns: TurnResult[] }> = [];
+    for (const c of cases) {
+      const history: ChatTurn[] = [];
+      const turns: TurnResult[] = [];
+      for (const t of c.turns as unknown as TestTurn[]) {
+        const r = await this.converse(actor.org, agent, { message: t.message, history: [...history], lang: c.lang ?? undefined });
+        const checks = evaluateTurn(t.expect, r);
+        turns.push({ message: t.message, reply: r.reply, source: r.source, escalate: r.escalate, checks, ok: checks.every((k) => k.ok) });
+        history.push({ role: 'user', content: t.message }, { role: 'assistant', content: r.reply });
+      }
+      const ok = turns.every((t) => t.ok);
+      await this.prisma.agentTestCase.update({ where: { id: c.id }, data: { lastResult: { ok, turns } as unknown as Prisma.InputJsonValue, lastRunAt: new Date() } });
+      out.push({ id: c.id, name: c.name, ok, turns });
+    }
+    if (out.length) await this.prisma.voiceAgent.update({ where: { id }, data: { lastTestedAt: new Date() } });
+    const passed = out.filter((c) => c.ok).length;
+    await this.audit(actor, id, 'agent.tests_run', { total: out.length, passed });
+    return { total: out.length, passed, failed: out.length - passed, cases: out };
   }
 
   /** The active custom agent that answers a dialled number for this organization, if any. */

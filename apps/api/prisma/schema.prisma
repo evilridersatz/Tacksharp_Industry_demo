@@ -2384,11 +2384,15 @@ model VoiceAgent {
   lastTestedAt      DateTime?
   publishedAt       DateTime?
   archivedAt        DateTime?
+  /// When true, publishing runs the saved test cases and is refused if any fails.
+  requireTestsToPublish Boolean      @default(false)
   createdBy         String?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   knowledgeBase     KnowledgeBase? @relation(fields: [knowledgeBaseId], references: [id], onDelete: SetNull)
+  versions          AgentVersion[]
+  testCases         AgentTestCase[]
 
   @@index([organizationId, status])
 }
@@ -2721,5 +2725,41 @@ model McpAccessKey {
   revokedAt      DateTime?
   createdAt      DateTime  @default(now())
 
+  @@index([organizationId])
+}
+
+/// A published configuration of a custom agent (snapshot of what it says and how it is reached), numbered per agent.
+model AgentVersion {
+  id             String     @id @default(cuid())
+  organizationId String
+  agentId        String
+  version        Int
+  snapshot       Json
+  note           String?    @db.VarChar(300)
+  publishedBy    String?
+  /// Result of the saved test cases at publish time, when they were run.
+  testSummary    Json?
+  createdAt      DateTime   @default(now())
+  agent          VoiceAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, version])
+  @@index([organizationId])
+}
+
+/// A saved scripted conversation with expectations per customer turn (see src/voice-agents/agent-tests.ts).
+model AgentTestCase {
+  id             String     @id @default(cuid())
+  organizationId String
+  agentId        String
+  name           String     @db.VarChar(120)
+  lang           String?    @db.VarChar(10)
+  turns          Json
+  lastResult     Json?
+  lastRunAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  agent          VoiceAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, name])
   @@index([organizationId])
 }

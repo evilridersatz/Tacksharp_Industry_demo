@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics, live AI steering (P3); MCP server (P4)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics, live AI steering (P3); MCP server, advanced agent builder (P4)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,6 +10,7 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Advanced agent builder (P4) | Done | AI agents → an agent → Test (saved test cases) / Launch (versions), `apps/api/src/voice-agents/agent-tests.ts` |
 | MCP server (P4) | Done (tested with the official MCP SDK client; not yet with a hosted AI assistant) | Settings → Integrations → MCP server, `apps/api/src/mcp/` |
 | Live AI steering (P3) | Done (not for restaurant ordering) | Team inbox → Steer the AI, `apps/api/src/inbox/steering.ts` |
 | Advanced analytics (P3) | Done | Reports & analytics → Advanced analytics, `apps/api/src/analytics/` |
@@ -18,7 +19,7 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`, `20261103600000_mcp_keys`, `20261103700000_ai_steering`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`, `20261103600000_mcp_keys`, `20261103700000_ai_steering`, `20261103800000_agent_builder`.
 
 ## Team inbox and human hand-over
 
@@ -107,6 +108,34 @@ fallback.
   and `tests/ui-capi.py` (15, real worker; the passing connection test is seeded because Meta is unreachable here).
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
+
+## Advanced agent builder (P4)
+
+On top of the existing builder (templates, knowledge base, test chat, publish / archive):
+
+- **Saved test cases** (step 7, Test): scripted customer conversations, up to 8 messages and 50 cases per agent, with
+  checks per message: the reply must mention / must not mention phrases, must / must not hand over to a person, must
+  answer from the knowledge base / the AI model / the fallback / the hand-over message. **Run all** plays them through
+  the same engine, instructions, knowledge base and AI model as live conversations (nothing is sent; with a model
+  configured each message is a real model call) and shows the agent's actual reply and every check. A full run counts
+  as testing the agent; editing a test clears its old result.
+- **Tests must pass to publish** (optional, per agent): publishing runs the saved cases and is refused with the failing
+  tests named (or when there are none).
+- **Versions** (step 8, Launch): every publish saves a numbered snapshot of everything that changes what the agent says
+  or how it is reached (instructions, greeting, fallback, languages, voice, channels, knowledge base, hours,
+  escalation, limits, Sarvam agent), with an optional note and the test summary. **Compare** a version with the current
+  configuration (or another version) field by field; **Restore** puts an earlier version back as the configuration,
+  which must then be tested and published again (like any edit).
+- Found while testing: without an AI model, the knowledge fallback answers with the two best-matching sentences, so a
+  price question can also mention another item's price. That is the existing engine's behaviour; a "must not mention"
+  check now makes it visible to the business.
+- API: `GET/POST /voice-agents/:id/tests`, `PATCH/DELETE /voice-agents/:id/tests/:testId`,
+  `POST /voice-agents/:id/tests/run`, `GET /voice-agents/:id/versions`, `GET /voice-agents/:id/diff?from=&to=`,
+  `POST /voice-agents/:id/versions/:version/restore`, `POST /voice-agents/:id/publish` (`{ note? }`),
+  `PATCH /voice-agents/:id` (`{ requireTestsToPublish }`). `agents.view` to read, `agents.manage` to change.
+- Tests: `src/voice-agents/agent-tests.spec.ts` (3), `test/agent-builder.integration.spec.ts` (4, real knowledge base and
+  engine) and `tests/ui-agent-builder.py` (14, real Publish button); regression `ui-voice-agents` 36.
+- Pending: A/B testing of versions on live traffic, scheduled test runs, test cases generated from real conversations.
 
 ## MCP server (P4)
 

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, Org, Public } from '../auth/decorators.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
@@ -50,9 +50,60 @@ export class VoiceAgentsController {
 
   @Post('voice-agents/:id/publish')
   @HttpCode(200)
-  publish(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+  publish(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Body() body: { note?: unknown }) {
     requirePermission(u, PERMISSIONS.agentsManage);
-    return this.svc.publish({ sub: u.sub, org: u.org }, id);
+    return this.svc.publish({ sub: u.sub, org: u.org }, id, body ?? {});
+  }
+
+  // ---------------------------------------------------------------- advanced builder: versions and test cases
+  @Get('voice-agents/:id/versions')
+  versions(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.agentsView);
+    return this.svc.versions(u.org, id);
+  }
+
+  @Get('voice-agents/:id/diff')
+  diff(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Query('from') from: string, @Query('to') to: string) {
+    requirePermission(u, PERMISSIONS.agentsView);
+    return this.svc.diff(u.org, id, String(from ?? ''), String(to ?? 'current'));
+  }
+
+  @Post('voice-agents/:id/versions/:version/restore')
+  @HttpCode(200)
+  rollback(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Param('version') version: string) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.rollback({ sub: u.sub, org: u.org }, id, Number(version));
+  }
+
+  @Get('voice-agents/:id/tests')
+  tests(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.agentsView);
+    return this.svc.listTests(u.org, id);
+  }
+
+  @Post('voice-agents/:id/tests')
+  createTest(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.createTest({ sub: u.sub, org: u.org }, id, body ?? {});
+  }
+
+  @Patch('voice-agents/:id/tests/:testId')
+  updateTest(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Param('testId') testId: string, @Body() body: Record<string, unknown>) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.updateTest({ sub: u.sub, org: u.org }, id, testId, body ?? {});
+  }
+
+  @Delete('voice-agents/:id/tests/:testId')
+  deleteTest(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Param('testId') testId: string) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.deleteTest({ sub: u.sub, org: u.org }, id, testId);
+  }
+
+  @Post('voice-agents/:id/tests/run')
+  @HttpCode(200)
+  runTests(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
+    requirePermission(u, PERMISSIONS.agentsManage);
+    return this.svc.runTests({ sub: u.sub, org: u.org }, id);
   }
 
   @Post('voice-agents/:id/archive')
