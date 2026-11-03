@@ -281,7 +281,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Tara (the AI assistant) is on the website and in the dashboard; not on the one-time invitation page.
   const agent = pathname === '/invite' ? null : <LiveAgent />;
   if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster />{agent}</>;
-  return <><Shell>{children}</Shell><Toaster />{agent}</>;
+  // Signed in: the assistant can also be the business's own assistant (its menu, orders and customers). The key gives
+  // it fresh state after signing in (the login page's website assistant sits at the same place in the tree).
+  return <><Shell>{children}</Shell><Toaster /><LiveAgent key="business" business /></>;
 }
 
 /** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */

@@ -81,7 +81,9 @@ const style = (lang: OrderSession['lang']): Style => (lang === 'english' ? 'en' 
 /** On the phone, Tamil and Tanglish are both spoken Tamil (the TTS voice reads Tamil script). */
 const voiceStyle = (lang: OrderSession['lang']): VoiceStyle => (lang === 'english' ? 'en' : 'ta');
 /** The reply style for this session: on the phone Tanglish is spoken as Tamil (the TTS voice reads Tamil script). */
-const stFor = (s: Pick<OrderSession, 'channel' | 'lang'>): Style => (s.channel === 'voice' ? voiceStyle(s.lang) : style(s.lang));
+/** Spoken replies: a phone call, or the dashboard assistant's voice / video mode (a test session with spoken: true). */
+const spokenOut = (s: Pick<OrderSession, 'channel' | 'spoken'>) => s.channel === 'voice' || s.spoken === true;
+const stFor = (s: Pick<OrderSession, 'channel' | 'lang' | 'spoken'>): Style => (spokenOut(s) ? voiceStyle(s.lang) : style(s.lang));
 /** Channels that are the same real customer (the dashboard test chat is not). */
 const CUSTOMER_CHANNELS = ['whatsapp', 'voice'] as const;
 
@@ -144,6 +146,8 @@ export class OrderingEngine {
     const text = input.message.trim().slice(0, 1000);
     const existing = await this.store.get(key);
     const s = existing ?? this.newSession(input, key);
+    // The dashboard assistant talks to the same test session by text or by voice: each turn says which.
+    s.spoken = s.channel === 'test' && input.metadata?.spoken === true ? true : undefined;
     await this.ensureThread(s, input);
     if (!existing) await this.carryOver(s);
     // A chat picked up hours later is a new conversation: its old unplaced draft is held and offered, not reused.
@@ -231,9 +235,9 @@ export class OrderingEngine {
       failed = true;
       failure = errorMessage(error).slice(0, 200);
       log.error('restaurant.turn_failed', { organizationId: s.organizationId, channel: s.channel, error: failure });
-      reply = s.channel === 'voice' ? spoken.error(voiceStyle(s.lang)) : say.error(stFor(s));
+      reply = spokenOut(s) ? spoken.error(voiceStyle(s.lang)) : say.error(stFor(s));
     }
-    if (s.channel === 'voice') reply = toSpeech(reply, voiceStyle(s.lang));
+    if (spokenOut(s)) reply = toSpeech(reply, voiceStyle(s.lang));
 
     // One structured line per turn: which path answered, why the model was (not) used, what the cart holds.
     // No message text, no phone number.
@@ -309,7 +313,7 @@ export class OrderingEngine {
   ): Promise<{ kind: 'say'; text: string; order?: RestaurantTurnResult['order']; end?: RestaurantTurnResult['endReason']; promptOnly?: boolean } | { kind: 'llm'; then?: string }> {
     const st = stFor(s);
     const vs = voiceStyle(s.lang);
-    const voice = s.channel === 'voice';
+    const voice = spokenOut(s);
     const out = (t: string, order?: RestaurantTurnResult['order'], end?: RestaurantTurnResult['endReason']) => ({ kind: 'say' as const, text: t, order, end });
     /** A reply that only asks again for what is missing (no answer, no change): watched for repetition in turn(). */
     const promptOnly = (t: string) => ({ kind: 'say' as const, text: t, promptOnly: true });
@@ -550,7 +554,7 @@ export class OrderingEngine {
         return out(say.notPlaced(st));
       }
       if (!hasSlots && !removing && intent !== 'clear' && intent !== 'menu' && intent !== 'human' && intent !== 'order_status') {
-        return out(`${await this.summaryText(s, catalog, now)}\n\n${s.channel === 'voice' ? '' : say.confirmReminder(st)}`.trim());
+        return out(`${await this.summaryText(s, catalog, now)}\n\n${spokenOut(s) ? '' : say.confirmReminder(st)}`.trim());
       }
     }
 
@@ -1014,7 +1018,7 @@ export class OrderingEngine {
     }
     s.promptRepeats = (s.promptRepeats ?? 0) + 1;
     const st = stFor(s);
-    if (s.promptRepeats >= 2) return s.channel === 'voice' ? spoken.handoffOffer(voiceStyle(s.lang)) : say.offerStaff(st);
+    if (s.promptRepeats >= 2) return spokenOut(s) ? spoken.handoffOffer(voiceStyle(s.lang)) : say.offerStaff(st);
     const choices = s.lines.length ? reply : say.availableList(st, this.stockLines(catalog.items.filter((i) => i.available)));
     return say.notUnderstood(st, choices);
   }
@@ -1099,7 +1103,7 @@ export class OrderingEngine {
       }
       if (!resume && s.interestItemId) {
         const item = catalog.items.find((i) => i.id === s.interestItemId)!;
-        parts.push(s.channel === 'voice' ? spoken.askQty(voiceStyle(s.lang), item.name, item.unit) : say.askQty(st, item.name, item.unit));
+        parts.push(spokenOut(s) ? spoken.askQty(voiceStyle(s.lang), item.name, item.unit) : say.askQty(st, item.name, item.unit));
       }
     } else if (kind === 'availability' && !mentions.length) {
       // Something that is not a product of this shop ("mutton irukka?"): unknown, not "unavailable".
@@ -1160,7 +1164,7 @@ export class OrderingEngine {
       }
     }
     const vs = voiceStyle(s.lang);
-    const voice = s.channel === 'voice';
+    const voice = spokenOut(s);
     if (!s.payment) return voice ? spoken.askPayment(vs) : say.askPayment(st);
     if (!outlets.length) return voice ? spoken.handoff(vs) : say.handoff(st);
     let shop: OutletView | undefined = outlets.find((o) => o.id === s.outletId);
@@ -1187,7 +1191,7 @@ export class OrderingEngine {
 
   private renderSummary(s: OrderSession, q: Quote) {
     const st = stFor(s);
-    if (s.channel === 'voice') {
+    if (spokenOut(s)) {
       const vs = voiceStyle(s.lang);
       return spoken.summary(vs, { lines: q.lines, discount: q.discount, total: q.total, payment: say.paymentLabel(vs, s.payment!), pickupAt: new Date(s.pickupAt!), shop: q.outlet?.name ?? '' });
     }
@@ -1261,7 +1265,7 @@ export class OrderingEngine {
     const placed = { orderNumber: order.orderNumber, total: order.total, pickupAt: new Date(order.pickupAt), shop: order.outlet.name, demo: order.isDemo };
     return {
       kind: 'say',
-      text: s.channel === 'voice' ? spoken.placed(voiceStyle(s.lang), { ...placed, now }) : say.placed(st, placed),
+      text: spokenOut(s) ? spoken.placed(voiceStyle(s.lang), { ...placed, now }) : say.placed(st, placed),
       order: { status: result.status, id: order.id, orderNumber: order.orderNumber, total: order.total },
     };
   }
@@ -1295,7 +1299,7 @@ export class OrderingEngine {
   private async handoff(s: OrderSession): Promise<string> {
     await this.prisma.conversation.update({ where: { id: s.conversationId! }, data: { status: 'human_handoff', updatedAt: new Date() } });
     log.info('restaurant.handoff', { organizationId: s.organizationId, conversationId: s.conversationId, channel: s.channel });
-    return s.channel === 'voice' ? spoken.handoff(voiceStyle(s.lang)) : say.handoff(stFor(s));
+    return spokenOut(s) ? spoken.handoff(voiceStyle(s.lang)) : say.handoff(stFor(s));
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1303,9 +1307,9 @@ export class OrderingEngine {
   // -----------------------------------------------------------------------------------------------
 
   private async answerWithModel(s: OrderSession, text: string, catalog: Catalog, now: Date): Promise<{ text: string; path: 'rules' | 'llm'; usage?: AiUsageMetrics; llm: LlmStatus; llmError?: string }> {
-    const fallback = s.channel === 'voice' ? spoken.help(voiceStyle(s.lang), orderHint(catalog)) : say.help(stFor(s), orderHint(catalog));
+    const fallback = spokenOut(s) ? spoken.help(voiceStyle(s.lang), orderHint(catalog)) : say.help(stFor(s), orderHint(catalog));
     if (!llmConfigured()) return { text: fallback, path: 'rules', llm: 'not_configured' };
-    const agentChannel = s.channel === 'voice' ? 'voice' : 'whatsapp';
+    const agentChannel = spokenOut(s) ? 'voice' : 'whatsapp';
     const prices = new Set(catalog.items.map((i) => i.price));
     if (s.offerAmount) prices.add(s.offerAmount);
     const brief = [

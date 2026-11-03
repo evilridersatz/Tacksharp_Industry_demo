@@ -13,6 +13,8 @@ export type OrderSession = {
   key: string;
   organizationId: string;
   channel: 'whatsapp' | 'test' | 'voice';
+  /** Test session in the dashboard assistant's voice / video mode: replies are worded for speech (set per turn). */
+  spoken?: boolean;
   phone: string;
   name?: string;
   customerId?: string;

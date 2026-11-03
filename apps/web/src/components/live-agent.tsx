@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Languages, Loader2, MessageSquareText, Mic, MicOff, Phone, Square, Video, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowUp, Languages, Loader2, MessageSquareText, Mic, MicOff, Phone, ReceiptText, Square, Store, UserRound, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { ApiError, api } from '@/lib/api';
 import { cx } from './ui';
 import { encodeWav, sentences, wavPcm } from '@/lib/voice';
@@ -10,9 +10,16 @@ import { encodeWav, sentences, wavPcm } from '@/lib/voice';
  * "Tara": the Tacksharp assistant on the website and in the dashboard. Text or voice in Tamil, English or Tanglish;
  * answers come from the website's own content (server), speech from Sarvam (server). The face is an animated
  * illustration whose mouth follows the actual voice audio; it is labelled as an AI assistant, never as a person.
+ *
+ * In the dashboard (`business`), staff can switch to THEIR business's assistant: the same engine that answers WhatsApp
+ * and phone calls (a restaurant: live menu, prices, stock, outlets, ordering), for the customer whose mobile number is
+ * entered, with that customer's history. Chat, voice call and video call all use it; nothing is sent to the customer.
  */
 type Style = 'ta' | 'en' | 'tanglish';
-type Msg = { role: 'user' | 'assistant'; content: string; voice?: boolean };
+type Msg = { role: 'user' | 'assistant'; content: string; voice?: boolean; order?: { orderNumber: string; total: number; status: string } };
+type Who = 'business' | 'tara';
+type Status = { chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string; enabled?: boolean; reason?: string | null; organizationName?: string; ordering?: boolean };
+type Memory = { known: boolean; phone: string; name?: string | null; orderCount?: number; recentOrders?: Array<{ orderNumber: string; total: number; status: string; channel: string; at: string }>; channels?: string[] };
 type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting';
 /** Video call states shown to the visitor. */
 type VideoState = 'off' | 'connecting' | 'live' | 'ended';
@@ -28,6 +35,18 @@ const QUICK: Record<Style, Array<[string, string]>> = {
   ta: [['💬', 'WhatsApp assistant எப்படி வேலை செய்யும்?'], ['📞', 'தமிழ்ல call பண்ணுமா?'], ['💰', 'விலை எவ்வளவு?'], ['🚀', 'எப்படி ஆரம்பிக்கறது?']],
   tanglish: [['💬', 'WhatsApp assistant epdi work aagum?'], ['📞', 'Tamil la call pannuma?'], ['💰', 'Price evlo?'], ['🚀', 'Epdi start panradhu?']],
 };
+const QUICK_ORDERING: Record<Style, Array<[string, string]>> = {
+  en: [['📋', "What's on the menu today, with prices?"], ['🍗', 'I want 2 kg broiler curry cut'], ['🧾', 'What is my total?'], ['🙋', 'I want to talk to a person']],
+  ta: [['📋', 'இன்னைக்கு menu, விலை என்ன?'], ['🍗', '2 கிலோ broiler curry cut வேணும்'], ['🧾', 'Total எவ்வளவு?'], ['🙋', 'ஒருத்தர்கிட்ட பேசணும்']],
+  tanglish: [['📋', 'Inniku menu price enna?'], ['🍗', '2 kg broiler curry cut venum'], ['🧾', 'Total evlo aagum?'], ['🙋', 'Staff kitta pesanum']],
+};
+const QUICK_BUSINESS: Record<Style, Array<[string, string]>> = {
+  en: [['🕘', 'What are your timings?'], ['💰', 'What are your prices?'], ['🙋', 'I want to talk to a person']],
+  ta: [['🕘', 'நேரம் என்ன?'], ['💰', 'விலை என்ன?'], ['🙋', 'ஒருத்தர்கிட்ட பேசணும்']],
+  tanglish: [['🕘', 'Timings enna?'], ['💰', 'Price evlo?'], ['🙋', 'Staff kitta pesanum']],
+};
+const PHONE_STORE = 'ts-assistant-customer-v1';
+const inr = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const PHASE_LABEL: Record<Phase, string> = { idle: 'Online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…', reconnecting: 'Reconnecting…' };
 /** Barge-in: the visitor talking over Tara (echo-cancelled mic, louder and sustained, so her own voice never triggers it). */
 const BARGE_RMS = 0.06;
@@ -78,8 +97,14 @@ function Waveform({ level, phase }: { level: number; phase: Phase }) {
   );
 }
 
-export function LiveAgent() {
+export function LiveAgent({ business = false }: { business?: boolean } = {}) {
   const [open, setOpen] = useState(false);
+  /** Dashboard: the business's own assistant (default) or Tara (help with Tacksharp). The website always has Tara. */
+  const [who, setWho] = useState<Who>(business ? 'business' : 'tara');
+  const [biz, setBiz] = useState<Status | null>(null);
+  const [phone, setPhone] = useState('');
+  const [custName, setCustName] = useState('');
+  const [memory, setMemory] = useState<Memory | null>(null);
   const [lang, setLang] = useState<Style | 'auto'>('auto');
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -87,7 +112,7 @@ export function LiveAgent() {
   const [level, setLevel] = useState(0);
   const [voiceOut, setVoiceOut] = useState(true);
   const [handsFree, setHandsFree] = useState(false);
-  const [status, setStatus] = useState<{ chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string } | null>(null);
+  const [taraStatus, setStatus] = useState<Status | null>(null);
   /** Talking video presenter (Simli): off until the visitor starts it (it is billed per minute). */
   const [video, setVideo] = useState<VideoState>('off');
   /** Duplicate-start guard: a double click or a re-render never opens a second (billable) video session. */
@@ -123,27 +148,48 @@ export function LiveAgent() {
   /** Bumped when a call ends: speech recognised for an ended call is dropped (no turn after "Ended"). */
   const callEpoch = useRef(0);
   const style: Style = lang === 'auto' ? 'en' : lang;
+  const isBiz = business && who === 'business' && Boolean(biz?.enabled);
+  const status = isBiz ? biz : taraStatus;
+  /** Speech and chat endpoints: the signed-in business routes, or the public website assistant. */
+  const base = isBiz ? '/business-assistant' : '/assistant';
+  const phoneOk = phone.replace(/\D/g, '').length >= 10;
+  const baseRef = useRef(base);
+  baseRef.current = base;
+  const assistantName = isBiz ? `${biz?.organizationName ?? 'Your business'} assistant` : 'Tara';
 
   // Restore the conversation for this tab (convenience only; nothing is stored on the server).
   useEffect(() => {
     try {
-      const s = JSON.parse(sessionStorage.getItem(STORE) ?? 'null');
-      if (Array.isArray(s?.msgs)) setMsgs(s.msgs.slice(-30));
+      const s = JSON.parse(sessionStorage.getItem(`${STORE}:${who}`) ?? 'null');
+      setMsgs(Array.isArray(s?.msgs) ? s.msgs.slice(-30) : []);
       if (s?.lang) setLang(s.lang);
     } catch { /* storage unavailable */ }
-  }, []);
+  }, [who]);
   useEffect(() => {
-    try { sessionStorage.setItem(STORE, JSON.stringify({ msgs: msgs.slice(-30), lang })); } catch { /* ignore */ }
+    try { sessionStorage.setItem(`${STORE}:${who}`, JSON.stringify({ msgs: msgs.slice(-30), lang })); } catch { /* ignore */ }
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msgs, lang]);
+  // The test customer's number is remembered on this device (convenience only).
+  useEffect(() => {
+    if (!business) return;
+    try { const s = JSON.parse(localStorage.getItem(PHONE_STORE) ?? 'null'); if (s?.phone) setPhone(s.phone); if (s?.name) setCustName(s.name); } catch { /* storage unavailable */ }
+  }, [business]);
+  const loadMemory = useCallback((p: string) => {
+    if (p.replace(/\D/g, '').length < 10) { setMemory(null); return; }
+    try { localStorage.setItem(PHONE_STORE, JSON.stringify({ phone: p, name: custName })); } catch { /* ignore */ }
+    api.get<Memory>(`/business-assistant/customer?phone=${encodeURIComponent(p)}`).then(setMemory).catch(() => setMemory(null));
+  }, [custName]);
   useEffect(() => {
     if (!open) return;
-    api.get<{ chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string }>(`/assistant/status?lang=${style}`).then(setStatus).catch(() => setStatus({ chat: 'faq', voice: false, greeting: '' }));
+    api.get<Status>(`/assistant/status?lang=${style}`).then(setStatus).catch(() => setStatus({ chat: 'faq', voice: false, greeting: '' }));
+    if (business) api.get<Status>(`/business-assistant/status?lang=${style}`).then(setBiz).catch(() => setBiz(null));
     setTimeout(() => inputRef.current?.focus(), 50);
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, style]);
+  }, [open, style, business]);
+  useEffect(() => { if (open && isBiz) loadMemory(phone); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, isBiz]);
 
   const ctx = () => {
     if (!audioCtx.current) {
@@ -264,7 +310,7 @@ export function LiveAgent() {
     let cancelled = false;
     stopSpeech.current = () => { cancelled = true; try { client.ClearBuffer(); } catch { /* ended */ } silentWaiter.current?.(); };
     const parts = sentences(text);
-    const pcmOf = (s: string) => api.post<{ audioBase64: string }>('/assistant/tts', { text: s, style: st, sampleRate: 16000 }).then((r) => {
+    const pcmOf = (s: string) => api.post<{ audioBase64: string }>(`${baseRef.current}/tts`, { text: s, style: st, sampleRate: 16000 }).then((r) => {
       const bin = atob(r.audioBase64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -333,7 +379,7 @@ export function LiveAgent() {
     let cancelled = false;
     stopSpeech.current = () => { cancelled = true; try { playing.current?.stop(); } catch { /* already stopped */ } };
     const parts = sentences(text);
-    const fetchAudio = (s: string) => api.post<{ audioBase64: string }>('/assistant/tts', { text: s, style: st }).then(async (r) => {
+    const fetchAudio = (s: string) => api.post<{ audioBase64: string }>(`${baseRef.current}/tts`, { text: s, style: st }).then(async (r) => {
       const bin = atob(r.audioBase64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -368,9 +414,10 @@ export function LiveAgent() {
     return !cancelled;
   }, [meter, speakVideo, bargeIn]);
 
-  const send = useCallback(async (text: string, viaVoice = false) => {
+  const send = useCallback(async (text: string, viaVoice = false, sttLanguage?: string) => {
     const message = text.trim();
     if (!message || phase === 'thinking') return;
+    if (isBiz && !phoneOk) { setNotice('Enter the customer’s mobile number first: answers and orders use that customer’s records.'); return; }
     stopSpeech.current();
     // Typed while the call was listening: drop that recording (the typed question wins; no double turn).
     if (!viaVoice) rec.current?.stop(false);
@@ -380,9 +427,12 @@ export function LiveAgent() {
     setInput('');
     setPhase('thinking');
     try {
-      const r = await api.post<{ reply: string; style: Style; source: 'ai' | 'faq' }>('/assistant/chat', { message, history, ...(lang !== 'auto' ? { lang } : {}) });
+      const r = isBiz
+        ? await api.post<{ reply: string; style: Style; order?: { orderNumber: string; total: number; status: string } | null }>('/business-assistant/chat', { message, phone, name: custName || undefined, spoken: viaVoice || handsFreeRef.current || Boolean(simli.current), ...(sttLanguage ? { sttLanguage } : {}) })
+        : await api.post<{ reply: string; style: Style; source: 'ai' | 'faq'; order?: undefined }>('/assistant/chat', { message, history, ...(lang !== 'auto' ? { lang } : {}) });
       failures.current = 0;
-      setMsgs((m) => [...m, { role: 'assistant', content: r.reply }]);
+      setMsgs((m) => [...m, { role: 'assistant', content: r.reply, ...(r.order ? { order: r.order } : {}) }]);
+      if (isBiz) loadMemory(phone);
       if ((voiceOut || simli.current) && status?.voice) {
         bargedRef.current = false;
         const finished = await speak(r.reply, r.style);
@@ -404,7 +454,7 @@ export function LiveAgent() {
       if (handsFreeRef.current) { setHandsFree(false); setNotice(`${errText(e)} The call was paused; tap Voice call to continue.`); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, lang, voiceOut, status, phase, speak]);
+  }, [msgs, lang, voiceOut, status, phase, speak, isBiz, phoneOk, phone, custName, loadMemory]);
 
   /** Record the visitor until ~1 s of silence (or 25 s), then recognise and send it. */
   const startListening = useCallback(async (fromButton = false) => {
@@ -467,11 +517,11 @@ export function LiveAgent() {
       quiet.current = 0;
       setPhase('transcribing');
       const epoch = callEpoch.current;
-      api.post<{ transcript: string }>('/assistant/stt', { audioBase64: encodeWav(chunks, c.sampleRate) })
+      api.post<{ transcript: string; language?: string | null }>(`${baseRef.current}/stt`, { audioBase64: encodeWav(chunks, c.sampleRate) })
         .then((r) => {
           if (epoch !== callEpoch.current) return;
           failures.current = 0;
-          if (r.transcript) void send(r.transcript, true);
+          if (r.transcript) void send(r.transcript, true, r.language ?? undefined);
           else if (handsFreeRef.current) setTimeout(() => void startListeningRef.current(), 100);
           else { setPhase('idle'); setNotice('I could not catch that. Please try again.'); }
         })
@@ -489,13 +539,13 @@ export function LiveAgent() {
   const greet = useCallback(async () => {
     if (greeted.current || !simli.current) return;
     greeted.current = true;
-    const text = status?.greeting || 'Vanakkam! I am Tara, the Tacksharp AI assistant. How can I help?';
+    const text = status?.greeting || (isBiz ? `Vanakkam! This is the ${assistantName}. How can I help?` : 'Vanakkam! I am Tara, the Tacksharp AI assistant. How can I help?');
     setMsgs((m) => [...m, { role: 'assistant', content: text }]);
     try { await getMic(); } catch { /* the first listen will explain */ }
     bargedRef.current = false;
     const finished = await speak(text, lang === 'auto' ? 'en' : lang);
     if (handsFreeRef.current && (finished || bargedRef.current)) void startListening();
-  }, [status, speak, startListening, lang, getMic]);
+  }, [status, speak, startListening, lang, getMic, isBiz, assistantName]);
   greetRef.current = greet;
 
   // Unmount: stop speech, the mic, the meter and the video session (no session outlives the page).
@@ -510,29 +560,36 @@ export function LiveAgent() {
     if (m === 'voice') { handsFreeRef.current = true; setHandsFree(true); failures.current = 0; quiet.current = 0; if (phase === 'idle' || phase === 'speaking') { stopSpeech.current(); void startListening(); } }
     if (m === 'video') { rec.current?.stop(false); stopSpeech.current(); void startVideo(); }
   };
+  /** Switching between the business assistant and Tara ends any call (each has its own conversation). */
+  const switchWho = (w: Who) => {
+    if (w === who) return;
+    callEpoch.current++; handsFreeRef.current = false; stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); releaseMic(); stopVideo();
+    setNotice(null);
+    setWho(w);
+  };
   const close = () => { callEpoch.current++; handsFreeRef.current = false; stopSpeech.current(); rec.current?.stop(false); setHandsFree(false); releaseMic(); stopVideo(); setOpen(false); };
   const videoLabel = video === 'connecting' ? 'Connecting…' : video === 'ended' ? 'Ended' : PHASE_LABEL[phase];
   const iconBtn = 'grid size-9 place-items-center rounded-[10px] text-[#16183d]/70 hover:bg-[#16183d]/5 hover:text-[#16183d] disabled:opacity-40';
   return (
     <>
       {!open && (
-        <button onClick={() => setOpen(true)} aria-label="Chat or talk with Tara, the Tacksharp AI assistant" className="group fixed right-4 bottom-4 z-[55] flex items-center gap-3 rounded-full border border-white/10 bg-[#16183d] p-1.5 text-left text-white shadow-[0_18px_40px_-14px_rgba(22,24,61,0.75)] transition-transform hover:-translate-y-0.5 sm:pr-5 print:hidden">
+        <button onClick={() => setOpen(true)} aria-label={business ? 'Open the AI assistant: your business assistant or Tacksharp help' : 'Chat or talk with Tara, the Tacksharp AI assistant'} className="group fixed right-4 bottom-4 z-[55] flex items-center gap-3 rounded-full border border-white/10 bg-[#16183d] p-1.5 text-left text-white shadow-[0_18px_40px_-14px_rgba(22,24,61,0.75)] transition-transform hover:-translate-y-0.5 sm:pr-5 print:hidden">
           <span className="relative">
             <Orb size={44} />
             <span className="absolute right-0 bottom-0 size-3 rounded-full bg-emerald-400 ring-2 ring-[#16183d]" />
           </span>
           <span className="hidden leading-tight sm:block">
-            <span className="block text-[14px] font-semibold">Talk to Tara</span>
-            <span className="block text-[11.5px] text-white/60">AI assistant · தமிழ் · English</span>
+            <span className="block text-[14px] font-semibold">{business ? 'AI assistant' : 'Talk to Tara'}</span>
+            <span className="block text-[11.5px] text-white/60">{business ? 'Chat · voice · video · orders' : 'AI assistant · தமிழ் · English'}</span>
           </span>
         </button>
       )}
       {open && (
-        <section role="dialog" aria-modal="false" aria-label="Tara, Tacksharp AI assistant" className="fixed inset-0 z-[55] flex flex-col overflow-hidden bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[680px] sm:max-h-[calc(100dvh-2rem)] sm:w-[420px] sm:rounded-[20px] sm:border sm:border-black/5 sm:shadow-[0_40px_90px_-30px_rgba(22,24,61,0.6)] print:hidden">
+        <section role="dialog" aria-modal="false" aria-label={`${assistantName}, AI assistant`} className="fixed inset-0 z-[55] flex flex-col overflow-hidden bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[680px] sm:max-h-[calc(100dvh-2rem)] sm:w-[420px] sm:rounded-[20px] sm:border sm:border-black/5 sm:shadow-[0_40px_90px_-30px_rgba(22,24,61,0.6)] print:hidden">
           <header className="flex items-center gap-3 border-b border-black/5 px-4 py-3">
             <Orb size={36} level={level} phase={phase} />
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="text-[15px] font-semibold text-[#16183d]">Tara <span className="ml-1 rounded-full bg-[#ebeaf6] px-1.5 py-px align-middle text-[10.5px] font-semibold text-[#16183d]/70">AI</span></p>
+              <p className="truncate text-[15px] font-semibold text-[#16183d]">{assistantName} <span className="ml-1 rounded-full bg-[#ebeaf6] px-1.5 py-px align-middle text-[10.5px] font-semibold text-[#16183d]/70">AI</span></p>
               <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-[#16183d]/60" aria-live="polite">
                 <span className={cx('size-1.5 rounded-full', phase === 'reconnecting' || video === 'ended' ? 'bg-amber-500' : phase === 'idle' ? 'bg-emerald-500' : phase === 'listening' ? 'bg-rose-500' : 'bg-[#7c5cf0]')} /><span data-testid="tara-status">{video !== 'off' ? videoLabel : PHASE_LABEL[phase]}</span>
               </p>
@@ -543,11 +600,41 @@ export function LiveAgent() {
             <button onClick={close} aria-label="Close assistant" className={iconBtn}><X className="size-[18px]" /></button>
           </header>
 
+          {business && (
+            <div className="grid grid-cols-2 gap-1 border-b border-black/5 bg-[#f7f8fc] p-1.5" role="tablist" aria-label="Which assistant">
+              {([['business', biz?.organizationName ? `${biz.organizationName}` : 'My business', Store], ['tara', 'Tacksharp help', MessageSquareText]] as Array<[Who, string, typeof Store]>).map(([w, label, Icon]) => (
+                <button key={w} role="tab" aria-selected={who === w} onClick={() => switchWho(w)} className={cx('inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[9px] px-2 py-1.5 text-[12.5px] font-semibold', who === w ? 'bg-white text-[#16183d] shadow-sm ring-1 ring-black/5' : 'text-[#16183d]/60 hover:text-[#16183d]')}>
+                  <Icon className="size-3.5 shrink-0" /><span className="truncate">{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {business && who === 'business' && biz && !biz.enabled && (
+            <p className="mx-3 mt-2 rounded-[10px] bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 ring-1 ring-amber-200">{biz.reason}</p>
+          )}
+          {isBiz && (
+            <div className="border-b border-black/5 px-3 py-2" data-testid="assistant-customer">
+              <div className="flex items-center gap-1.5">
+                <UserRound className="size-4 shrink-0 text-[#16183d]/45" aria-hidden />
+                <label className="sr-only" htmlFor="assistant-phone">Customer mobile number</label>
+                <input id="assistant-phone" inputMode="tel" autoComplete="off" value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={() => loadMemory(phone)} onKeyDown={(e) => e.key === 'Enter' && loadMemory(phone)} placeholder="Customer mobile (10 digits)" className="h-8 min-w-0 flex-1 rounded-[8px] border border-black/10 px-2 text-[13px] text-[#16183d] outline-none focus:border-[#16183d]/40" />
+                <label className="sr-only" htmlFor="assistant-name">Customer name (optional)</label>
+                <input id="assistant-name" value={custName} onChange={(e) => setCustName(e.target.value)} onBlur={() => loadMemory(phone)} placeholder="Name (optional)" className="h-8 w-[38%] rounded-[8px] border border-black/10 px-2 text-[13px] text-[#16183d] outline-none focus:border-[#16183d]/40" />
+              </div>
+              <p className="mt-1 truncate text-[11.5px] text-[#16183d]/55" aria-live="polite" data-testid="assistant-memory">
+                {!phoneOk ? 'Answers and orders use this customer’s records.'
+                  : !memory ? 'Looking up this customer…'
+                  : !memory.known ? 'New customer: a record is created with the first message.'
+                  : `${memory.name || 'Known customer'} · ${memory.orderCount ?? 0} order${memory.orderCount === 1 ? '' : 's'}${memory.recentOrders?.[0] ? ` · last ${memory.recentOrders[0].orderNumber} (${inr(memory.recentOrders[0].total)}, ${memory.recentOrders[0].status})` : ''}${memory.channels?.length ? ` · ${memory.channels.join(', ')}` : ''}`}
+              </p>
+            </div>
+          )}
+
           {/* Stage: the video presenter, or the voice visual. */}
           <div className="relative bg-[radial-gradient(120%_100%_at_50%_0%,#262a63_0%,#16183d_60%,#0d0f2b_100%)] px-4 pt-4 pb-3 text-white">
             {status?.video && (
               <div className={cx('relative overflow-hidden rounded-[14px] bg-black/40', video === 'connecting' || video === 'live' ? 'block' : 'hidden')}>
-                <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-video w-full object-cover" aria-label="Tara, AI video presenter" />
+                <video ref={videoEl} autoPlay playsInline muted={false} className="aspect-video w-full object-cover" aria-label={`${assistantName}, AI video presenter`} />
                 <audio ref={videoAudioEl} autoPlay />
                 {video === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting video…</span></p>}
                 <span className="absolute bottom-2 left-2 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur">AI presenter · our voice</span>
@@ -593,6 +680,11 @@ export function LiveAgent() {
                 {m.role === 'assistant' && <Orb size={24} />}
                 <p className={cx('max-w-[85%] rounded-[14px] px-3 py-2 text-[14px] leading-relaxed whitespace-pre-wrap', m.role === 'user' ? 'rounded-tr-[4px] bg-[#16183d] text-white' : 'rounded-tl-[4px] bg-white text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5')}>
                   {m.voice && <Mic className="mr-1 inline size-3.5 opacity-70" aria-label="spoken" />}{m.content}
+                  {m.order && (
+                    <span className="mt-2 flex items-center gap-2 rounded-[10px] bg-emerald-50 px-2.5 py-1.5 text-[12.5px] font-semibold text-emerald-900 ring-1 ring-emerald-200" data-testid="assistant-order">
+                      <ReceiptText className="size-4 shrink-0" aria-hidden />Order {m.order.orderNumber} · {inr(m.order.total)} · saved in Orders
+                    </span>
+                  )}
                 </p>
               </li>
             ))}
@@ -602,14 +694,14 @@ export function LiveAgent() {
           </ol>
           {msgs.length === 0 && (
             <div className="flex flex-wrap gap-1.5 border-t border-black/5 px-3 pt-2.5">
-              {QUICK[style].map(([e, q]) => <button key={q} onClick={() => void send(q)} className="rounded-full border border-[#16183d]/12 bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:border-[#16183d]/30 hover:bg-[#f7f8fc]"><span aria-hidden>{e}</span> {q}</button>)}
+              {(isBiz ? (biz?.ordering ? QUICK_ORDERING : QUICK_BUSINESS) : QUICK)[style].map(([e, q]) => <button key={q} onClick={() => void send(q)} className="rounded-full border border-[#16183d]/12 bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:border-[#16183d]/30 hover:bg-[#f7f8fc]"><span aria-hidden>{e}</span> {q}</button>)}
             </div>
           )}
           {notice && <p role="status" className="mx-3 mt-2 rounded-[10px] bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 ring-1 ring-amber-200">{notice}</p>}
           <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="p-3">
             <div className="flex items-end gap-1.5 rounded-[16px] border border-black/10 bg-white p-1.5 focus-within:border-[#16183d]/40 focus-within:ring-4 focus-within:ring-[#16183d]/5">
-              <label htmlFor="tara-input" className="sr-only">Message Tara</label>
-              <textarea id="tara-input" ref={inputRef} rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={style === 'ta' ? 'உங்க கேள்வியை type பண்ணுங்க…' : style === 'tanglish' ? 'Unga question type pannunga…' : 'Ask about Tacksharp…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
+              <label htmlFor="tara-input" className="sr-only">Message {assistantName}</label>
+              <textarea id="tara-input" ref={inputRef} rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={style === 'ta' ? 'உங்க கேள்வியை type பண்ணுங்க…' : style === 'tanglish' ? 'Unga question type pannunga…' : isBiz ? 'Type as the customer…' : 'Ask about Tacksharp…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
               {status?.voice && (
                 <button type="button" onClick={() => { if (phase === 'speaking') { stopSpeech.current(); return; } void startListening(true); }} aria-label={phase === 'listening' ? 'Stop and send' : phase === 'speaking' ? 'Stop speaking' : 'Speak your question'} className={cx('grid size-10 shrink-0 place-items-center rounded-[12px] transition-colors', phase === 'listening' ? 'bg-rose-600 text-white' : 'text-[#16183d]/70 hover:bg-[#16183d]/5')}>
                   {phase === 'listening' ? <Square className="size-4" /> : phase === 'speaking' ? <MicOff className="size-[18px]" /> : <Mic className="size-[18px]" />}
@@ -617,7 +709,7 @@ export function LiveAgent() {
               )}
               <button type="submit" aria-label="Send" disabled={!input.trim() || phase === 'thinking'} className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-[#16183d] text-white transition-opacity disabled:opacity-30"><ArrowUp className="size-[18px]" /></button>
             </div>
-            <p className="mt-2 text-center text-[11px] text-[#16183d]/45">AI assistant · please don&apos;t share personal details</p>
+            <p className="mt-2 text-center text-[11px] text-[#16183d]/45">{isBiz ? 'Test channel · nothing is sent to the customer · confirmed orders are saved' : 'AI assistant · please don\u2019t share personal details'}</p>
           </form>
         </section>
       )}
