@@ -219,6 +219,15 @@ describe.skipIf(!enabled)('AI replies on Instagram / Messenger (integration)', (
     expect(calls.at(-1)!.body.message.text).toBe('Broiler is Rs 240 per kg today.');
   });
 
+  it('an internal error while answering hands the conversation to the team (never silent)', async () => {
+    const from = user();
+    const orig = ai.answer.bind(ai);
+    ai.answer = async () => { throw new Error('boom'); };
+    try { await text(from, 'broiler price?'); } finally { ai.answer = orig; }
+    const c = await convOf(from);
+    expect(c).toMatchObject({ aiEnabled: false, status: 'human_handoff', handoffReason: expect.stringMatching(/internal error/) });
+  });
+
   it('clearing the agent: new conversations go to the team; return to AI refused again', async () => {
     await ai.setAgent({ sub: admin.id, org: ORG }, null);
     const from = user();

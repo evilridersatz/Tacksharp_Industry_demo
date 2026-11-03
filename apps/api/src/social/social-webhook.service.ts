@@ -123,9 +123,11 @@ export class SocialWebhookService {
     let reply: { text: string; kind: 'opt' | 'auto' } | null = null;
     const current = await this.prisma.conversation.findUnique({ where: { id: conv.id } });
     if (!kw && agent && current?.aiEnabled && !customer.optedOutAt && !customer.doNotContact) {
-      const did = await this.ai!.answer(org, channel, current, customer, from, text, inbound.id, agent).catch((e) => {
+      const did = await this.ai!.answer(org, channel, current, customer, from, text, inbound.id, agent).catch(async (e) => {
+        // The customer must not be left without an answer and without a person: hand over.
         log.warn('social.ai_failed', { channel, error: describeError(e) });
-        return 'skipped' as const;
+        await this.prisma.conversation.update({ where: { id: conv.id }, data: { aiEnabled: false, status: 'human_handoff', handoffReason: 'The AI could not reply (internal error): the team takes over.', handoffAt: new Date(), inboxStatus: 'open' } }).catch(() => undefined);
+        return 'handoff' as const;
       });
       await this.inbox?.onCustomerMessage(org, conv.id).catch(() => undefined);
       log.info('social.inbound', { channel, organizationId: org, attachments: kinds.length, ai: did });
