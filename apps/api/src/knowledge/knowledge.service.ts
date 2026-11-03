@@ -201,7 +201,7 @@ export class KnowledgeService implements OnModuleInit {
   }
 }
 
-const DOC_FIELDS = { id: true, knowledgeBaseId: true, filename: true, kind: true, sizeBytes: true, status: true, error: true, chunkCount: true, charCount: true, flaggedLines: true, attempts: true, processedAt: true, createdAt: true } as const;
+const DOC_FIELDS = { id: true, knowledgeBaseId: true, filename: true, kind: true, sizeBytes: true, status: true, error: true, chunkCount: true, charCount: true, flaggedLines: true, attempts: true, authored: true, processedAt: true, createdAt: true } as const;
 
 /** Display name only (never used as a path): no directories, control characters or odd bytes. */
 export function safeName(name: string): string {

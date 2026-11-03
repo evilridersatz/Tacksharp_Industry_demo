@@ -2,7 +2,7 @@ import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
-  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, Receipt, type LucideIcon, AudioLines } from 'lucide-react';
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, Receipt, BookOpen, type LucideIcon, AudioLines } from 'lucide-react';
 
 /**
  * Industry registry (web). The server decides WHICH industry a workspace is (GET /industry/workspace); this file decides
@@ -36,6 +36,7 @@ export type IndustryDef = {
 /** Every workspace: settings, the demo data explorer and the safe scenario runner. */
 const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/voice-agents', label: 'Voice agents', icon: AudioLines },
+  { href: '/knowledge', label: 'Knowledge studio', icon: BookOpen },
   { href: '/demo-data', label: 'Data & APIs', icon: Database },
   { href: '/scenarios', label: 'Scenario runner', icon: PlayCircle },
   { href: '/team', label: 'Team & access', icon: UserCog },
@@ -309,7 +310,7 @@ export const STANDARD_SECTIONS = ['Home', 'AI Agents', 'Customers & Leads', 'Con
 export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
   const p = href.split('?')[0];
   if (p === '/') return 'Home';
-  if (/^\/(agents|voice-agents|test-chat)(\/|$)/.test(p)) return 'AI Agents';
+  if (/^\/(agents|voice-agents|knowledge|test-chat)(\/|$)/.test(p)) return 'AI Agents';
   if (/^\/(contacts|customers|leads|drips|workflows|follow-ups|site-visits|hospital\/patients)(\/|$)/.test(p)) return 'Customers & Leads';
   if (/^\/(inbox|conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
   if (/^\/(analytics|performance)(\/|$)/.test(p) || p === '/visionops/reports') return 'Analytics';

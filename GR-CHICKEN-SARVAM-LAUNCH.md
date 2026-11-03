@@ -100,7 +100,11 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
   (default false);
 - `20261103900000_subscriptions`: `BillingContract`, `Subscription`, `PlatformInvoice` (new tables only; no
   organization gets a plan, so nothing is limited until a platform admin assigns one).
-  **These last seven await the owner's approval** (added after the 2026-11-03 approval of the five above).
+  **These seven were approved by the owner on 2026-11-03 (evening)**, after the morning approval of the five above.
+  Approval covers applying them; it still has to happen after the verified backup in the runbook below.
+- `20261104100000_knowledge_studio`: `KnowledgeDocument.authored` (default false), `KnowledgeGap` (new table).
+  Additive; written after that approval under the owner's "finish everything" instruction. **Confirm it with the owner
+  before applying.**
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

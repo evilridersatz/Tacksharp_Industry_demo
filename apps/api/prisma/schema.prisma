@@ -35,6 +35,7 @@ model Organization {
   knowledgeBases         KnowledgeBase[]
   knowledgeDocuments     KnowledgeDocument[]
   knowledgeChunks        KnowledgeChunk[]
+  knowledgeGaps          KnowledgeGap[]
   telephonyCallRequests  TelephonyCallRequest[]
   telephonyWebhookEvents TelephonyWebhookEvent[]
   calls                  Call[]
@@ -2408,6 +2409,7 @@ model KnowledgeBase {
   organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   documents      KnowledgeDocument[]
   agents         VoiceAgent[]
+  gaps           KnowledgeGap[]
 
   @@index([organizationId])
 }
@@ -2430,6 +2432,8 @@ model KnowledgeDocument {
   flaggedLines    Int              @default(0)
   storagePath     String
   attempts        Int              @default(0)
+  /// Written in the knowledge studio (editable text), not uploaded.
+  authored        Boolean          @default(false)
   processedAt     DateTime?
   createdBy       String?
   createdAt       DateTime         @default(now())
@@ -2456,6 +2460,31 @@ model KnowledgeChunk {
 
   @@index([organizationId, knowledgeBaseId])
   @@index([documentId])
+}
+
+/// A question an agent could not answer from its knowledge base (fallback reply), grouped by normalised text.
+model KnowledgeGap {
+  id              String        @id @default(cuid())
+  organizationId  String
+  knowledgeBaseId String
+  agentId         String?
+  questionKey     String
+  question        String        @db.Text
+  /// call | console
+  channel         String
+  count           Int           @default(1)
+  /// open | answered | ignored
+  status          String        @default("open")
+  documentId      String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  firstAskedAt    DateTime      @default(now())
+  lastAskedAt     DateTime      @default(now())
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  knowledgeBase   KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+
+  @@unique([knowledgeBaseId, questionKey])
+  @@index([organizationId, status, lastAskedAt])
 }
 
 /// One outbound call request (idempotent per organization + key). Never redialled automatically.

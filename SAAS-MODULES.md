@@ -298,15 +298,39 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
   invoices from Tacksharp.
 - **No payment gateway is connected.** Nothing is ever charged or marked paid automatically; invoices are records
   (no PDF / e-invoice IRN yet).
-- Migration `20261103900000_subscriptions` (new tables only; awaiting approval).
+- Migration `20261103900000_subscriptions` (new tables only; approved 2026-11-03).
 - Tests: `src/billing/plans.spec.ts` (4), `test/billing.integration.spec.ts` (6), `tests/ui-billing.py` (23).
 - **Pending:** payment gateway (Razorpay) and automatic dunning, invoice PDF / GST e-invoicing, usage-based (metered)
   pricing for calls and messages, self-service plan change.
 
+## Knowledge studio (P4)
+
+- Page `/knowledge` (nav: AI agents → Knowledge studio): every knowledge base of the workspace with its document count
+  and unanswered questions; create a base; upload PDF / Word / text / CSV (same checks and indexing pipeline as before:
+  type by extension and content, size cap, duplicate refused, instruction-like lines neutralised); per document status,
+  passages view, retry, delete.
+- **Typed answers:** "Write an answer" stores a text document marked `authored` (title + answer), indexed exactly like
+  an upload, so every agent using the base answers from it at once. Only typed answers can be edited in the studio
+  (re-indexed on save); uploaded files are replaced by uploading a new version.
+- **Unanswered questions:** when an agent's reply is its fallback message ("let me check with the team") on a real call
+  or in the test console, the question is recorded per base, grouped by normalised text (case, punctuation, spacing;
+  Tamil kept) and counted. Greetings / one-word messages, escalations, after-hours replies and saved test-suite runs
+  are not recorded. "Answer" opens the editor prefilled with the question and marks it answered; asked again and still
+  unanswered reopens it; "Ignore" / "Restore". Gap recording never blocks or slows a call (fire-and-forget).
+- **Try a question:** the passages an agent would receive, best first, with scores; no AI model is called.
+- API: `GET /knowledge-studio`, `GET /knowledge-documents/:id/passages`, `GET|PUT /knowledge-documents/:id/answer`,
+  `POST /knowledge-bases/:id/answers` (`{ title, text, gapId? }`), `GET /knowledge-gaps?knowledgeBaseId&status`,
+  `POST /knowledge-gaps/:id/status`. View needs agents-view, changes need agents-manage; everything organization-scoped.
+- Migration `20261104100000_knowledge_studio` (additive; confirm before applying).
+- Tests: `src/knowledge/knowledge-studio.spec.ts` (2), `test/knowledge-studio.integration.spec.ts` (5),
+  `tests/ui-knowledge.py` (21).
+- **Not built:** semantic (embedding) search; retrieval is BM25 as before. Website / WhatsApp custom-agent chats do not
+  feed gaps (custom agents answer on calls and the console today).
+
 ## Not done (pending)
 
 P3: AI replies on Instagram / Messenger, more
-integrations. P4: knowledge studio; subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
+integrations. P4 subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production

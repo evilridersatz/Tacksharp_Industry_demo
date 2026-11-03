@@ -11,6 +11,7 @@ import { validateAgent } from './agent-validation.js';
 import { MAX_CASES, diffSnapshots, evaluateTurn, snapshotOf, validateTestCase, type Snapshot, type TestTurn, type TurnResult } from './agent-tests.js';
 import { TEMPLATES, templateByKey, templatePassages, type Template } from './templates.js';
 import { assertPlanAllows } from '../billing/entitlements.js';
+import { isKnowledgeGap, recordKnowledgeGap } from '../knowledge/knowledge-studio.service.js';
 
 type Actor = { sub: string; org: string };
 
@@ -122,16 +123,16 @@ export class VoiceAgentsService {
   /** Test mode: a real conversation turn against the agent's instructions and knowledge base (no call, no message). */
   async test(actor: Actor, id: string, body: { message?: unknown; history?: unknown; lang?: unknown }) {
     const agent = await this.get(actor.org, id);
-    const r = await this.converse(actor.org, agent, body);
+    const r = await this.converse(actor.org, agent, body, 'console');
     await this.prisma.voiceAgent.update({ where: { id }, data: { lastTestedAt: new Date() } });
     return r;
   }
 
-  async converse(organizationId: string, agent: VoiceAgent, body: { message?: unknown; history?: unknown; lang?: unknown }) {
+  async converse(organizationId: string, agent: VoiceAgent, body: { message?: unknown; history?: unknown; lang?: unknown }, channel?: 'call' | 'console') {
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message) throw new BadRequestException('Type or say something first.');
     const lang = ['ta', 'en', 'tanglish'].includes(String(body.lang)) ? (body.lang as Style) : null;
-    return this.engine.reply({
+    const r = await this.engine.reply({
       spec: specOf(agent),
       message,
       history: Array.isArray(body.history) ? (body.history as ChatTurn[]) : [],
@@ -139,13 +140,16 @@ export class VoiceAgentsService {
       search: (q) => this.knowledge.search(organizationId, agent.knowledgeBaseId, q),
       model: await modelFor(organizationId),
     });
+    // Unanswered questions feed the knowledge studio (real calls and the test console; not saved test runs).
+    if (channel && isKnowledgeGap(agent.fallbackMessage, r)) void recordKnowledgeGap(this.prisma, { organizationId, knowledgeBaseId: agent.knowledgeBaseId, agentId: agent.id, question: message, channel });
+    return r;
   }
 
   /** Used by phone calls handled by a custom agent (Plivo path). */
   async replyForCall(organizationId: string, agentId: string, message: string, history: ChatTurn[]) {
     const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId } });
     if (!agent) return null;
-    return this.converse(organizationId, agent, { message, history });
+    return this.converse(organizationId, agent, { message, history }, 'call');
   }
 
   /** Public template demo: sample knowledge only, the platform model, nothing stored, labelled simulated. */
