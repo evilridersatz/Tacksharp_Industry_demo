@@ -11,6 +11,7 @@ import { config } from '../common/config.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { branchPath, countSteps, evaluate, nextPath, stepAt, validateGraph, type Facts, type Graph, type Path, type Step } from './workflow-graph.js';
+import { assertPlanAllows } from '../billing/entitlements.js';
 
 type Actor = { sub: string; org: string };
 type LogEntry = { stepId: string; type: string; result: string; detail?: string; at: string };
@@ -71,6 +72,7 @@ export class WorkflowsService {
   async create(actor: Actor, body: Record<string, unknown>) {
     const name = this.name(body.name);
     const graph = await this.checkGraph(actor.org, body.graph);
+    await assertPlanAllows(this.prisma, actor.org, 'workflows');
     try {
       const w = await this.prisma.workflow.create({ data: { organizationId: actor.org, name, description: this.desc(body.description), graph: graph as unknown as Prisma.InputJsonValue, createdBy: actor.sub } });
       await this.audit(actor, w.id, 'workflow.created', { steps: countSteps(graph.steps), trigger: graph.trigger.type });

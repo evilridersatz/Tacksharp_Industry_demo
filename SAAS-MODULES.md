@@ -275,14 +275,41 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
   comments and story replies, the Human Agent tag (7-day window). **Not verified against Meta**: needs a Page, an app
   with `pages_messaging` / `instagram_manage_messages` and the webhook subscribed.
 
+## Enterprise subscriptions (P4)
+
+- Plans (`src/billing/plans.ts`): Pilot (3 team members, 1 voice agent, 3 workflows, 3 drip sequences, no MCP keys),
+  Growth (15 / 5 / 25 / 25 / 3), Enterprise (unlimited members, 50 / 200 / 200 / 20). Each organization can get
+  per-resource overrides (a number or unlimited). Cycles monthly / quarterly / yearly (calendar months, month end
+  clamped); statuses trial / active / past_due / cancelled.
+- **An organization without a subscription row has no limits.** No existing tenant (GR Chicken included) gets a plan
+  from the migration, so nothing changes until Tacksharp staff assign one.
+- Limits are enforced on creation only (`src/billing/entitlements.ts`, `assertPlanAllows`): team invitations (home
+  users + guests + open invitations count as seats), voice agents (incl. restoring an archived one), workflows, drip
+  sequences, MCP keys. Refusal: 403 `code: plan_limit` with a plain message ("Your Pilot plan allows 1 voice agents and
+  1 are in use…"). Lowering a plan or cancelling never deletes or disables anything; cancelled only blocks new items.
+- Platform console (staff only, `isPlatformAdmin` re-checked in the DB): **Billing** tab (`/platform/billing`):
+  subscriptions, unpaid total, renewals due in 7 days, overdue invoices, plans, enterprise contracts (name, billing
+  email, GSTIN validated, address). Organization page: **Subscription & invoices** card: assign / change plan, price,
+  GST rate, cycle, period start, trial end, contract, overrides, notes; issue the invoice for the current period (one
+  per period, numbered `TS-<year>-00001`, GST computed in paise, due in 15 days); record payment with the bank / UPI
+  reference; void with a reason; renew (period moves forward one cycle, allowed from 7 days before its end).
+  An overdue unpaid invoice puts the subscription in past_due; paying or voiding it returns it to active. All audited.
+- Organization: **Plan & billing** (`/settings/billing`, read-only): plan, period, price, usage bars per resource,
+  invoices from Tacksharp.
+- **No payment gateway is connected.** Nothing is ever charged or marked paid automatically; invoices are records
+  (no PDF / e-invoice IRN yet).
+- Migration `20261103900000_subscriptions` (new tables only; awaiting approval).
+- Tests: `src/billing/plans.spec.ts` (4), `test/billing.integration.spec.ts` (6), `tests/ui-billing.py` (23).
+- **Pending:** payment gateway (Razorpay) and automatic dunning, invoice PDF / GST e-invoicing, usage-based (metered)
+  pricing for calls and messages, self-service plan change.
+
 ## Not done (pending)
 
 P3: AI replies on Instagram / Messenger, more
-integrations. P4: knowledge studio, enterprise subscriptions and
-billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
+integrations. P4: knowledge studio; subscriptions: payment gateway, invoice PDF / e-invoicing, metered pricing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production
 
-Apply the seven migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
+Apply the migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
 add columns and tables. Drip sends nothing until a sequence is created, activated and customers are enrolled.

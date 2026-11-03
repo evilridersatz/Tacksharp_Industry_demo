@@ -97,8 +97,10 @@ outside the release), `CREDENTIALS_KEYS` / `CREDENTIALS_ACTIVE_KEY`, `SARVAM_AGE
 - `20261103600000_mcp_keys`: `McpAccessKey` (new table only);
 - `20261103700000_ai_steering`: `Conversation.aiMode` (default 'auto'), `aiGuidance`, `aiGuidanceUntil` (nullable);
 - `20261103800000_agent_builder`: `AgentVersion`, `AgentTestCase` (new tables), `VoiceAgent.requireTestsToPublish`
-  (default false).
-  **These last six await the owner's approval** (added after the 2026-11-03 approval of the five above).
+  (default false);
+- `20261103900000_subscriptions`: `BillingContract`, `Subscription`, `PlatformInvoice` (new tables only; no
+  organization gets a plan, so nothing is limited until a platform admin assigns one).
+  **These last seven await the owner's approval** (added after the 2026-11-03 approval of the five above).
 
 Historical Plivo calls, credentials and number mappings stay in the database. Drip sends nothing until a sequence is
 created, activated and customers are enrolled; the inbox keeps the AI on for every existing conversation.

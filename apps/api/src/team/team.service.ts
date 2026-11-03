@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { signSession } from '../auth/token.js';
 import { invalidateAccess } from '../auth/auth.guard.js';
 import { ROLE_PERMISSIONS } from '../governance/permissions.js';
+import { assertPlanAllows } from '../billing/entitlements.js';
 
 type Actor = { sub: string; org: string };
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
@@ -68,6 +69,7 @@ export class TeamService {
     if (existing?.organizationId === actor.org) throw new ConflictException('This person already belongs to this workspace. Change their role instead.');
     if (existing && (await this.prisma.organizationMembership.findUnique({ where: { userId_organizationId: { userId: existing.id, organizationId: actor.org } } }))) throw new ConflictException('This person already has access to this workspace.');
     if ((await this.prisma.userInvitation.count({ where: { organizationId: actor.org, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } })) >= 50) throw new BadRequestException('Too many open invitations. Revoke unused ones first.');
+    await assertPlanAllows(this.prisma, actor.org, 'users');
     return this.issue(actor, 'invite', email, role, existing?.id ?? null, INVITE_HOURS());
   }
 

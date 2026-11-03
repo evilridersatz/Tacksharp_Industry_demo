@@ -9,6 +9,7 @@ import { config } from '../common/config.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { dueAt, presetFor, validateHours, validateSteps, type DripStep } from './drip-plan.js';
+import { assertPlanAllows } from '../billing/entitlements.js';
 
 type Actor = { sub: string; org: string };
 const RETRY_MINUTES = [5, 15, 60];
@@ -73,6 +74,7 @@ export class DripService {
 
   async create(actor: Actor, body: Record<string, unknown>) {
     const data = this.validate(body, true);
+    await assertPlanAllows(this.prisma, actor.org, 'dripSequences');
     try {
       const s = await this.prisma.dripSequence.create({ data: { organizationId: actor.org, createdBy: actor.sub, status: 'draft', ...(data as Required<typeof data>) } });
       await this.audit(actor, s.id, 'drip.created', { name: s.name, steps: (s.steps as unknown[]).length });

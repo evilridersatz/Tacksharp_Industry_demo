@@ -45,6 +45,7 @@ import { MetaCapiModule } from './meta-capi/meta-capi.module.js';
 import { SocialWebhookModule } from './social/social-webhook.module.js';
 import { WorkflowsModule } from './workflows/workflows.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
+import { BillingModule } from './billing/billing.module.js';
 import { McpModule } from './mcp/mcp.module.js';
 import { HomeModule } from './home/home.module.js';
 
@@ -92,6 +93,7 @@ import { HomeModule } from './home/home.module.js';
     SocialWebhookModule,
     WorkflowsModule,
     AnalyticsModule,
+    BillingModule,
     McpModule,
     HomeModule,
   ],

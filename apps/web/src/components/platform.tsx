@@ -12,6 +12,7 @@ const TABS = [
   { href: '/platform/health', label: 'Service health' },
   { href: '/platform/failures', label: 'Failures' },
   { href: '/platform/usage', label: 'Usage' },
+  { href: '/platform/billing', label: 'Billing' },
   { href: '/platform/audit', label: 'Audit log' },
 ];
 

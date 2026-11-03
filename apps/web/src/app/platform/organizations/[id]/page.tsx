@@ -8,6 +8,7 @@ import { Badge, Button, Card, CardHeader, Skeleton, cx } from '@/components/ui';
 import { Dialog, inputCls } from '@/components/textile';
 import { OrgStatus, PlatformFrame, when } from '@/components/platform';
 import { toast } from '@/components/toast';
+import { SubscriptionAdmin } from '@/components/billing';
 
 type Detail = {
   id: string; name: string; status: string; selfServe: boolean; isDemo: boolean; contactPhone: string | null; createdAt: string; activatedAt: string | null; suspendedAt: string | null; suspendedReason: string | null;
@@ -88,6 +89,8 @@ export default function PlatformOrganization() {
                 <Button type="submit" busy={busy === 'invite'} disabled={!invite.email.trim()}>Create invitation link</Button>
               </form>
             </Card>
+
+            <SubscriptionAdmin orgId={o.id} />
 
             <Card>
               <CardHeader title="Recent audit events" />

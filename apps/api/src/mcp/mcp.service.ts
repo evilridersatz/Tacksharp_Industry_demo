@@ -6,6 +6,7 @@ import { CustomersService } from '../customers/customers.service.js';
 import { AnalyticsService } from '../analytics/analytics.service.js';
 import { log } from '../common/logger.js';
 import { describeError } from '../common/errors.js';
+import { assertPlanAllows } from '../billing/entitlements.js';
 
 /** Protocol versions this server speaks (the same list the official TypeScript SDK supports). */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
@@ -49,6 +50,7 @@ export class McpService {
     const name = str(body.name, 80);
     if (!name) throw new BadRequestException({ message: 'Give the key a name (who / what uses it)', errors: { name: 'Name is required' } });
     const scope = body.scope === 'write' ? 'write' : 'read';
+    await assertPlanAllows(this.prisma, actor.org, 'mcpKeys');
     const raw = `${KEY_PREFIX}${randomBytes(24).toString('base64url')}`;
     const row = await this.prisma.mcpAccessKey.create({ data: { organizationId: actor.org, name, scope, prefix: raw.slice(0, 14), keyHash: hashKey(raw), createdBy: actor.sub } });
     await this.audit(actor.org, `user:${actor.sub}`, row.id, 'mcp.key_created', { name, scope });

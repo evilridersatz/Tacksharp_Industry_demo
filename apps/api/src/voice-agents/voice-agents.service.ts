@@ -10,6 +10,7 @@ import { AgentEngine, type AgentSpec, type ChatTurn, type ModelAccess } from './
 import { validateAgent } from './agent-validation.js';
 import { MAX_CASES, diffSnapshots, evaluateTurn, snapshotOf, validateTestCase, type Snapshot, type TestTurn, type TurnResult } from './agent-tests.js';
 import { TEMPLATES, templateByKey, templatePassages, type Template } from './templates.js';
+import { assertPlanAllows } from '../billing/entitlements.js';
 
 type Actor = { sub: string; org: string };
 
@@ -76,6 +77,7 @@ export class VoiceAgentsService {
         }
       : body;
     const d = validateAgent(merged as Record<string, unknown>, true);
+    await assertPlanAllows(this.prisma, actor.org, 'voiceAgents');
     if (d.knowledgeBaseId) await this.assertBase(actor.org, d.knowledgeBaseId as string);
     const agent = await this.prisma.voiceAgent.create({
       data: {
@@ -229,6 +231,7 @@ export class VoiceAgentsService {
   async restore(actor: Actor, id: string) {
     const a = await this.get(actor.org, id);
     if (a.status !== 'archived') return a;
+    await assertPlanAllows(this.prisma, actor.org, 'voiceAgents');
     await this.prisma.voiceAgent.update({ where: { id }, data: { status: 'draft', archivedAt: null, lastTestedAt: null } });
     await this.audit(actor, id, 'agent.restored', {});
     return this.get(actor.org, id);

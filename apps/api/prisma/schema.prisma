@@ -28,6 +28,8 @@ model Organization {
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
   integrationCredentials IntegrationCredential[]
+  subscription           Subscription?
+  platformInvoices       PlatformInvoice[]
   integrationEvents      IntegrationEvent[]
   voiceAgents            VoiceAgent[]
   knowledgeBases         KnowledgeBase[]
@@ -2762,4 +2764,80 @@ model AgentTestCase {
 
   @@unique([agentId, name])
   @@index([organizationId])
+}
+
+/// Enterprise contract: several organizations billed together (billing contact, address, GSTIN).
+model BillingContract {
+  id             String         @id @default(cuid())
+  name           String         @db.VarChar(160)
+  billingEmail   String?
+  billingAddress String?        @db.VarChar(500)
+  gstin          String?        @db.VarChar(20)
+  notes          String?        @db.VarChar(1000)
+  createdBy      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  subscriptions  Subscription[]
+}
+
+/// The plan an organization is on (set by a Tacksharp platform admin). No row = no plan limits (pre-existing tenants).
+model Subscription {
+  id                 String           @id @default(cuid())
+  organizationId     String           @unique
+  /// pilot | growth | enterprise (src/billing/plans.ts)
+  planCode           String           @db.VarChar(20)
+  /// trial | active | past_due | cancelled
+  status             String           @default("active") @db.VarChar(20)
+  /// monthly | quarterly | yearly
+  billingCycle       String           @default("monthly") @db.VarChar(20)
+  /// Agreed price per billing cycle, ₹, before tax.
+  price              Decimal          @default(0) @db.Decimal(12, 2)
+  taxRatePct         Decimal          @default(18) @db.Decimal(5, 2)
+  /// Per-contract limits replacing the plan's ({ users: 40, voiceAgents: null (= unlimited) ... }).
+  limitsOverride     Json?
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  autoRenew          Boolean          @default(true)
+  contractId         String?
+  notes              String?          @db.VarChar(1000)
+  createdBy          String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contract           BillingContract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+
+  @@index([status, currentPeriodEnd])
+  @@index([contractId])
+}
+
+/// Tacksharp's invoice to an organization for a subscription period (not the finance module's customer invoices). No
+/// payment gateway is connected: payment is recorded by a platform admin with its reference, never assumed.
+model PlatformInvoice {
+  id               String       @id @default(cuid())
+  number           String       @unique @db.VarChar(40)
+  organizationId   String
+  subscriptionId   String?
+  description      String       @db.VarChar(300)
+  periodStart      DateTime
+  periodEnd        DateTime
+  subtotal         Decimal      @db.Decimal(12, 2)
+  taxRatePct       Decimal      @db.Decimal(5, 2)
+  tax              Decimal      @db.Decimal(12, 2)
+  total            Decimal      @db.Decimal(12, 2)
+  /// issued | paid | void
+  status           String       @default("issued") @db.VarChar(20)
+  issuedAt         DateTime     @default(now())
+  dueAt            DateTime
+  paidAt           DateTime?
+  paymentReference String?      @db.VarChar(120)
+  voidReason       String?      @db.VarChar(300)
+  createdBy        String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, periodStart])
+  @@index([organizationId, issuedAt])
+  @@index([status, dueAt])
 }

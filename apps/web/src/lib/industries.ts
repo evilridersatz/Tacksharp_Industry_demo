@@ -2,7 +2,7 @@ import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
-  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, type LucideIcon, AudioLines } from 'lucide-react';
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, Receipt, type LucideIcon, AudioLines } from 'lucide-react';
 
 /**
  * Industry registry (web). The server decides WHICH industry a workspace is (GET /industry/workspace); this file decides
@@ -42,6 +42,7 @@ const WORKSPACE_TOOLS: NavItem[] = [
   { href: '/settings/integrations', label: 'Integrations', icon: PlugZap },
   { href: '/settings/ai-providers', label: 'AI providers', icon: Cpu },
   { href: '/settings/diagnostics', label: 'System health', icon: Activity },
+  { href: '/settings/billing', label: 'Plan & billing', icon: Receipt },
 ];
 const SETUP: NavGroup = { section: 'Setup', items: [{ href: '/settings', label: 'Settings', icon: Settings }, ...WORKSPACE_TOOLS] };
 
