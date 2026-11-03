@@ -25,7 +25,7 @@ type Detail = Omit<Row, 'customer' | 'lastMessage'> & {
   customer: { id: string; name: string | null; phone: string | null; email: string | null; language: string | null; tags: unknown; source: string | null; messagingConsent: boolean; callingConsent: boolean; optedOutAt: string | null; doNotContact: boolean; createdAt: string } | null;
   orders: Array<{ id: string; orderNumber: string; status: string; total: number; createdAt: string }>;
   leads: Array<{ id: string; status: string; source: string | null }>;
-  replyWindow: { open: boolean; note: string };
+  replyWindow: { open: boolean; note: string; comment?: boolean };
   notes: Array<{ id: string; body: string; author: string; createdAt: string }>;
   messages: Message[];
 };
@@ -37,8 +37,8 @@ const STATUS_LABEL = { open: 'Open', pending: 'Pending', resolved: 'Resolved' } 
 const MANAGE = ['admin', 'manager', 'team_lead'];
 const REPLY = [...MANAGE, 'sales', 'front_desk', 'reception', 'operator', 'support'];
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger', voice: 'Phone', web: 'Web chat' };
-const SOCIAL = ['instagram', 'messenger'];
+const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger', instagram_comment: 'Instagram comment', voice: 'Phone', web: 'Web chat' };
+const SOCIAL = ['instagram', 'messenger', 'instagram_comment'];
 /** Who the conversation is with: a phone number, or (Instagram / Messenger) the channel and a masked Meta id. */
 const contactLine = (channel: string, externalId: string | null) => (SOCIAL.includes(channel) ? `${CHANNEL_LABEL[channel]} id ••${(externalId ?? '').slice(-4)}` : formatPhone(externalId));
 
@@ -70,7 +70,7 @@ export default function InboxPage() {
         <Segmented label="Assignee" value={who} onChange={setWho} options={[{ value: 'all', label: 'Everyone' }, { value: 'me', label: `Mine (${data?.counts.mine ?? 0})` }, { value: 'unassigned', label: `Unassigned (${data?.counts.unassigned ?? 0})` }]} />
         <select aria-label="Channel" className={cx(inputCls.replace('w-full', ''), 'h-9 w-44')} value={channel} onChange={(e) => setChannel(e.target.value)}>
           <option value="all">All channels</option>
-          {['whatsapp', 'instagram', 'messenger', 'voice'].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+          {['whatsapp', 'instagram', 'messenger', 'instagram_comment', 'voice'].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
         </select>
         {data && data.counts.needsHuman > 0 && <Badge tone="rose">{data.counts.needsHuman} need a person</Badge>}
         {data && data.counts.aiOff > 0 && <Badge tone="amber">{data.counts.aiOff} handled by the team (AI off)</Badge>}
@@ -152,7 +152,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
             <p className="truncate text-[15px] font-semibold text-ink">{d.customer ? displayName(d.customer) : contactLine(d.channel, d.externalId)}</p>
             <p className="text-[12px] text-muted" data-testid="contact-line">{contactLine(d.channel, d.externalId)} · {CHANNEL_LABEL[d.channel] ?? d.channel}</p>
           </div>
-          {d.aiEnabled ? (
+          {d.channel === 'instagram_comment' ? null : d.aiEnabled ? (
             <Button disabled={!canReply} busy={busy === 'take'} onClick={() => void run('take', () => api.post(`/inbox/conversations/${id}/take-over`), 'You are handling this conversation. The AI will not reply.')}><Hand className="size-4" />Take over</Button>
           ) : (
             <Button disabled={!canReply} busy={busy === 'ai'} onClick={() => void run('ai', () => api.post(`/inbox/conversations/${id}/return-to-ai`), 'Returned to the AI.')}><Bot className="size-4" />Return to AI</Button>
@@ -174,7 +174,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
           </div>
         )}
         <div className="max-h-[440px] flex-1 overflow-y-auto p-4">
-          <Thread messages={d.messages} name={d.customer ? displayName(d.customer) : 'the customer'} />
+          <Thread messages={d.messages} name={d.customer ? displayName(d.customer) : 'the customer'} channel={d.channel} />
         </div>
         <Drafts d={d} id={id} canReply={canReply} busy={busy} run={run} />
         <div className="border-t border-line p-3">
@@ -188,6 +188,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
             )}
           </div>
           {tab === 'reply' && !d.replyWindow.open && <p className="mb-2 flex items-center gap-1.5 text-[12px] text-amber-800"><Lock className="size-3.5" aria-hidden />{d.replyWindow.note}</p>}
+          {tab === 'reply' && d.replyWindow.comment && <p className="mb-2 text-[12px] text-muted" data-testid="comment-note">{d.replyWindow.note}</p>}
           <form className="flex gap-2" onSubmit={async (e) => {
             e.preventDefault();
             const body = text.trim();
@@ -196,7 +197,12 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
             if (ok) setText('');
           }}>
             <textarea className={cx(inputCls, 'h-20 py-2')} aria-label={tab === 'reply' ? 'Reply message' : 'Internal note'} placeholder={tab === 'reply' ? `Write to the customer (sent as your business on ${CHANNEL_LABEL[d.channel] ?? 'WhatsApp'})…` : 'Write a note for your team (never sent to the customer)…'} value={text} onChange={(e) => setText(e.target.value)} disabled={!canReply || (tab === 'reply' && !d.replyWindow.open)} />
-            <Button type="submit" variant="primary" className="self-end" busy={busy === 'send'} disabled={!canReply || !text.trim() || (tab === 'reply' && !d.replyWindow.open)}>{tab === 'reply' ? <><Send className="size-4" />Send</> : <><StickyNote className="size-4" />Add note</>}</Button>
+            <div className="flex flex-col justify-end gap-1.5">
+              {tab === 'reply' && d.replyWindow.comment && (
+                <Button type="button" className="whitespace-nowrap" busy={busy === 'private'} disabled={!canReply || !text.trim()} onClick={async () => { if (await run('private', () => api.post(`/inbox/conversations/${id}/private-reply`, { text: text.trim() }), (r) => ((r as { sent?: boolean; notSentReason?: string }).sent === false ? `Saved but NOT sent: ${(r as { notSentReason?: string }).notSentReason}` : 'Private message sent.'))) setText(''); }}>Send as private message</Button>
+              )}
+              <Button type="submit" variant="primary" className="whitespace-nowrap" busy={busy === 'send'} disabled={!canReply || !text.trim() || (tab === 'reply' && !d.replyWindow.open)}>{tab === 'reply' ? <><Send className="size-4" />{d.replyWindow.comment ? 'Reply publicly' : 'Send'}</> : <><StickyNote className="size-4" />Add note</>}</Button>
+            </div>
           </form>
         </div>
       </div>

@@ -225,7 +225,13 @@ export async function metaCapiSend(
  *   GET  https://graph.facebook.com/{version}/{page-id}?fields=id,name,instagram_business_account
  *   POST https://graph.facebook.com/{version}/{page-id}/messages
  *        body { recipient: { id: PSID | IGSID }, messaging_type: "RESPONSE", message: { text } } -> { recipient_id, message_id }
+ *        with the Human Agent tag (a person replying up to 7 days after the customer's last message; the app needs Meta's
+ *        Human Agent permission): messaging_type "MESSAGE_TAG", tag "HUMAN_AGENT"
  *   GET  https://graph.facebook.com/{version}/{psid|igsid}?fields=name   (display name; best effort)
+ *   Instagram comments (developers.facebook.com/docs/instagram-platform/comment-moderation, .../private-replies):
+ *   POST https://graph.facebook.com/{version}/{ig-comment-id}/replies       body { message }                -> { id }
+ *   POST https://graph.facebook.com/{version}/{ig-account-id}/messages      body { recipient: { comment_id }, message: { text } }
+ *        (one private message to the commenter, within 7 days of the comment)
  * Page access token in the Authorization header, never in a URL. Sends are never retried here (a timeout may still
  * have delivered the message).
  */
@@ -239,8 +245,8 @@ export async function metaPage(fetchImpl: FetchLike, token: string, pageId: stri
   return fail(r, 'Reading the Page', 'Check the Page ID and that the token belongs to this Page.');
 }
 
-export async function metaSocialSend(fetchImpl: FetchLike, token: string, pageId: string, recipientId: string, text: string): Promise<ProviderResult & { messageId?: string; ambiguous?: boolean }> {
-  const body = { recipient: { id: recipientId }, messaging_type: 'RESPONSE', message: { text: text.slice(0, 1000) } };
+export async function metaSocialSend(fetchImpl: FetchLike, token: string, pageId: string, recipientId: string, text: string, opts: { humanAgent?: boolean } = {}): Promise<ProviderResult & { messageId?: string; ambiguous?: boolean }> {
+  const body = { recipient: { id: recipientId }, ...(opts.humanAgent ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' } : { messaging_type: 'RESPONSE' }), message: { text: text.slice(0, 1000) } };
   const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(pageId)}/messages`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, [token], false);
   if (r.status === 200) {
     const j = (r.json ?? {}) as { message_id?: string };
@@ -249,6 +255,29 @@ export async function metaSocialSend(fetchImpl: FetchLike, token: string, pageId
   }
   const res = fail(r, 'Sending the message', r.status === 400 ? 'Outside the 24-hour window, or the person cannot be messaged.' : undefined);
   return { ...res, ambiguous: r.code === 'timeout' };
+}
+
+/** Public reply under an Instagram comment. */
+export async function metaCommentReply(fetchImpl: FetchLike, token: string, commentId: string, text: string): Promise<ProviderResult & { messageId?: string; ambiguous?: boolean }> {
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(commentId)}/replies`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text.slice(0, 2200) }) }, [token], false);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { id?: string };
+    if (!j.id) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered without a reply id: posting unknown.', ambiguous: true };
+    return { ok: true, latencyMs: r.ms, messageId: j.id, message: 'Reply posted.' };
+  }
+  return { ...fail(r, 'Replying to the comment', r.status === 400 ? 'The comment may have been deleted, or the app lacks instagram_manage_comments.' : undefined), ambiguous: r.code === 'timeout' };
+}
+
+/** One private Instagram message to the person who commented (within 7 days of the comment). */
+export async function metaPrivateReply(fetchImpl: FetchLike, token: string, igAccountId: string, commentId: string, text: string): Promise<ProviderResult & { messageId?: string; ambiguous?: boolean }> {
+  const body = { recipient: { comment_id: commentId }, message: { text: text.slice(0, 1000) } };
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(igAccountId)}/messages`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, [token], false);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { message_id?: string };
+    if (!j.message_id) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered without a message id: delivery unknown.', ambiguous: true };
+    return { ok: true, latencyMs: r.ms, messageId: j.message_id, message: 'Private reply sent.' };
+  }
+  return { ...fail(r, 'Sending the private reply', r.status === 400 ? 'Only one private reply per comment, within 7 days of it.' : undefined), ambiguous: r.code === 'timeout' };
 }
 
 export async function metaProfileName(fetchImpl: FetchLike, token: string, userId: string): Promise<string | undefined> {

@@ -298,9 +298,28 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 - Tests: `test/social.integration.spec.ts` (6), `test/social-ai.integration.spec.ts` (8), `tests/ui-social.py` (24;
   real signed webhooks to the running API; the passing connection test is seeded because Meta is unreachable here; the
   agent is tested and published through the real API).
-- **Pending:** media download / viewing, delivery and read receipts,
-  comments and story replies, the Human Agent tag (7-day window). **Not verified against Meta**: needs a Page, an app
-  with `pages_messaging` / `instagram_manage_messages` and the webhook subscribed.
+- **Delivery / read receipts:** Messenger `delivery` (`mids` when present, and the `watermark` time) and `read`
+  (`watermark`); Instagram `read.mid` (that message and everything sent before it). Same forward-only rule as WhatsApp
+  (accepted -> delivered -> read); the thread shows "sent to Instagram / Messenger", "delivered", "read".
+- **Photos and files:** never downloaded or stored by Tacksharp. Only Meta CDN links (https on fbcdn / cdninstagram /
+  fbsbx / facebook / instagram hosts) from the signed webhook are kept; the inbox shows images straight from Meta (no
+  referrer) and other files as links. Meta's links expire after a while.
+- **Story replies:** labelled "[Reply to your story]" with a link to the story; story mentions are labelled.
+- **Human Agent tag** (setting "Human Agent replies (7 days)", off by default): a person (never the AI, never an
+  approved AI draft) may reply 24 h - 7 days after the customer's last message with `messaging_type: MESSAGE_TAG`,
+  `tag: HUMAN_AGENT`. Turn it on only after Meta approved the app for the Human Agent permission.
+- **Instagram comments** (subscribe the Instagram `comments` field): both webhook formats (Instagram Login
+  `entry.field/value`, Facebook Login `entry.changes[]`); each comment is its own inbox conversation (channel
+  `instagram_comment`, filter "Instagram comment") linked to the commenter (`@username`); stored once; our own replies
+  ignored. The AI never answers comments. Staff reply publicly (`POST /{comment-id}/replies`) or send the one private
+  message Meta allows (`POST /{ig-account-id}/messages`, `recipient.comment_id`, within 7 days; refused when opted out
+  or already sent). Same live gate (DRY_RUN, approved test ids, demo customers). `POST /inbox/conversations/:id/private-reply`.
+- Tests: `test/social-extras.integration.spec.ts` (4), `tests/ui-social.py` (29 in all).
+- **Not built:** Facebook Page post comments (Meta's comment webhook format for Pages could not be confirmed from its
+  documentation here), reactions, hiding / deleting comments, AI replies to comments. **Not verified against Meta**:
+  needs a Page, an app with `pages_messaging` / `instagram_manage_messages` / `instagram_manage_comments`, the webhook
+  subscribed (messages, message_deliveries, message_reads, messaging_seen, comments) and, for the 7-day tag, the Human
+  Agent permission.
 
 ## Enterprise subscriptions (P4)
 

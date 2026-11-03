@@ -19,7 +19,9 @@ const DELIVERY: Record<string, { label: string; bad?: boolean }> = {
   discarded: { label: 'discarded (not sent)' },
 };
 
-export function Thread({ messages, name }: { messages: Message[]; name: string }) {
+const CHANNEL_NAME: Record<string, string> = { instagram: 'Instagram', messenger: 'Messenger', instagram_comment: 'Instagram' };
+
+export function Thread({ messages, name, channel }: { messages: Message[]; name: string; channel?: string }) {
   if (messages.length === 0) {
     return <Empty icon={<MessageSquare className="size-6" />} title="No WhatsApp messages yet">The thread appears here once {name} replies or the AI sends a message.</Empty>;
   }
@@ -37,6 +39,7 @@ export function Thread({ messages, name }: { messages: Message[]; name: string }
             {showDay && <p className="mx-auto my-2 w-fit rounded-full bg-white px-2.5 py-0.5 text-[11px] font-semibold text-muted shadow-sm">{day}</p>}
             <div className={cx('flex flex-col', mine ? 'items-end' : 'items-start')}>
               <MediaBadge meta={m.metadata} />
+              <SocialMedia meta={m.metadata} />
               <p
                 className={cx(
                   'max-w-[78%] rounded-[14px] px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap',
@@ -49,14 +52,41 @@ export function Thread({ messages, name }: { messages: Message[]; name: string }
                 {mine ? `${(m.metadata as { author?: string; authorName?: string } | null)?.author === 'staff' ? (m.metadata as { authorName?: string }).authorName ?? 'Team' : (m.metadata as { autoReply?: boolean } | null)?.autoReply ? 'Automatic' : 'AI'} · ` : ''}
                 {timeOnly(m.createdAt)}
                 {mine && (m.metadata as { simulated?: boolean } | null)?.simulated && <span className="ml-1 font-semibold text-amber-800"> · not sent (test mode)</span>}
+                {mine && (m.metadata as { publicReply?: boolean } | null)?.publicReply && <span className="ml-1"> · public reply</span>}
+                {mine && (m.metadata as { privateReply?: boolean } | null)?.privateReply && <span className="ml-1"> · private message</span>}
+                {mine && (m.metadata as { humanAgentTag?: boolean } | null)?.humanAgentTag && <span className="ml-1"> · Human Agent tag</span>}
                 {mine && m.deliveryStatus && DELIVERY[m.deliveryStatus] && (
-                  <span className={cx('ml-1', DELIVERY[m.deliveryStatus].bad && 'font-semibold text-rose')}> · {DELIVERY[m.deliveryStatus].label}</span>
+                  <span className={cx('ml-1', DELIVERY[m.deliveryStatus].bad && 'font-semibold text-rose')}> · {m.deliveryStatus === 'accepted' && channel && CHANNEL_NAME[channel] ? `sent to ${CHANNEL_NAME[channel]}` : DELIVERY[m.deliveryStatus].label}</span>
                 )}
               </span>
             </div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Instagram / Messenger media: the Meta CDN links the webhook carried (validated on the server, never downloaded).
+ * Images load straight from Meta in the viewer's browser without a referrer; links expire after a while.
+ */
+function SocialMedia({ meta }: { meta: unknown }) {
+  const s = (meta as { social?: { media?: Array<{ type: string; url: string }>; story?: { url: string | null } } } | null)?.social;
+  if (!s?.media?.length && !s?.story?.url) return null;
+  return (
+    <div className="mb-1 flex max-w-[78%] flex-wrap gap-1.5" data-testid="social-media">
+      {s.story?.url && <a href={s.story.url} target="_blank" rel="noreferrer noopener" className="text-[11.5px] font-semibold text-brand underline">Open the story they replied to</a>}
+      {(s.media ?? []).map((m, i) =>
+        m.type === 'image' ? (
+          <a key={i} href={m.url} target="_blank" rel="noreferrer noopener" title="Photo from Meta (link expires)">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={m.url} alt="Photo sent by the customer" referrerPolicy="no-referrer" loading="lazy" className="max-h-40 rounded-[10px] border border-line object-cover" />
+          </a>
+        ) : (
+          <a key={i} href={m.url} target="_blank" rel="noreferrer noopener" className="rounded-full bg-white px-2.5 py-1 text-[11.5px] font-semibold text-brand shadow-sm">Open {m.type} (Meta link, expires)</a>
+        ),
+      )}
     </div>
   );
 }

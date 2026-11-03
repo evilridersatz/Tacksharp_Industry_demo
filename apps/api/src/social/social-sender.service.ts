@@ -8,10 +8,16 @@ import { log } from '../common/logger.js';
 
 export const SOCIAL_CHANNELS = ['instagram', 'messenger'] as const;
 export type SocialChannel = (typeof SOCIAL_CHANNELS)[number];
+/** Instagram comments live in the inbox as their own channel (one conversation per comment). */
+export const COMMENT_CHANNEL = 'instagram_comment';
 export const isSocialChannel = (c: string | null | undefined): c is SocialChannel => (SOCIAL_CHANNELS as readonly string[]).includes(c ?? '');
 
 /** Meta's standard messaging window: a business may reply for 24 hours after the person's last message. */
 export const SOCIAL_WINDOW_MS = 24 * 3600_000;
+/** Human Agent tag: a person (never the AI) may reply up to 7 days after the last message, when Meta approved the app. */
+export const HUMAN_AGENT_WINDOW_MS = 7 * 24 * 3600_000;
+/** Instagram comments: one private reply, within 7 days of the comment. */
+export const PRIVATE_REPLY_WINDOW_MS = 7 * 24 * 3600_000;
 
 /**
  * Live gate for Instagram / Messenger, the same rules as every other send: DRY_RUN never sends; demo customers are
@@ -38,26 +44,36 @@ export class SocialSenderService {
     private readonly creds: CredentialsService,
   ) {}
 
-  /** Refusals a person must see (thrown by the caller as 400): opt-out, window closed, not connected. */
-  async check(org: string, conversation: { channel: string; externalId: string | null; customerId: string | null }): Promise<{ ok: true; customer: { id: string; isDemo: boolean } } | { ok: false; reason: string }> {
+  /**
+   * Refusals a person must see (thrown by the caller as 400): opt-out, window closed, not connected. `staff` = a person
+   * writes the reply: then, with the Human Agent setting on, 24 h - 7 days is allowed with the HUMAN_AGENT tag.
+   */
+  async check(org: string, conversation: { channel: string; externalId: string | null; customerId: string | null }, opts: { staff?: boolean } = {}): Promise<{ ok: true; customer: { id: string; isDemo: boolean }; humanAgent?: boolean } | { ok: false; reason: string }> {
     if (!isSocialChannel(conversation.channel) || !conversation.externalId) return { ok: false, reason: 'Not an Instagram / Messenger conversation.' };
     const customer = conversation.customerId ? await this.prisma.customer.findFirst({ where: { id: conversation.customerId, organizationId: org } }) : null;
     if (!customer) return { ok: false, reason: 'This conversation has no customer record.' };
     if (customer.optedOutAt || customer.doNotContact) return { ok: false, reason: 'The customer opted out (STOP) or is marked do-not-contact: no message can be sent.' };
-    if (!customer.lastInboundAt || Date.now() - customer.lastInboundAt.getTime() >= SOCIAL_WINDOW_MS) return { ok: false, reason: 'More than 24 hours since the customer last wrote: Meta does not allow a reply now. Wait for the customer to write again.' };
-    return { ok: true, customer: { id: customer.id, isDemo: customer.isDemo } };
+    const age = customer.lastInboundAt ? Date.now() - customer.lastInboundAt.getTime() : Infinity;
+    if (age < SOCIAL_WINDOW_MS) return { ok: true, customer: { id: customer.id, isDemo: customer.isDemo } };
+    if (opts.staff && age < HUMAN_AGENT_WINDOW_MS && (await this.humanAgentOn(org))) return { ok: true, customer: { id: customer.id, isDemo: customer.isDemo }, humanAgent: true };
+    return { ok: false, reason: age < HUMAN_AGENT_WINDOW_MS && opts.staff ? 'More than 24 hours since the customer last wrote. Meta allows a reply by a person up to 7 days only with the Human Agent permission (turn it on in the Instagram & Messenger settings once Meta approved it).' : 'More than 24 hours since the customer last wrote: Meta does not allow a reply now. Wait for the customer to write again.' };
+  }
+
+  async humanAgentOn(org: string) {
+    const c = await this.creds.resolve(org, 'meta_social').catch(() => null);
+    return c?.source === 'organization' && c.config.humanAgentTag === 'on';
   }
 
   windowOpen(lastInboundAt: Date | null | undefined) {
     return Boolean(lastInboundAt && Date.now() - lastInboundAt.getTime() < SOCIAL_WINDOW_MS);
   }
 
-  async send(org: string, channel: SocialChannel, recipientId: string, isDemo: boolean, text: string): Promise<SocialSendResult> {
+  async send(org: string, channel: SocialChannel, recipientId: string, isDemo: boolean, text: string, opts: { humanAgent?: boolean } = {}): Promise<SocialSendResult> {
     const gate = socialLiveGate(recipientId, isDemo);
     if (!gate.live) return { sent: false, notSentReason: gate.reason };
     const cred = await this.creds.resolve(org, 'meta_social');
     if (cred.source !== 'organization') return { sent: false, notSentReason: `Instagram & Messenger is not connected: ${cred.reason ?? 'not enabled'}` };
-    const r = await clients.metaSocialSend(this.fetchImpl, cred.secrets.pageAccessToken, cred.config.pageId, recipientId, text);
+    const r = await clients.metaSocialSend(this.fetchImpl, cred.secrets.pageAccessToken, cred.config.pageId, recipientId, text, { humanAgent: opts.humanAgent });
     await this.prisma.integrationEvent
       .create({ data: { organizationId: org, provider: 'meta_social', kind: 'message', ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: `${channel}: ${r.message}`.slice(0, 500), units: 1, unitType: 'messages', source: 'organization' } })
       .catch(() => undefined);
@@ -65,6 +81,26 @@ export class SocialSenderService {
       log.warn('social.send_failed', { channel, errorCode: r.errorCode });
       return { sent: false, error: r.message, ambiguous: r.ambiguous };
     }
+    return { sent: true, messageId: r.messageId };
+  }
+
+  /**
+   * Instagram comment: a public reply under it, or the one private message to the commenter. `userId` (the commenter)
+   * is what the live gate checks; the Graph calls address the comment.
+   */
+  async commentReply(org: string, kind: 'public' | 'private', commentId: string, userId: string, isDemo: boolean, text: string): Promise<SocialSendResult> {
+    const gate = socialLiveGate(userId, isDemo);
+    if (!gate.live) return { sent: false, notSentReason: gate.reason };
+    const cred = await this.creds.resolve(org, 'meta_social');
+    if (cred.source !== 'organization') return { sent: false, notSentReason: `Instagram & Messenger is not connected: ${cred.reason ?? 'not enabled'}` };
+    if (kind === 'private' && !cred.config.instagramAccountId) return { sent: false, error: 'The Instagram account ID is not set in the Instagram & Messenger settings.' };
+    const r = kind === 'public'
+      ? await clients.metaCommentReply(this.fetchImpl, cred.secrets.pageAccessToken, commentId, text)
+      : await clients.metaPrivateReply(this.fetchImpl, cred.secrets.pageAccessToken, cred.config.instagramAccountId, commentId, text);
+    await this.prisma.integrationEvent
+      .create({ data: { organizationId: org, provider: 'meta_social', kind: 'message', ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: `instagram comment (${kind}): ${r.message}`.slice(0, 500), units: 1, unitType: 'messages', source: 'organization' } })
+      .catch(() => undefined);
+    if (!r.ok) return { sent: false, error: r.message, ambiguous: r.ambiguous };
     return { sent: true, messageId: r.messageId };
   }
 

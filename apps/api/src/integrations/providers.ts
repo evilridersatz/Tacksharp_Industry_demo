@@ -63,6 +63,7 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
     { key: 'pageId', label: 'Facebook Page ID', secret: false, required: true, help: 'Page → About → Page transparency, or Business settings → Pages.' },
     { key: 'instagramAccountId', label: 'Instagram account ID', secret: false, required: false, help: 'The Instagram professional account linked to this Page. Leave empty for Messenger only.' },
     { key: 'autoReply', label: 'Automatic acknowledgement', secret: false, required: false, help: 'Sent once when a customer writes after 24 hours of silence, e.g. "Thanks! Our team will reply shortly." Leave empty for none.' },
+    { key: 'humanAgentTag', label: 'Human Agent replies (7 days)', secret: false, required: false, options: ['off', 'on'], help: 'Turn on only after Meta approved your app for the Human Agent permission: your team (never the AI) may then reply up to 7 days after the customer\'s last message.' },
   ],
 };
 

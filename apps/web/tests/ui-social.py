@@ -101,6 +101,30 @@ with sync_playwright() as p:
         pg.get_by_label('Channel').select_option('instagram'); pg.wait_for_timeout(2500)
         check('Instagram filter shows the Instagram conversation', items.count() == 1 and 'Instagram' in items.first.inner_text())
 
+        # ---------------------------------------------------------------- photos and Instagram comments
+        img = f'https://scontent.cdninstagram.com/v/t51/{run}.jpg'
+        st, r = webhook({'object': 'instagram', 'entry': [{'id': IG, 'time': int(time.time() * 1000), 'messaging': [{'sender': {'id': I_USER}, 'recipient': {'id': IG}, 'timestamp': int(time.time() * 1000), 'message': {'mid': f'm.ui.{run}.img', 'attachments': [{'type': 'image', 'payload': {'url': img}}]}}]}]})
+        cid = '179' + run + '77'
+        st2, r2 = webhook({'object': 'instagram', 'entry': [{'id': IG, 'time': int(time.time() * 1000), 'field': 'comments', 'value': {'id': cid, 'text': f'Price of the combo? {run}', 'from': {'id': A_USER, 'username': f'kavya{run}'}, 'media': {'id': '555', 'media_product_type': 'FEED'}}}]})
+        check('signed Instagram photo and comment stored', st == 200 and r.get('stored') == 1 and st2 == 200 and r2.get('stored') == 1, f'{r} {r2}')
+        pg.goto(WEB + '/inbox'); pg.wait_for_timeout(2000)
+        pg.get_by_label('Channel').select_option('instagram'); pg.get_by_label('Search conversations').fill(run); pg.wait_for_timeout(2500)
+        pg.get_by_role('list', name='Conversations').get_by_role('listitem').first.click(); pg.wait_for_timeout(1500)
+        photo = pg.get_by_role('img', name='Photo sent by the customer')
+        check('the photo shows in the thread from Meta\'s CDN (not stored by us), no referrer', photo.count() == 1 and photo.get_attribute('src') == img and photo.get_attribute('referrerpolicy') == 'no-referrer')
+        pg.get_by_label('Channel').select_option('instagram_comment'); pg.wait_for_timeout(2500)
+        items = pg.get_by_role('list', name='Conversations').get_by_role('listitem')
+        check('"Instagram comment" filter shows the comment from @username', items.count() == 1 and f'@kavya{run}' in items.first.inner_text(), items.first.inner_text() if items.count() else '')
+        items.first.click(); pg.wait_for_timeout(1500)
+        check('comment view: public-reply note, both reply buttons, no Return to AI (the AI never answers comments)', pg.get_by_test_id('comment-note').count() == 1 and pg.get_by_role('button', name='Reply publicly').count() == 1 and pg.get_by_role('button', name='Send as private message').count() == 1 and pg.get_by_role('button', name='Return to AI').count() == 0)
+        pg.get_by_role('tab', name='Reply to customer').click()
+        pg.get_by_label('Reply message').fill(f'Rs 299 today {run}'); pg.get_by_role('button', name='Reply publicly').click(); pg.wait_for_timeout(2000)
+        pg.get_by_label('Reply message').fill(f'Sending the menu privately {run}'); pg.get_by_role('button', name='Send as private message').click(); pg.wait_for_timeout(2000)
+        pub = sql(f"SELECT metadata FROM Message WHERE content='Rs 299 today {run}'").replace(' ', '')
+        prv = sql(f"SELECT metadata FROM Message WHERE content='Sending the menu privately {run}'").replace(' ', '')
+        check('public reply and private message recorded; DRY_RUN: not sent', '"publicReply":true' in pub and '"privateReply":true' in prv and '"simulated":true' in pub and '"simulated":true' in prv and pg.get_by_text('public reply', exact=False).count() >= 1, (pub + prv)[:200])
+        pg.screenshot(path=os.path.join(SHOTS, 'inbox-instagram-comment.png'))
+
         # ---------------------------------------------------------------- AI replies
         def api(path, body=None, method=None):
             return pg.evaluate("""async ([u, b, m]) => { const r = await fetch(u, { method: m || (b ? 'POST' : 'GET'), credentials: 'include', headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; }""", [API + path, body, method])
@@ -144,7 +168,7 @@ with sync_playwright() as p:
         check('no page errors', not errs, '; '.join(errs)[:200])
     finally:
         cust = sql(f"SELECT GROUP_CONCAT(CONCAT('''', customerId, '''')) FROM SocialIdentity WHERE organizationId='{org}' AND externalUserId IN ('{M_USER}','{I_USER}','{A_USER}')")
-        sql(f"DELETE FROM Conversation WHERE organizationId='{org}' AND externalId IN ('{M_USER}','{I_USER}','{A_USER}')")
+        sql(f"DELETE FROM Conversation WHERE organizationId='{org}' AND (externalId IN ('{M_USER}','{I_USER}','{A_USER}') OR (channel='instagram_comment' AND externalId LIKE '179{run}%'))")
         if agent_id: sql(f"DELETE FROM VoiceAgent WHERE id='{agent_id}'")
         if kb_id: sql(f"DELETE FROM KnowledgeBase WHERE id='{kb_id}'")
         if cust: sql(f"DELETE FROM Customer WHERE id IN ({cust})")

@@ -278,7 +278,7 @@ describe.skipIf(!enabled)('Visual Workflow Studio (integration)', () => {
     await svc.collect(later(0));
     await drive((await runsOf(tagger.id))[0].id);
     const foreign = await customer(ORG_B);
-    await crm.update(ORG_B, { sub: 'b', org: ORG_B }, foreign.id, { tags: ['vip'] });
+    await crm.update(ORG_B, { sub: 'b' } as any, foreign.id, { tags: ['vip'] });
     await svc.collect(later(0));
     runs = await runsOf(w.id);
     expect(runs.map((r: any) => r.customerId).sort()).toEqual([fresh.id, chained.id].sort());

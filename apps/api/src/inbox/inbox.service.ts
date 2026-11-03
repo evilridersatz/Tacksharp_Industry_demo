@@ -7,7 +7,7 @@ import { PERMISSIONS, can } from '../governance/permissions.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
-import { SocialSenderService, isSocialChannel } from '../social/social-sender.service.js';
+import { COMMENT_CHANNEL, PRIVATE_REPLY_WINDOW_MS, SocialSenderService, isSocialChannel } from '../social/social-sender.service.js';
 import { AI_MODES, GUIDANCE_MAX_HOURS, activeGuidance, cleanGuidance } from './steering.js';
 
 export type Actor = { sub: string; org: string; role: string };
@@ -140,7 +140,9 @@ export class InboxService {
       leads,
       replyWindow: c.channel === 'whatsapp'
         ? { open: windowOpen, note: windowOpen ? 'You can reply with free text (customer wrote in the last 24 h).' : 'More than 24 h since the customer wrote: WhatsApp allows only an approved template. Free-text replies are blocked.' }
-        : isSocialChannel(c.channel)
+        : c.channel === COMMENT_CHANNEL
+          ? { open: true, note: 'Your reply is posted publicly under the comment. You can also send the commenter one private message, within 7 days of the comment.', comment: true }
+          : isSocialChannel(c.channel)
           ? (() => { const open = Boolean(this.social?.windowOpen(c.Customer?.lastInboundAt)); return { open, note: open ? `You can reply (customer wrote in the last 24 h).${c.aiEnabled ? ' The AI agent chosen in the Instagram & Messenger settings answers while the AI is on.' : ''}` : 'More than 24 h since the customer wrote: Meta does not allow a reply until they write again.' }; })()
           : { open: false, note: 'Replies from the inbox are available for WhatsApp, Instagram and Messenger conversations.' },
       notes: c.notes.map((n) => ({ id: n.id, body: n.body, author: n.authorName ?? users.get(n.authorId) ?? 'Team member', createdAt: n.createdAt })),
@@ -244,6 +246,7 @@ export class InboxService {
   /** Back to the AI with the full history kept; the "needs a person" flag is cleared. */
   async returnToAi(actor: Actor, id: string) {
     const c = await this.get(actor.org, id);
+    if (c.channel === COMMENT_CHANNEL) throw new BadRequestException('The AI does not answer Instagram comments: the team replies publicly or with one private message.');
     if (isSocialChannel(c.channel) && !(await this.socialAgentActive(actor.org))) throw new BadRequestException('No AI agent answers Instagram / Messenger: choose a published agent in Settings → Integrations → Instagram & Messenger first.');
     await this.prisma.conversation.update({ where: { id: c.id }, data: { aiEnabled: true, status: c.status === 'human_handoff' ? 'active' : c.status, handoffReason: null, handoffAt: null } });
     await this.audit(actor, c.id, 'inbox.returned_to_ai', {});
@@ -269,6 +272,7 @@ export class InboxService {
     const c = await this.get(actor.org, id);
     const text = typeof body === 'string' ? body.trim() : '';
     if (!text || text.length > 4096) throw new BadRequestException('Write a reply (up to 4096 characters).');
+    if (c.channel === COMMENT_CHANNEL) return this.replyComment(actor, c, text, 'public');
     if (isSocialChannel(c.channel)) return this.replySocial(actor, c, text);
     if (c.channel !== 'whatsapp' || !c.externalId) throw new BadRequestException('Replies from the inbox are available for WhatsApp, Instagram and Messenger conversations.');
     const customer = c.customerId ? await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: actor.org } }) : null;
@@ -309,23 +313,63 @@ export class InboxService {
   /** Instagram / Messenger reply: same rules (opt-out, 24 h window, live gate), sent through the organization's Page. */
   private async replySocial(actor: Actor, c: Awaited<ReturnType<InboxService['get']>>, text: string) {
     if (!this.social || !isSocialChannel(c.channel)) throw new BadRequestException('Instagram / Messenger sending is not available.');
-    const ok = await this.social.check(actor.org, c);
+    const ok = await this.social.check(actor.org, c, { staff: true });
     if (!ok.ok) throw new BadRequestException(ok.reason);
     const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
-    const r = await this.social.send(actor.org, c.channel, c.externalId!, ok.customer.isDemo, text);
+    const r = await this.social.send(actor.org, c.channel, c.externalId!, ok.customer.isDemo, text, { humanAgent: ok.humanAgent });
     const msg = await this.conversations.addMessage({
       organizationId: actor.org,
       conversationId: c.id,
       role: 'assistant',
       content: text,
       ...(r.messageId ? { externalId: r.messageId } : {}),
-      metadata: { author: 'staff', userId: actor.sub, authorName: user?.name ?? user?.email ?? 'Team member', ...(r.sent || r.error ? {} : { simulated: true, notSentReason: r.notSentReason }) } as never,
+      metadata: { author: 'staff', userId: actor.sub, authorName: user?.name ?? user?.email ?? 'Team member', ...(ok.humanAgent ? { humanAgentTag: true } : {}), ...(r.sent || r.error ? {} : { simulated: true, notSentReason: r.notSentReason }) } as never,
     });
     const deliveryStatus = r.sent ? 'accepted' : r.error ? (r.ambiguous ? 'unknown' : 'failed') : null;
     await this.prisma.message.update({ where: { id: msg.id }, data: { deliveryStatus, deliveryError: r.error?.slice(0, 500) ?? null, deliveryUpdatedAt: new Date() } }).catch(() => undefined);
     await this.prisma.conversation.update({ where: { id: c.id }, data: { assigneeId: c.assigneeId ?? actor.sub, inboxStatus: c.inboxStatus === 'resolved' ? 'open' : c.inboxStatus, updatedAt: new Date() } });
     await this.audit(actor, c.id, 'inbox.replied', { ok: !r.error, sent: r.sent, channel: c.channel });
     if (r.error) throw new BadRequestException(`${c.channel === 'instagram' ? 'Instagram' : 'Messenger'} did not accept the message${r.ambiguous ? ' (delivery unknown: not resent)' : ''}: ${r.error.slice(0, 200)}`);
+    return { ...(await this.detail(actor.org, c.id)), sent: r.sent, ...(r.sent ? {} : { notSentReason: r.notSentReason }) };
+  }
+
+  /** One private Instagram message to the person who wrote this comment (within 7 days; once). */
+  async privateCommentReply(actor: Actor, id: string, body: unknown) {
+    const c = await this.get(actor.org, id);
+    const text = typeof body === 'string' ? body.trim() : '';
+    if (!text || text.length > 1000) throw new BadRequestException('Write the private message (up to 1000 characters).');
+    if (c.channel !== COMMENT_CHANNEL) throw new BadRequestException('Private replies are for Instagram comments.');
+    return this.replyComment(actor, c, text, 'private');
+  }
+
+  /** Public reply under an Instagram comment, or the one private message to the commenter. Same live gate as all sends. */
+  private async replyComment(actor: Actor, c: Awaited<ReturnType<InboxService['get']>>, text: string, kind: 'public' | 'private') {
+    if (!this.social) throw new BadRequestException('Instagram sending is not available.');
+    const first = await this.prisma.message.findFirst({ where: { organizationId: actor.org, conversationId: c.id, role: 'user' }, orderBy: { createdAt: 'asc' } });
+    const meta = ((first?.metadata ?? {}) as { comment?: { commentId?: string; userId?: string } }).comment;
+    if (!first || !meta?.commentId || !meta.userId) throw new BadRequestException('This conversation has no Instagram comment.');
+    const customer = c.customerId ? await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: actor.org } }) : null;
+    if (kind === 'private') {
+      if (customer?.optedOutAt || customer?.doNotContact) throw new BadRequestException('The customer opted out (STOP) or is marked do-not-contact: no private message can be sent.');
+      if (Date.now() - first.createdAt.getTime() >= PRIVATE_REPLY_WINDOW_MS) throw new BadRequestException('More than 7 days since the comment: Meta no longer allows a private reply.');
+      const earlier = await this.prisma.message.findFirst({ where: { organizationId: actor.org, conversationId: c.id, role: 'assistant', metadata: { path: '$.privateReply', equals: true }, NOT: { deliveryStatus: 'failed' } } });
+      if (earlier) throw new BadRequestException('A private reply was already sent for this comment (Meta allows one).');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
+    const r = await this.social.commentReply(actor.org, kind, meta.commentId, meta.userId, Boolean(customer?.isDemo), text);
+    const msg = await this.conversations.addMessage({
+      organizationId: actor.org,
+      conversationId: c.id,
+      role: 'assistant',
+      content: text,
+      ...(r.messageId ? { externalId: r.messageId } : {}),
+      metadata: { author: 'staff', userId: actor.sub, authorName: user?.name ?? user?.email ?? 'Team member', ...(kind === 'private' ? { privateReply: true } : { publicReply: true }), ...(r.sent || r.error ? {} : { simulated: true, notSentReason: r.notSentReason }) } as never,
+    });
+    const deliveryStatus = r.sent ? 'accepted' : r.error ? (r.ambiguous ? 'unknown' : 'failed') : null;
+    await this.prisma.message.update({ where: { id: msg.id }, data: { deliveryStatus, deliveryError: r.error?.slice(0, 500) ?? null, deliveryUpdatedAt: new Date() } }).catch(() => undefined);
+    await this.prisma.conversation.update({ where: { id: c.id }, data: { assigneeId: c.assigneeId ?? actor.sub, inboxStatus: c.inboxStatus === 'resolved' ? 'open' : c.inboxStatus, updatedAt: new Date() } });
+    await this.audit(actor, c.id, kind === 'private' ? 'inbox.comment_private_reply' : 'inbox.comment_replied', { ok: !r.error, sent: r.sent });
+    if (r.error) throw new BadRequestException(`Instagram did not accept the ${kind === 'private' ? 'private message' : 'reply'}${r.ambiguous ? ' (outcome unknown: not resent)' : ''}: ${r.error.slice(0, 200)}`);
     return { ...(await this.detail(actor.org, c.id)), sent: r.sent, ...(r.sent ? {} : { notSentReason: r.notSentReason }) };
   }
 

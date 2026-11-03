@@ -59,6 +59,13 @@ export class InboxController {
     return this.svc.reply(this.actor(u), id, body?.text);
   }
 
+  @Post('conversations/:id/private-reply')
+  @HttpCode(200)
+  privateReply(@CurrentUser() u: SessionClaims, @Param('id') id: string, @Body() body: { text?: unknown }) {
+    requirePermission(u, PERMISSIONS.inboxReply);
+    return this.svc.privateCommentReply(this.actor(u), id, body?.text);
+  }
+
   @Post('conversations/:id/assign-round-robin')
   @HttpCode(200)
   roundRobin(@CurrentUser() u: SessionClaims, @Param('id') id: string) {
