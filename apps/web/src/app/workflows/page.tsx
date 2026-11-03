@@ -12,8 +12,8 @@ import { toast } from '@/components/toast';
 import type { Tone } from '@/lib/format';
 
 // ------------------------------------------------------------------------------------------------ model (mirrors the API)
-type TriggerType = 'lead_created' | 'order_completed' | 'stage_reached' | 'needs_human' | 'message_keyword';
-type Trigger = { type: TriggerType; stage?: string; keywords?: string[] };
+type TriggerType = 'lead_created' | 'order_completed' | 'stage_reached' | 'tag_added' | 'needs_human' | 'message_keyword';
+type Trigger = { type: TriggerType; stage?: string; tag?: string; keywords?: string[] };
 type Step = { id: string; type: StepType; [k: string]: unknown; yes?: Step[]; no?: Step[] };
 type StepType = 'condition' | 'wait' | 'send_whatsapp' | 'ai_call' | 'set_stage' | 'add_tag' | 'assign_team' | 'create_task' | 'enroll_drip';
 type Graph = { trigger: Trigger; steps: Step[] };
@@ -27,6 +27,7 @@ const TRIGGERS: Array<{ value: TriggerType; label: string; help: string }> = [
   { value: 'lead_created', label: 'New enquiry / lead', help: 'A new lead is created (any channel).' },
   { value: 'order_completed', label: 'Order completed', help: 'An order is collected / completed.' },
   { value: 'stage_reached', label: 'Customer reaches a CRM stage', help: 'Once per customer per stage.' },
+  { value: 'tag_added', label: 'A tag is added to a customer', help: 'Each time the tag is newly added (CRM, marketing, import or another workflow); not for customers who already had it.' },
   { value: 'needs_human', label: 'Conversation needs a person', help: 'The AI handed over, or the team took over.' },
   { value: 'message_keyword', label: 'Customer message contains a keyword', help: 'Case-insensitive; any of the keywords.' },
 ];
@@ -259,6 +260,7 @@ function Studio({ initial, onSaved }: { initial: Wf; onSaved: (id: string) => vo
               <div className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wide text-brand"><Zap className="size-4" />When</div>
               <div className="mt-1 text-[13.5px] font-semibold text-ink">{TRIGGERS.find((t) => t.value === graph.trigger.type)?.label}</div>
               {graph.trigger.type === 'stage_reached' && <div className="text-[12px] text-muted">Stage: {graph.trigger.stage ?? '—'}</div>}
+              {graph.trigger.type === 'tag_added' && <div className="text-[12px] text-muted">Tag: {graph.trigger.tag || '—'}</div>}
               {graph.trigger.type === 'message_keyword' && <div className="text-[12px] text-muted">Keywords: {(graph.trigger.keywords ?? []).join(', ') || '—'}</div>}
               {errors.trigger && <div className="mt-1 text-[12px] font-semibold text-rose-700">{errors.trigger}</div>}
             </button>
@@ -343,9 +345,10 @@ function TriggerEditor({ trigger, onChange }: { trigger: Trigger; onChange: (t: 
   return (
     <div className="space-y-3">
       <h3 className="text-[14px] font-bold text-ink">Trigger</h3>
-      <Label text="Starts when"><select aria-label="Trigger" className={inputCls} value={trigger.type} onChange={(e) => onChange({ type: e.target.value as TriggerType, ...(e.target.value === 'stage_reached' ? { stage: 'qualified' } : {}), ...(e.target.value === 'message_keyword' ? { keywords: [] } : {}) })}>{TRIGGERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Label>
+      <Label text="Starts when"><select aria-label="Trigger" className={inputCls} value={trigger.type} onChange={(e) => onChange({ type: e.target.value as TriggerType, ...(e.target.value === 'stage_reached' ? { stage: 'qualified' } : {}), ...(e.target.value === 'tag_added' ? { tag: '' } : {}), ...(e.target.value === 'message_keyword' ? { keywords: [] } : {}) })}>{TRIGGERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Label>
       <p className="text-[12px] text-muted">{TRIGGERS.find((t) => t.value === trigger.type)?.help} Only records created after you activate the workflow start it; each record starts it once.</p>
       {trigger.type === 'stage_reached' && <Label text="Stage"><select aria-label="Trigger stage" className={inputCls} value={trigger.stage} onChange={(e) => onChange({ ...trigger, stage: e.target.value })}>{STAGES.slice(1).map((s) => <option key={s} value={s}>{s}</option>)}</select></Label>}
+      {trigger.type === 'tag_added' && <Label text="Tag"><input aria-label="Trigger tag" className={inputCls} placeholder="e.g. wedding" value={trigger.tag ?? ''} onChange={(e) => onChange({ ...trigger, tag: e.target.value })} /></Label>}
       {trigger.type === 'message_keyword' && <Label text="Keywords (comma separated)"><input aria-label="Keywords" className={inputCls} value={(trigger.keywords ?? []).join(', ')} onChange={(e) => onChange({ ...trigger, keywords: e.target.value.split(',').map((k) => k.trim()).filter(Boolean) })} /></Label>}
     </div>
   );

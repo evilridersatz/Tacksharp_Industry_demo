@@ -7,6 +7,7 @@
  * an edit; live sends with retry limit; an interrupted send is not repeated; test runs change nothing; stop; isolation.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { validateGraph } from '../src/workflows/workflow-graph.js';
 
 const enabled = Boolean(process.env.TEST_DB_NAME);
 if (enabled) {
@@ -251,4 +252,36 @@ describe.skipIf(!enabled)('Visual Workflow Studio (integration)', () => {
     expect(d.runs.some((x: any) => x.test)).toBe(true);
     expect(d.runs.find((x: any) => x.id === live.id).customer.name).toMatch(/Wf Cust/);
   });
+
+  it('tag added trigger: fires once per newly added tag (CRM edit, a workflow step), not for tags already there', async () => {
+    expect(validateGraph({ trigger: { type: 'tag_added' }, steps: [{ id: 'a', type: 'add_tag', tag: 'x' }] }).errors.trigger).toMatch(/tag/);
+    const { CustomersService } = await import('../src/customers/customers.service.js');
+    const crm = new CustomersService(prisma);
+    const had = await customer(ORG, { tags: ['vip'] });
+    const w = await workflow({ trigger: { type: 'tag_added', tag: 'VIP' }, steps: [{ id: 't', type: 'add_tag', tag: 'vip_welcomed' }] });
+    expect(w.graph.trigger.tag).toBe('vip');
+    // Already tagged before: editing something else does not start it.
+    await crm.update(ORG, actor, had.id, { name: 'Renamed VIP' });
+    const fresh = await customer();
+    await crm.update(ORG, actor, fresh.id, { tags: ['VIP', 'wedding'] });
+    await crm.update(ORG, actor, fresh.id, { tags: ['vip', 'wedding', 'gold'] }); // vip kept: not "added" again
+    await svc.collect(later(0));
+    await svc.collect(later(0)); // a second sweep starts nothing new
+    let runs = await runsOf(w.id);
+    expect(runs.map((r: any) => r.customerId)).toEqual([fresh.id]);
+    await drive(runs[0].id);
+    expect((await prisma.customer.findUnique({ where: { id: fresh.id } })).tags).toEqual(['vip', 'wedding', 'gold', 'vip_welcomed']);
+    // A workflow adding the tag also counts (and another organization's tag events never start this workflow).
+    const chained = await customer();
+    const tagger = await workflow({ trigger: { type: 'stage_reached', stage: 'qualified' }, steps: [{ id: 'tv', type: 'add_tag', tag: 'vip' }] });
+    await prisma.customer.update({ where: { id: chained.id }, data: { stage: 'qualified' } });
+    await svc.collect(later(0));
+    await drive((await runsOf(tagger.id))[0].id);
+    const foreign = await customer(ORG_B);
+    await crm.update(ORG_B, { sub: 'b', org: ORG_B }, foreign.id, { tags: ['vip'] });
+    await svc.collect(later(0));
+    runs = await runsOf(w.id);
+    expect(runs.map((r: any) => r.customerId).sort()).toEqual([fresh.id, chained.id].sort());
+  });
 });
+

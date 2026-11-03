@@ -68,8 +68,10 @@ describe.skipIf(!enabled)('drip automation (integration)', () => {
     if (!prisma) return;
     for (const org of [ORG, ORG_B]) {
       await prisma.dripSequence.deleteMany({ where: { organizationId: org } });
-      await prisma.auditEvent.deleteMany({ where: { organizationId: org, entityType: 'drip_sequence' } });
+      await prisma.auditEvent.deleteMany({ where: { organizationId: org } });
     }
+    // The test organizations (fixed ids) and everything in them: customers must not pile up across runs.
+    await prisma.organization.deleteMany({ where: { id: { in: [ORG, ORG_B] } } });
     await prisma.$disconnect();
   });
 

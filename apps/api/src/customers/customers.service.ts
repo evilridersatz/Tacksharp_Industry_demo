@@ -9,6 +9,7 @@ import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
 import { config } from '../common/config.js';
 import { STAGES, leadScore, toCsv, validateAttributes } from './crm.js';
+import { recordTagsAdded } from './tag-events.js';
 
 const LANGS = ['english', 'tamil', 'tanglish', 'hindi', 'malayalam', 'telugu', 'kannada'];
 const CONSENT_SOURCES = ['customer_message', 'website_form', 'in_person', 'phone_call', 'import_with_proof', 'other'];
@@ -201,6 +202,7 @@ export class CustomersService {
     const isDemo = await this.isDemoOrg(org);
     const row = await this.prisma.customer.create({ data: { ...(data as Prisma.CustomerUncheckedCreateInput), organizationId: org, source: (data.source as string) ?? 'manual', isDemo } });
     await this.audit(org, actor, row.id, 'created', { source: row.source, messagingConsent: row.messagingConsent, callingConsent: row.callingConsent, consentSource });
+    await recordTagsAdded(this.prisma, org, row.id, [], row.tags, `user:${actor.sub}`);
     log.info('customers.created', { org, customerId: row.id, by: actor.sub });
     return this.view(row);
   }
@@ -220,6 +222,7 @@ export class CustomersService {
       data.optedOutAt = null;
     }
     const row = await this.prisma.customer.update({ where: { id }, data });
+    await recordTagsAdded(this.prisma, org, id, before.tags, row.tags, `user:${actor.sub}`);
     const changed = Object.keys(data).filter((k) => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify((row as Record<string, unknown>)[k]));
     if (changed.length) await this.audit(org, actor, id, 'updated', { changed, consentSource, ...(changed.some((k) => /Consent|optedOut|doNotContact/.test(k)) ? { messagingConsent: row.messagingConsent, callingConsent: row.callingConsent, optedOut: Boolean(row.optedOutAt), doNotContact: row.doNotContact } : {}) });
     return this.view(row);

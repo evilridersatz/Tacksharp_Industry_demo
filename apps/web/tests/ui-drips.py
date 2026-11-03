@@ -36,6 +36,7 @@ with sync_playwright() as p:
     o = api('/customers', {'name': f'Drip Out {run}', 'phone': '97' + run + '52', 'messagingConsent': True, 'consentSource': 'customer_message'})['body']
     sql(f"""UPDATE Customer SET tags='["{tag}"]', lastInboundAt=NOW(3) - INTERVAL 1 HOUR WHERE id IN ('{a['id']}','{o['id']}')""")
     sql(f"UPDATE Customer SET optedOutAt=NOW(3) WHERE id='{o['id']}'")
+    extra = []
     try:
         pg.goto(WEB + '/drips'); pg.wait_for_timeout(2500)
         check('nav has "Drip sequences"', pg.get_by_role('link', name='Drip sequences').count() >= 1)
@@ -81,7 +82,7 @@ with sync_playwright() as p:
         sent_text = sql(f"SELECT m.content FROM Message m JOIN Conversation c ON c.id=m.conversationId WHERE c.customerId='{a['id']}' AND m.role='assistant' ORDER BY m.createdAt DESC LIMIT 1")
         check('A/B: the run records its variant and the customer got that text', variant in ('A', 'B') and ((variant == 'B') == sent_text.startswith(f'Variant B hello {run}')), f'{variant} {sent_text[:60]}')
         ab = pg.get_by_test_id('ab-0')
-        check('A/B results table on Day 0: one delivered in the chosen variant', ab.count() == 1 and ab.get_by_role('row').filter(has_text=variant).first.inner_text().split()[1] == '1', ab.inner_text() if ab.count() else '')
+        check('A/B results table on Day 0: one delivered in the chosen variant', ab.count() == 1 and [r.split() for r in ab.locator('tbody tr').all_inner_texts() if r.split()[0] == variant][0][1] == '1', ab.inner_text() if ab.count() else '')
         auto = pg.get_by_test_id('drip-auto')
         auto.get_by_label('Start when').select_option('stage_reached'); auto.get_by_label('Trigger stage').select_option('qualified')
         auto.get_by_role('button', name='Turn on').click(); pg.wait_for_timeout(2500)
@@ -97,11 +98,24 @@ with sync_playwright() as p:
         pg.get_by_role('button', name='Pause').click(); pg.wait_for_timeout(1500)
         check('paused', sql(f"SELECT status FROM DripSequence WHERE id='{sid}'") == 'paused')
         check('list shows the sequence with its counts', f'{name}' in pg.get_by_test_id('drip-list').inner_text() and '1 stopped' in pg.get_by_test_id('drip-list').inner_text())
+        pg.get_by_test_id('drip-auto').get_by_label('Start when').select_option('tag_added'); pg.get_by_test_id('drip-auto').get_by_label('Trigger tag').fill(f'vip{run}')
+        pg.get_by_test_id('drip-auto').get_by_role('button', name='Turn on').click(); pg.wait_for_timeout(2500)
+        check('a second rule: "the tag is added"', pg.get_by_test_id('drip-auto').get_by_test_id('drip-auto-rule').count() == 2 and f'the tag "vip{run}" is added' in pg.get_by_test_id('drip-auto').inner_text())
+        # The sequence is paused now: enrolment still happens (it runs when activated again).
+        k = api('/customers', {'name': f'Drip Tagged {run}', 'phone': '97' + run + '53', 'messagingConsent': True, 'consentSource': 'customer_message'})['body']
+        extra.append(k)
+        api(f"/customers/{k['id']}", {'tags': [f'VIP{run}']}, 'PATCH')
+        got = ''
+        for _ in range(50):
+            got = sql(f"SELECT status FROM DripEnrollment WHERE sequenceId='{sid}' AND customerId='{k['id']}'")
+            if got: break
+            time.sleep(2)
+        check('tagging a customer in the CRM enrols them by itself (worker, within about a minute)', got == 'active', got)
         check('no page errors', not errs, '; '.join(errs)[:200])
     finally:
         sql(f"DELETE FROM Workflow WHERE name LIKE 'Enrol in {name}%'")
         sql(f"DELETE FROM DripSequence WHERE name='{name}'")
-        for c in (a, o):
+        for c in (a, o, *extra):
             if c and c.get('id'): sql(f"DELETE FROM Customer WHERE id='{c['id']}'")
     b.close()
 

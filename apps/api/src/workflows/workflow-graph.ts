@@ -4,9 +4,9 @@
  * (validation, navigation, condition evaluation) so the engine and the tests share it.
  */
 
-export const TRIGGERS = ['lead_created', 'order_completed', 'stage_reached', 'needs_human', 'message_keyword'] as const;
+export const TRIGGERS = ['lead_created', 'order_completed', 'stage_reached', 'tag_added', 'needs_human', 'message_keyword'] as const;
 export type TriggerType = (typeof TRIGGERS)[number];
-export type Trigger = { type: TriggerType; stage?: string; keywords?: string[] };
+export type Trigger = { type: TriggerType; stage?: string; tag?: string; keywords?: string[] };
 
 export const STEP_TYPES = ['condition', 'wait', 'send_whatsapp', 'ai_call', 'set_stage', 'add_tag', 'assign_team', 'create_task', 'enroll_drip'] as const;
 export type StepType = (typeof STEP_TYPES)[number];
@@ -48,6 +48,11 @@ export function validateGraph(input: unknown): { graph: Graph; errors: Record<st
     const stage = String(t.stage ?? '');
     if (!STAGES.slice(1).includes(stage)) errors.trigger = 'Choose the stage that starts the workflow';
     trigger.stage = stage;
+  }
+  if (type === 'tag_added') {
+    const tag = String(t.tag ?? '').trim().toLowerCase();
+    if (!/^[a-z0-9_ -]{1,30}$/.test(tag)) errors.trigger = 'Enter the tag that starts the workflow (letters, digits, space, - or _; up to 30)';
+    trigger.tag = tag;
   }
   if (type === 'message_keyword') {
     const kws = (Array.isArray(t.keywords) ? t.keywords : []).map((k) => String(k).trim().toLowerCase()).filter((k) => k.length >= 2 && k.length <= 40).slice(0, 10);

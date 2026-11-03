@@ -12,6 +12,7 @@ import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { branchPath, countSteps, evaluate, nextPath, stepAt, validateGraph, type Facts, type Graph, type Path, type Step } from './workflow-graph.js';
 import { assertPlanAllows } from '../billing/entitlements.js';
+import { recordTagsAdded } from '../customers/tag-events.js';
 
 type Actor = { sub: string; org: string };
 type LogEntry = { stepId: string; type: string; result: string; detail?: string; at: string };
@@ -178,6 +179,10 @@ export class WorkflowsService {
       } else if (t.type === 'stage_reached' && t.stage) {
         for (const c of await this.prisma.customer.findMany({ where: { organizationId: org, stage: t.stage, updatedAt: { gte: since } }, orderBy: { updatedAt: 'desc' }, take: 500, select: { id: true } }))
           rows.push({ triggerKey: `stage:${t.stage}:${c.id}`, customerId: c.id, context: {} });
+      } else if (t.type === 'tag_added' && t.tag) {
+        // From the customer.tag_added events written wherever tags change (CRM, marketing, import, workflows).
+        const events = await this.prisma.auditEvent.findMany({ where: { organizationId: org, action: 'customer.tag_added', createdAt: { gte: since } }, orderBy: { createdAt: 'desc' }, take: 2000, select: { id: true, entityId: true, data: true } });
+        for (const e of events) if ((e.data as { tag?: string } | null)?.tag === t.tag) rows.push({ triggerKey: `tag:${e.id}`, customerId: e.entityId, context: {} });
       } else if (t.type === 'needs_human') {
         for (const c of await this.prisma.conversation.findMany({ where: { organizationId: org, handoffAt: { gte: since }, OR: [{ status: 'human_handoff' }, { aiEnabled: false }] }, orderBy: { handoffAt: 'desc' }, take: 500, select: { id: true, customerId: true, channel: true, handoffAt: true } }))
           rows.push({ triggerKey: `handoff:${c.id}:${c.handoffAt!.getTime()}`, customerId: c.customerId, context: { channel: c.channel, conversationId: c.id } });
@@ -335,6 +340,7 @@ export class WorkflowsService {
         if (tags.includes(step.tag)) return { result: 'done', detail: `Already tagged "${step.tag}"` };
         if (test) return { result: 'would_change', detail: `Add tag "${step.tag}"` };
         await this.prisma.customer.update({ where: { id: c.id }, data: { tags: [...tags, step.tag].slice(0, 50) } });
+        await recordTagsAdded(this.prisma, org, c.id, tags, [...tags, step.tag], `workflow:${run.workflowId}`);
         return { result: 'done', detail: `Tagged "${step.tag}"` };
       }
       case 'assign_team': {

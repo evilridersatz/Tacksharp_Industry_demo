@@ -303,9 +303,9 @@ function Enrol({ id, active, onDone }: { id: string; active: boolean; onDone: ()
   );
 }
 
-type WorkflowRow = { id: string; name: string; status: string; graph: { trigger: { type: string; stage?: string; keywords?: string[] }; steps: Array<{ type: string; sequenceId?: string }> } };
-const TRIGGER_LABEL: Record<string, string> = { lead_created: 'a new lead arrives', order_completed: 'an order is completed', stage_reached: 'a customer reaches a stage', needs_human: 'a conversation needs a person', message_keyword: 'a message contains a keyword' };
-const describeTrigger = (t: WorkflowRow['graph']['trigger']) => t.type === 'stage_reached' ? `a customer reaches "${t.stage}"` : t.type === 'message_keyword' ? `a message says ${(t.keywords ?? []).map((k) => `"${k}"`).join(' or ')}` : TRIGGER_LABEL[t.type] ?? t.type;
+type WorkflowRow = { id: string; name: string; status: string; graph: { trigger: { type: string; stage?: string; tag?: string; keywords?: string[] }; steps: Array<{ type: string; sequenceId?: string }> } };
+const TRIGGER_LABEL: Record<string, string> = { lead_created: 'a new lead arrives', order_completed: 'an order is completed', stage_reached: 'a customer reaches a stage', tag_added: 'a tag is added to a customer', needs_human: 'a conversation needs a person', message_keyword: 'a message contains a keyword' };
+const describeTrigger = (t: WorkflowRow['graph']['trigger']) => t.type === 'stage_reached' ? `a customer reaches "${t.stage}"` : t.type === 'tag_added' ? `the tag "${t.tag}" is added` : t.type === 'message_keyword' ? `a message says ${(t.keywords ?? []).map((k) => `"${k}"`).join(' or ')}` : TRIGGER_LABEL[t.type] ?? t.type;
 const usesSequence = (steps: WorkflowRow['graph']['steps'], id: string): boolean => steps.some((s) => (s.type === 'enroll_drip' && s.sequenceId === id) || ['yes', 'no'].some((b) => Array.isArray((s as Record<string, unknown>)[b]) && usesSequence((s as Record<string, unknown>)[b] as WorkflowRow['graph']['steps'], id)));
 
 /**
@@ -322,7 +322,7 @@ function AutoEnrol({ id, name }: { id: string; name: string }) {
   async function create() {
     setBusy(true);
     try {
-      const trigger = type === 'stage_reached' ? { type, stage } : type === 'message_keyword' ? { type, keywords: [keyword.trim()] } : { type };
+      const trigger = type === 'stage_reached' ? { type, stage } : type === 'tag_added' ? { type, tag: keyword.trim().toLowerCase() } : type === 'message_keyword' ? { type, keywords: [keyword.trim()] } : { type };
       const w = await api.post<{ id: string }>('/workflows', { name: `Enrol in ${name} when ${describeTrigger(trigger)}`.slice(0, 120), description: 'Created from the drip sequence page.', graph: { trigger, steps: [{ id: 's1', type: 'enroll_drip', sequenceId: id }] } });
       await api.post(`/workflows/${w.id}/activate`, {});
       toast('Automatic enrolment is on.');
@@ -344,8 +344,9 @@ function AutoEnrol({ id, name }: { id: string; name: string }) {
           {Object.entries(TRIGGER_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         {type === 'stage_reached' && <select aria-label="Trigger stage" className={cx(fitCls, 'w-40')} value={stage} onChange={(e) => setStage(e.target.value)}>{['interested', 'qualified', 'converted', 'lost'].map((x) => <option key={x}>{x}</option>)}</select>}
+        {type === 'tag_added' && <input aria-label="Trigger tag" className={cx(fitCls, 'w-48')} placeholder="e.g. wedding" value={keyword} onChange={(e) => setKeyword(e.target.value)} />}
         {type === 'message_keyword' && <input aria-label="Trigger keyword" className={cx(fitCls, 'w-48')} placeholder="e.g. offer" value={keyword} onChange={(e) => setKeyword(e.target.value)} />}
-        <Button variant="primary" busy={busy} disabled={type === 'message_keyword' && keyword.trim().length < 2} onClick={() => void create()}><Workflow className="size-4" />Turn on</Button>
+        <Button variant="primary" busy={busy} disabled={(type === 'message_keyword' && keyword.trim().length < 2) || (type === 'tag_added' && !keyword.trim())} onClick={() => void create()}><Workflow className="size-4" />Turn on</Button>
       </div>
     </Card>
   );

@@ -77,11 +77,12 @@ Sarvam agent through `placeSystemCall`, so every telephony gate applies).
   responded (the enrolment then stopped because the customer replied, converted or ordered while that step was its
   latest message). The approved template used outside the 24 h window is the same for both variants.
 - **Start automatically:** the sequence page creates and activates a one-step Workflow Studio rule "when <a new lead
-  arrives | an order is completed | a customer reaches a stage | a conversation needs a person | a message contains a
-  keyword>, enrol in this sequence", and lists every workflow that already enrols into it. One trigger engine (the
+  arrives | an order is completed | a customer reaches a stage | a tag is added | a conversation needs a person | a
+  message contains a keyword>, enrol in this sequence", and lists every workflow that already enrols into it. One trigger engine (the
   Workflow Studio); the enrolment rules above (opt-out, one drip at a time) still apply.
-- Migration `20261104300000_drip_variants` (nullable `DripStepRun.variant`; additive; awaiting the owner's approval).
-- Tests: `test/drip.integration.spec.ts` (10, incl. A/B), `tests/ui-drips.py` (20, incl. A/B and automatic enrolment).
+- Migration `20261104300000_drip_variants` (nullable `DripStepRun.variant`; additive; approved 2026-11-03).
+- Tests: `test/drip.integration.spec.ts` (10, incl. A/B), `tests/ui-drips.py` (22, incl. A/B, automatic enrolment by stage
+  and by tag through the running worker).
 - In test mode every step is recorded as **simulated** and the message is saved in the conversation labelled
   "not sent (test mode)".
 - API: `GET /drips`, `GET /drips/preset`, `GET /drips/:id`, `POST /drips`, `PATCH /drips/:id`,
@@ -231,8 +232,10 @@ A visual editor at `/workflows`: a trigger card, then steps connected top to bot
 and **No** branches (nested up to 4 deep, 40 steps). Steps are added with the + between cards and edited in the side
 panel; errors are shown on the card they belong to. Templates: welcome a new lead, thank big orders, refunds to the team.
 
-- Triggers: new enquiry / lead, order completed, customer reaches a CRM stage (once per customer per stage), conversation
-  needs a person (AI hand-over or team take-over), customer message containing a keyword. Read from the database every
+- Triggers: new enquiry / lead, order completed, customer reaches a CRM stage (once per customer per stage), a tag is
+  added to a customer (each time it is newly added: CRM create / edit, marketing edit, CSV import or a workflow step
+  write a `customer.tag_added` audit event that the trigger reads; customers who already had the tag do not start it),
+  conversation needs a person (AI hand-over or team take-over), customer message containing a keyword. Read from the database every
   minute; only records created / changed **after activation** start a run (never history); each record starts a given
   workflow once.
 - Steps: condition (CRM stage, tag, language, source, has email, WhatsApp consent, order total, trigger channel; facts
@@ -248,7 +251,7 @@ panel; errors are shown on the card they belong to. Templates: welcome a new lea
   (would send / would skip and why), changes described, waits skipped; nothing is sent or changed.
 - API: `GET/POST /workflows`, `GET/PATCH /workflows/:id`, `POST /workflows/:id/activate|pause|test`,
   `POST /workflows/runs/:runId/stop`. `marketing.view` to read, `marketing.manage` to change.
-- Tests: `src/workflows/workflow-graph.spec.ts` (5), `test/workflows-studio.integration.spec.ts` (6: every trigger and step
+- Tests: `src/workflows/workflow-graph.spec.ts` (5), `test/workflows-studio.integration.spec.ts` (7: every trigger and step
   with real effects, waits, pause, snapshot after edit, opt-out, live sends with retry limit, interrupted send not
   repeated, test runs, stop, isolation) and `tests/ui-workflows.py` (15, real worker).
 - Pending: drag-and-drop free canvas (the editor is a structured top-down flow), loops / jumps between steps,
@@ -374,8 +377,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: more integrations. P4 subscriptions: GST e-invoicing (IRN), metered pricing, self-service plan change. Drip: a
-trigger on "tag added" (the Workflow Studio has no tag trigger yet).
+P3: more integrations. P4 subscriptions: GST e-invoicing (IRN), metered pricing, self-service plan change.
 
 ## Production
 

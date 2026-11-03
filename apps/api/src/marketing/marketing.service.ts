@@ -20,6 +20,7 @@ import { approvedTemplates } from './marketing-templates.js';
 import { applyOptKeyword } from '../consent/opt-out.js';
 import { adSpendStatus, metaPermissions } from './meta-permissions.js';
 import { COPY_KINDS, COPY_LANGUAGES, generateCopy, type CopyGenerator, type CopyKind, type CopyLanguage, type CopyProduct } from './marketing-copy.js';
+import { recordTagsAdded } from '../customers/tag-events.js';
 
 export const MARKETING_PERMISSIONS = {
   view: 'marketing.view',
@@ -180,7 +181,8 @@ export class MarketingService {
       if (body.marketingConsent && (c.optedOutAt || c.doNotContact)) throw new BadRequestException('This customer opted out (STOP / do not contact). Only the customer can opt in again by messaging START.');
       data.messagingConsent = body.marketingConsent;
     }
-    await this.prisma.customer.update({ where: { id }, data });
+    const row = await this.prisma.customer.update({ where: { id }, data });
+    await recordTagsAdded(this.prisma, organizationId, id, c.tags, row.tags, 'marketing');
     return { ok: true };
   }
 
@@ -221,7 +223,7 @@ export class MarketingService {
       if (r.marketingConsent === true && suppressed) suppressedKept++;
       if (consent === true) consentRecorded++;
       if (existing) {
-        await this.prisma.customer.update({
+        const row = await this.prisma.customer.update({
           where: { id: existing.id },
           data: {
             tags: [...new Set([...tagsOf(existing.tags), ...r.tags])].slice(0, 20),
@@ -231,9 +233,11 @@ export class MarketingService {
             ...(consent === undefined ? {} : { messagingConsent: consent }),
           },
         });
+        await recordTagsAdded(this.prisma, organizationId, existing.id, existing.tags, row.tags, 'import');
         updated++;
       } else {
-        await this.prisma.customer.create({ data: { organizationId, phone: r.phone!, name: r.name, email: r.email, language: r.language, tags: r.tags, source: 'import', messagingConsent: consent === true } });
+        const row = await this.prisma.customer.create({ data: { organizationId, phone: r.phone!, name: r.name, email: r.email, language: r.language, tags: r.tags, source: 'import', messagingConsent: consent === true } });
+        await recordTagsAdded(this.prisma, organizationId, row.id, [], row.tags, 'import');
         created++;
       }
     }
