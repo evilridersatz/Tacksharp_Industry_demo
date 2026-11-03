@@ -2,7 +2,7 @@ import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
-  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, type LucideIcon, AudioLines } from 'lucide-react';
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, type LucideIcon, AudioLines } from 'lucide-react';
 
 /**
  * Industry registry (web). The server decides WHICH industry a workspace is (GET /industry/workspace); this file decides
@@ -310,14 +310,15 @@ export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
   if (p === '/') return 'Home';
   if (/^\/(agents|voice-agents|test-chat)(\/|$)/.test(p)) return 'AI Agents';
   if (/^\/(contacts|customers|leads|follow-ups|site-visits|hospital\/patients)(\/|$)/.test(p)) return 'Customers & Leads';
-  if (/^\/(conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
+  if (/^\/(inbox|conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
   if (/^\/(analytics|performance)(\/|$)/.test(p) || p === '/visionops/reports') return 'Analytics';
   if (/^\/(settings\/integrations|settings\/ai-providers|integrations)(\/|$)/.test(p)) return 'Integrations';
   if (/^\/(settings|team|demo-data|scenarios)(\/|$)/.test(p)) return 'Settings';
   return 'Orders & Business Activity';
 }
 export function standardNav(groups: NavGroup[]): NavGroup[] {
-  const items = groups.flatMap((g) => g.items);
+  // The team inbox is shared by every industry: first item of "Conversations".
+  const items = [{ href: '/inbox', label: 'Team inbox', icon: Inbox } as NavItem, ...groups.flatMap((g) => g.items)];
   const seen = new Set<string>();
   return STANDARD_SECTIONS.map((section) => ({
     section,

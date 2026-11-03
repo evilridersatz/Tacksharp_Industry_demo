@@ -269,13 +269,29 @@ model Conversation {
   channel        String
   externalId     String?
   status         String       @default("active")
+  /// Unified inbox: open | pending | resolved (independent of `status`, which the AI engines set to human_handoff).
+  inboxStatus    String       @default("open")
+  /// low | normal | high | urgent
+  priority       String       @default("normal")
+  /// Team member who owns the conversation (null = unassigned).
+  assigneeId     String?
+  /// ["vip","complaint",...] labels chosen by the team.
+  labels         Json?
+  /// false = a person has taken over: customer messages are stored, the AI does not reply.
+  aiEnabled      Boolean      @default(true)
+  handoffReason  String?      @db.VarChar(300)
+  handoffAt      DateTime?
+  lastCustomerAt DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime
   Customer       Customer?    @relation(fields: [customerId], references: [id])
   Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   Message        Message[]
+  notes          ConversationNote[]
 
   @@unique([organizationId, channel, externalId])
+  @@index([organizationId, inboxStatus, updatedAt])
+  @@index([organizationId, assigneeId, inboxStatus])
   @@index([customerId], map: "Conversation_customerId_fkey")
   @@index([organizationId, channel])
   @@index([organizationId, customerId])
@@ -2459,4 +2475,32 @@ model TelephonyWebhookEvent {
 
   @@unique([provider, eventKey])
   @@index([organizationId, createdAt])
+}
+
+/// Internal note on a conversation (team only, never sent to the customer).
+model ConversationNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  conversationId String
+  authorId       String
+  authorName     String?      @db.VarChar(120)
+  body           String       @db.Text
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, conversationId, createdAt])
+}
+
+/// Reusable reply text for the team inbox.
+model SavedReply {
+  id             String   @id @default(cuid())
+  organizationId String
+  title          String   @db.VarChar(120)
+  body           String   @db.Text
+  createdBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, title])
+  @@index([organizationId])
 }

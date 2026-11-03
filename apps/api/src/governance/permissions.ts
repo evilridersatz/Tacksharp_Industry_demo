@@ -6,28 +6,40 @@ import { ForbiddenException } from '@nestjs/common';
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: ['*'],
-  manager: ['integrations.view', 'customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
-  sales: ['customers.view', 'customers.manage', 'sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
-  operations: ['customers.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
+  manager: ['inbox.*', 'integrations.view', 'customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
+  sales: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
+  operations: ['inbox.view', 'customers.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
   // Hotel front desk: reservations, check-in / check-out, room status.
-  front_desk: ['customers.view', 'customers.manage', 'bookings.*', 'agents.view', 'agents.run'],
+  front_desk: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'bookings.*', 'agents.view', 'agents.run'],
   // Hospital reception: appointments and patient enquiries; insurance desk: insurance cases (decisions recorded from the insurer).
-  reception: ['customers.view', 'customers.manage', 'clinic.*', 'insurance.view', 'agents.view', 'agents.run'],
+  reception: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'clinic.*', 'insurance.view', 'agents.view', 'agents.run'],
   insurance: ['customers.view', 'insurance.*', 'clinic.view', 'agents.view'],
   // VisionOps field technician / NOC operator: sees devices and incidents, acknowledges and works them.
   technician: ['monitoring.view', 'monitoring.operate', 'agents.view'],
   finance: ['customers.view', 'finance.*', 'agents.view', 'agents.run'],
   // Marketing staff draft, import, segment and approve content; sending to customers needs marketing.approve_campaign
   // (admin / manager), so every campaign passes through the approval queue.
-  marketing: ['customers.view', 'customers.manage', 'marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
+  marketing: ['inbox.view', 'customers.view', 'customers.manage', 'marketing.view', 'marketing.manage', 'marketing.approve_content', 'agents.view', 'agents.run'],
   // Operator: day-to-day work across the workspace's modules (customers, orders, bookings, appointments, stock,
   // monitoring incidents), no people / settings / integrations / finance approvals.
-  operator: ['customers.view', 'customers.manage', 'sales.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'orders.*', 'bookings.view', 'bookings.manage', 'clinic.view', 'clinic.manage', 'monitoring.view', 'monitoring.operate', 'marketing.view', 'agents.view', 'agents.run'],
+  operator: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'sales.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'orders.*', 'bookings.view', 'bookings.manage', 'clinic.view', 'clinic.manage', 'monitoring.view', 'monitoring.operate', 'marketing.view', 'agents.view', 'agents.run'],
   // Read-only demo / stakeholder access: views the workspace; every write is refused by the auth guard.
-  viewer: ['customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
+  viewer: ['inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
+  // Team lead: runs the team inbox (assigns, labels, saved replies), the CRM and campaigns drafts; no settings / people.
+  team_lead: ['inbox.*', 'customers.*', 'sales.view', 'marketing.view', 'marketing.manage', 'orders.view', 'bookings.view', 'agents.view', 'agents.run'],
+  // Support agent: answers customers in the inbox and keeps their records; no campaigns, no settings.
+  support: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'orders.view', 'bookings.view', 'agents.view'],
+  // Read-only analyst: sees everything a viewer sees (writes refused by the auth guard).
+  analyst: ['inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
 };
 
 export const PERMISSIONS = {
+  /** Team inbox: read conversations, notes and the customer panel. */
+  inboxView: 'inbox.view',
+  /** Reply to customers, take over from / return to the AI, add notes, change status of own conversations. */
+  inboxReply: 'inbox.reply',
+  /** Assign to others, labels, priority, saved replies, round-robin. */
+  inboxManage: 'inbox.manage',
   customersView: 'customers.view',
   /** Add / edit customers and record consent. */
   customersManage: 'customers.manage',

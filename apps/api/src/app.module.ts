@@ -39,6 +39,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module.js';
 import { VoiceAgentsModule } from './voice-agents/voice-agents.module.js';
 import { TelephonyModule } from './telephony/telephony.module.js';
 import { SarvamToolsModule } from './telephony/sarvam-tools.module.js';
+import { InboxModule } from './inbox/inbox.module.js';
 import { HomeModule } from './home/home.module.js';
 
 @Module({
@@ -79,6 +80,7 @@ import { HomeModule } from './home/home.module.js';
     VoiceAgentsModule,
     TelephonyModule,
     SarvamToolsModule,
+    InboxModule,
     HomeModule,
   ],
   controllers: [AppController, PrivacyController],

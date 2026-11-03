@@ -9,7 +9,7 @@ import { readCookie, verifySession } from './token.js';
 export const SESSION_COOKIE = 'ts_session';
 
 /** Read-only roles may only read, sign out and switch to another workspace they belong to. */
-const READ_ONLY_ROLES = new Set(['viewer']);
+const READ_ONLY_ROLES = new Set(['viewer', 'analyst']);
 const READ_ONLY_ALLOWED = new Set(['/auth/logout', '/auth/workspace']);
 const CACHE_MS = 15_000;
 

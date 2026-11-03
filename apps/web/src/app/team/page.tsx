@@ -26,6 +26,9 @@ const ROLE_HELP: Record<string, string> = {
   finance: 'Invoices, payments and collections',
   marketing: 'Campaigns and content (sending needs approval)',
   operator: 'Day-to-day work: customers, orders, bookings, stock, incidents. No people, settings or integrations',
+  team_lead: 'Runs the team inbox (assigns, labels, saved replies), customers and campaign drafts',
+  support: 'Answers customers in the team inbox and keeps their records',
+  analyst: 'Read-only analyst: sees reports and data, cannot change anything',
   viewer: 'Read-only: can look around, cannot change anything',
 };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');

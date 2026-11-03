@@ -14,6 +14,7 @@ import { KeyedMutex } from '../common/keyed-mutex.js';
 import { errorMessage, log } from '../common/logger.js';
 import { recordTurn } from '../common/latency.js';
 import { MultimodalService } from '../media/multimodal.service.js';
+import { InboxService } from '../inbox/inbox.service.js';
 
 @Injectable()
 export class WhatsAppMessageProcessor {
@@ -29,6 +30,7 @@ export class WhatsAppMessageProcessor {
     private readonly inbound: InboundMessageService,
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly multimodalService?: MultimodalService,
+    @Optional() private readonly inboxService?: InboxService,
   ) {}
 
   /** Injected in the app; built from the same Sarvam / WhatsApp services where a test constructs the processor. */
@@ -114,6 +116,17 @@ export class WhatsAppMessageProcessor {
             conversationId = await this.recordOptExchange(data, text, reply);
           }
         }
+        // A person took this conversation over in the team inbox: the message is kept for them, the AI stays silent.
+        if (!reply && text && this.prisma) {
+          const held = await this.prisma.conversation.findFirst({ where: { organizationId: data.organizationId, channel: 'whatsapp', externalId: data.from, aiEnabled: false }, select: { id: true } });
+          if (held) {
+            await this.conversations.addMessage({ organizationId: data.organizationId, conversationId: held.id, role: 'user', content: text, externalId: data.messageId, metadata: { waMessageId: data.messageId, viaVoiceNote, ...(media ? { media } : {}), heldForTeam: true } as never });
+            await this.inboxService?.onCustomerMessage(data.organizationId, held.id).catch(() => undefined);
+            await this.inbound.markSkipped(row.id, 'human_takeover: the team is handling this conversation');
+            log.info('whatsapp.held_for_team', { messageId: data.messageId, conversationId: held.id });
+            return { held: held.id };
+          }
+        }
         if (!reply) {
           result = await this.ai.generateResponse({
             organizationId: data.organizationId,
@@ -139,6 +152,7 @@ export class WhatsAppMessageProcessor {
 
     const sendStartedAt = Date.now();
     await this.sendReply(row.id, data, reply!, conversationId, finalAttempt);
+    if (conversationId) await this.inboxService?.onCustomerMessage(data.organizationId, conversationId).catch((e) => log.warn('inbox.update_failed', { error: errorMessage(e) }));
     const sendMs = Date.now() - sendStartedAt;
     // Optional spoken reply to a voice note, AFTER the text (which is the fallback). Real Sarvam audio only.
     if (data.audioId && result) {
