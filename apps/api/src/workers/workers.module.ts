@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { DripModule } from '../drip/drip.module.js';
 import { MultimodalService } from '../media/multimodal.service.js';
 import { InboxModule } from '../inbox/inbox.module.js';
 import { AiModule } from '../ai/ai.module.js';
@@ -16,7 +17,7 @@ import { WhatsAppMessageProcessor } from './whatsapp-message.processor.js';
 import { WorkersService } from './workers.service.js';
 
 @Module({
-  imports: [InboxModule, AiModule, ConversationsModule, LeadsModule, TelephonyModule, FollowUpsModule, RestaurantModule, AgentsModule, MarketingModule, VerticalsModule, VisionOpsModule],
+  imports: [InboxModule, DripModule, AiModule, ConversationsModule, LeadsModule, TelephonyModule, FollowUpsModule, RestaurantModule, AgentsModule, MarketingModule, VerticalsModule, VisionOpsModule],
   providers: [FollowUpProcessor, WhatsAppMessageProcessor, WorkersService, MultimodalService],
 })
 export class WorkersModule {}

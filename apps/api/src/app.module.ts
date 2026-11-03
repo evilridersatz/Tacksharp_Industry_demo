@@ -40,6 +40,7 @@ import { VoiceAgentsModule } from './voice-agents/voice-agents.module.js';
 import { TelephonyModule } from './telephony/telephony.module.js';
 import { SarvamToolsModule } from './telephony/sarvam-tools.module.js';
 import { InboxModule } from './inbox/inbox.module.js';
+import { DripModule } from './drip/drip.module.js';
 import { HomeModule } from './home/home.module.js';
 
 @Module({
@@ -81,6 +82,7 @@ import { HomeModule } from './home/home.module.js';
     TelephonyModule,
     SarvamToolsModule,
     InboxModule,
+    DripModule,
     HomeModule,
   ],
   controllers: [AppController, PrivacyController],

@@ -182,6 +182,7 @@ model Customer {
   /// Next follow-up date set by the team (shown in "Follow-up due").
   followUpAt           DateTime?
   crmNotes             CustomerNote[]
+  dripEnrollments      DripEnrollment[]
   organization         Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls                Call[]
   Conversation         Conversation[]
@@ -2526,4 +2527,71 @@ model CustomerNote {
   customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, customerId, createdAt])
+}
+
+/// Drip automation: a configurable sequence of WhatsApp / AI-call steps (day offsets from enrolment). Stops on
+/// conversion, opt-out, human ownership or (optionally) a reply; sends only inside its hours; one enrolment per customer.
+model DripSequence {
+  id             String           @id @default(cuid())
+  organizationId String
+  name           String           @db.VarChar(120)
+  description    String?          @db.VarChar(500)
+  /// draft | active | paused
+  status         String           @default("draft") @db.VarChar(20)
+  /// [{ day, channel: whatsapp|voice, text?, templateName?, templateLanguage? }]
+  steps          Json
+  stopOnReply    Boolean          @default(true)
+  /// IST hours [start, end) in which steps run.
+  sendStartHour  Int              @default(9)
+  sendEndHour    Int              @default(20)
+  createdBy      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  enrollments    DripEnrollment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+}
+
+model DripEnrollment {
+  id             String        @id @default(cuid())
+  organizationId String
+  sequenceId     String
+  customerId     String
+  /// active | completed | stopped
+  status         String        @default("active") @db.VarChar(20)
+  stepIndex      Int           @default(0)
+  nextRunAt      DateTime?
+  attempts       Int           @default(0)
+  stopReason     String?
+  lastError      String?       @db.VarChar(500)
+  enrolledBy     String?
+  enrolledAt     DateTime      @default(now())
+  completedAt    DateTime?
+  updatedAt      DateTime      @updatedAt
+  sequence       DripSequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  runs           DripStepRun[]
+
+  @@unique([sequenceId, customerId])
+  @@index([status, nextRunAt])
+  @@index([organizationId, customerId])
+}
+
+model DripStepRun {
+  id                String         @id @default(cuid())
+  organizationId    String
+  enrollmentId      String
+  stepIndex         Int
+  channel           String         @db.VarChar(20)
+  /// processing | sent | simulated | skipped | failed
+  status            String         @db.VarChar(20)
+  reason            String?        @db.VarChar(500)
+  providerMessageId String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  enrollment        DripEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, stepIndex])
+  @@index([organizationId, createdAt])
 }

@@ -1,3 +1,4 @@
+import { DripService } from '../drip/drip.service.js';
 import { Injectable, Optional, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { runInProviderScope } from '../integrations/provider-scope.js';
 import { UnrecoverableError, Worker } from 'bullmq';
@@ -50,6 +51,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     private readonly orchestrator: Orchestrator,
     private readonly marketing: MarketingService,
     @Optional() private readonly monitoring?: MonitoringEngine,
+    @Optional() private readonly drips?: DripService,
   ) {}
 
   onModuleInit() {
@@ -126,11 +128,21 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
     // the same job id. The claim in the database still guarantees one reply.
     this.sweeper = setInterval(() => void this.requeueStuckInbound().catch((e) => log.warn('whatsapp.requeue_failed', { error: describeError(e) })), 60_000);
     this.sweeper.unref();
+    // Drip automation: due steps every minute. Each enrolment is leased in the database, so several API instances
+    // ticking at once never run the same step twice.
+    this.dripTimer = setInterval(() => {
+      if (this.dripRunning || !this.drips) return;
+      this.dripRunning = true;
+      void this.drips.runDue().catch((e) => log.warn('drip.tick_failed', { error: describeError(e) })).finally(() => (this.dripRunning = false));
+    }, 60_000);
+    this.dripTimer.unref();
     // VisionOps periodic work (sweep, cloud checks, retention, live demo feed) runs in VisionOpsScheduler.
     log.info('workers.started', { queues: [WHATSAPP_QUEUE, FOLLOW_UP_QUEUE, ORDER_FOLLOW_UP_QUEUE, AGENT_QUEUE, MARKETING_QUEUE] });
   }
 
   private sweeper?: NodeJS.Timeout;
+  private dripTimer?: NodeJS.Timeout;
+  private dripRunning = false;
 
   async requeueStuckInbound() {
     for (const row of await this.inbound.stuck()) {
@@ -153,6 +165,7 @@ export class WorkersService implements OnModuleInit, OnApplicationShutdown {
   /** Graceful shutdown: stop taking new jobs, let active ones finish, then close Redis. */
   async onApplicationShutdown(signal?: string) {
     if (this.sweeper) clearInterval(this.sweeper);
+    if (this.dripTimer) clearInterval(this.dripTimer);
     log.info('workers.stopping', { signal });
     await Promise.all(this.workers.map((w) => w.close()));
     await Promise.allSettled([followUpQueue.close(), whatsappQueue.close(), orderFollowUpQueue.close(), agentQueue.close(), marketingQueue.close()]);
