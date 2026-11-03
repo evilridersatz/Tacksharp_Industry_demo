@@ -2706,3 +2706,20 @@ model WorkflowRun {
   @@index([status, resumeAt])
   @@index([organizationId, createdAt])
 }
+
+/// MCP server: an access key an AI assistant uses to reach this organization's tools. The key is shown once; only its
+/// SHA-256 hash and a short prefix (for recognition) are stored. scope: read | write (write includes read).
+model McpAccessKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String    @db.VarChar(80)
+  prefix         String    @db.VarChar(20)
+  keyHash        String    @unique @db.VarChar(64)
+  scope          String    @default("read") @db.VarChar(20)
+  createdBy      String?
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId])
+}

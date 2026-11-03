@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics, live AI steering (P3)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics, live AI steering (P3); MCP server (P4)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,6 +10,7 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| MCP server (P4) | Done (tested with the official MCP SDK client; not yet with a hosted AI assistant) | Settings → Integrations → MCP server, `apps/api/src/mcp/` |
 | Live AI steering (P3) | Done (not for restaurant ordering) | Team inbox → Steer the AI, `apps/api/src/inbox/steering.ts` |
 | Advanced analytics (P3) | Done | Reports & analytics → Advanced analytics, `apps/api/src/analytics/` |
 | Visual Workflow Studio (P3) | Done | `/workflows`, `apps/api/src/workflows/` |
@@ -17,7 +18,7 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`, `20261103700000_ai_steering`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`, `20261103500000_workflows`, `20261103600000_mcp_keys`, `20261103700000_ai_steering`.
 
 ## Team inbox and human hand-over
 
@@ -106,6 +107,28 @@ fallback.
   and `tests/ui-capi.py` (15, real worker; the passing connection test is seeded because Meta is unreachable here).
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
+
+## MCP server (P4)
+
+A Model Context Protocol server so a business can connect its **own** AI assistant (any MCP client that supports
+Streamable HTTP with an Authorization header) to its workspace.
+
+- Endpoint `POST {API}/mcp` (stateless Streamable HTTP, JSON responses; batches of up to 20). Protocol versions
+  2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05 (the versions the official TypeScript SDK supports); an unknown
+  `MCP-Protocol-Version` header → 400. `GET` / `DELETE /mcp` → 405 (no server stream, no sessions).
+- Access keys (Settings → Integrations → MCP server, admins only): `tsk_mcp_…`, shown once, stored only as a SHA-256
+  hash; read-only or read + write; revocable at once; last use shown. The session cookie is never accepted on `/mcp`.
+  Unknown / revoked keys and suspended organizations → 401. A browser `Origin` that is not one of this deployment's
+  web origins (`CORS_ORIGINS`) → 403 (DNS-rebinding protection the MCP spec requires). 120 calls a minute per key.
+- Tools (this organization only; phone numbers masked): `search_customers`, `get_customer`, `list_conversations`,
+  `get_conversation`, `list_orders`, `analytics_summary`; with a write key also `add_customer_note` (author shown as
+  "AI assistant (key name)"), `set_customer_stage`, `create_task`. **No tool messages or calls a customer.** Tool
+  problems come back as `isError` results; every call is audited with the key (`entityType: mcp`).
+- Tests: `test/mcp.integration.spec.ts` (5: keys, auth, protocol, every tool, isolation, write scope, audit, rate
+  limit), `test/mcp-sdk.e2e.spec.ts` (2: the official `@modelcontextprotocol/sdk` client over HTTP against a running API
+  — run with `MCP_E2E_URL` / `MCP_E2E_KEY`), `tests/ui-mcp.py` (13, real HTTP calls with keys made in the UI).
+- Pending: OAuth sign-in for hosted assistants that require it (keys are bearer tokens today), resources and prompts
+  (empty lists), per-tool permission choices per key, sending messages through MCP (deliberately not offered).
 
 ## Live AI steering (P3)
 
@@ -226,7 +249,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 ## Not done (pending)
 
 P3: AI replies on Instagram / Messenger, more
-integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
+integrations. P4: advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
