@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
@@ -7,6 +7,7 @@ import { PERMISSIONS, can } from '../governance/permissions.js';
 import { describeError } from '../common/errors.js';
 import { log } from '../common/logger.js';
 import { followUpConfig, liveGate } from '../restaurant/followup-config.js';
+import { SocialSenderService, isSocialChannel } from '../social/social-sender.service.js';
 
 export type Actor = { sub: string; org: string; role: string };
 export const INBOX_STATUSES = ['open', 'pending', 'resolved'] as const;
@@ -26,6 +27,7 @@ export class InboxService {
     private readonly prisma: PrismaService,
     private readonly conversations: ConversationsService,
     private readonly sender: WhatsAppSenderService,
+    @Optional() private readonly social?: SocialSenderService,
   ) {}
 
   // ------------------------------------------------------------------------------------------------ read
@@ -129,7 +131,11 @@ export class InboxService {
       customer: c.Customer,
       orders: orders.map((o) => ({ ...o, total: Number(o.total) })),
       leads,
-      replyWindow: c.channel === 'whatsapp' ? { open: windowOpen, note: windowOpen ? 'You can reply with free text (customer wrote in the last 24 h).' : 'More than 24 h since the customer wrote: WhatsApp allows only an approved template. Free-text replies are blocked.' } : { open: false, note: 'Replies from the inbox are available for WhatsApp conversations.' },
+      replyWindow: c.channel === 'whatsapp'
+        ? { open: windowOpen, note: windowOpen ? 'You can reply with free text (customer wrote in the last 24 h).' : 'More than 24 h since the customer wrote: WhatsApp allows only an approved template. Free-text replies are blocked.' }
+        : isSocialChannel(c.channel)
+          ? (() => { const open = Boolean(this.social?.windowOpen(c.Customer?.lastInboundAt)); return { open, note: open ? 'You can reply (customer wrote in the last 24 h). The AI does not answer on this channel yet.' : 'More than 24 h since the customer wrote: Meta does not allow a reply until they write again.' }; })()
+          : { open: false, note: 'Replies from the inbox are available for WhatsApp, Instagram and Messenger conversations.' },
       notes: c.notes.map((n) => ({ id: n.id, body: n.body, author: n.authorName ?? users.get(n.authorId) ?? 'Team member', createdAt: n.createdAt })),
       messages,
     };
@@ -209,6 +215,7 @@ export class InboxService {
   /** Back to the AI with the full history kept; the "needs a person" flag is cleared. */
   async returnToAi(actor: Actor, id: string) {
     const c = await this.get(actor.org, id);
+    if (isSocialChannel(c.channel)) throw new BadRequestException('AI replies on Instagram / Messenger are not available yet: the team answers these conversations.');
     await this.prisma.conversation.update({ where: { id: c.id }, data: { aiEnabled: true, status: c.status === 'human_handoff' ? 'active' : c.status, handoffReason: null, handoffAt: null } });
     await this.audit(actor, c.id, 'inbox.returned_to_ai', {});
     return this.detail(actor.org, c.id);
@@ -233,7 +240,8 @@ export class InboxService {
     const c = await this.get(actor.org, id);
     const text = typeof body === 'string' ? body.trim() : '';
     if (!text || text.length > 4096) throw new BadRequestException('Write a reply (up to 4096 characters).');
-    if (c.channel !== 'whatsapp' || !c.externalId) throw new BadRequestException('Replies from the inbox are available for WhatsApp conversations.');
+    if (isSocialChannel(c.channel)) return this.replySocial(actor, c, text);
+    if (c.channel !== 'whatsapp' || !c.externalId) throw new BadRequestException('Replies from the inbox are available for WhatsApp, Instagram and Messenger conversations.');
     const customer = c.customerId ? await this.prisma.customer.findFirst({ where: { id: c.customerId, organizationId: actor.org } }) : null;
     if (!customer) throw new BadRequestException('This conversation has no customer record.');
     if (customer.optedOutAt || customer.doNotContact) throw new BadRequestException('The customer opted out (STOP) or is marked do-not-contact: no message can be sent.');
@@ -267,6 +275,29 @@ export class InboxService {
     await this.audit(actor, c.id, 'inbox.replied', { ok: !error, sent: gate.live });
     if (error) throw new BadRequestException(`WhatsApp did not accept the message: ${error.slice(0, 200)}`);
     return { ...(await this.detail(actor.org, c.id)), sent: gate.live, ...(gate.live ? {} : { notSentReason: gate.reason }) };
+  }
+
+  /** Instagram / Messenger reply: same rules (opt-out, 24 h window, live gate), sent through the organization's Page. */
+  private async replySocial(actor: Actor, c: Awaited<ReturnType<InboxService['get']>>, text: string) {
+    if (!this.social || !isSocialChannel(c.channel)) throw new BadRequestException('Instagram / Messenger sending is not available.');
+    const ok = await this.social.check(actor.org, c);
+    if (!ok.ok) throw new BadRequestException(ok.reason);
+    const user = await this.prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true, email: true } });
+    const r = await this.social.send(actor.org, c.channel, c.externalId!, ok.customer.isDemo, text);
+    const msg = await this.conversations.addMessage({
+      organizationId: actor.org,
+      conversationId: c.id,
+      role: 'assistant',
+      content: text,
+      ...(r.messageId ? { externalId: r.messageId } : {}),
+      metadata: { author: 'staff', userId: actor.sub, authorName: user?.name ?? user?.email ?? 'Team member', ...(r.sent || r.error ? {} : { simulated: true, notSentReason: r.notSentReason }) } as never,
+    });
+    const deliveryStatus = r.sent ? 'accepted' : r.error ? (r.ambiguous ? 'unknown' : 'failed') : null;
+    await this.prisma.message.update({ where: { id: msg.id }, data: { deliveryStatus, deliveryError: r.error?.slice(0, 500) ?? null, deliveryUpdatedAt: new Date() } }).catch(() => undefined);
+    await this.prisma.conversation.update({ where: { id: c.id }, data: { assigneeId: c.assigneeId ?? actor.sub, inboxStatus: c.inboxStatus === 'resolved' ? 'open' : c.inboxStatus, updatedAt: new Date() } });
+    await this.audit(actor, c.id, 'inbox.replied', { ok: !r.error, sent: r.sent, channel: c.channel });
+    if (r.error) throw new BadRequestException(`${c.channel === 'instagram' ? 'Instagram' : 'Messenger'} did not accept the message${r.ambiguous ? ' (delivery unknown: not resent)' : ''}: ${r.error.slice(0, 200)}`);
+    return { ...(await this.detail(actor.org, c.id)), sent: r.sent, ...(r.sent ? {} : { notSentReason: r.notSentReason }) };
   }
 
   /** Round-robin: the person able to reply with the fewest open conversations (ties: alphabetical). */

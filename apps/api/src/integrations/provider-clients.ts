@@ -217,3 +217,42 @@ export async function metaCapiSend(
   const res = fail(r, 'Sending conversions');
   return { ...res, retryable: r.status === 0 || r.status === 429 || r.status >= 500 };
 }
+
+// ------------------------------------------------------------------------------------------------ Messenger / Instagram
+/**
+ * Documented Messenger Platform endpoints (developers.facebook.com/docs/messenger-platform, and the Instagram
+ * messaging API through a Facebook Page):
+ *   GET  https://graph.facebook.com/{version}/{page-id}?fields=id,name,instagram_business_account
+ *   POST https://graph.facebook.com/{version}/{page-id}/messages
+ *        body { recipient: { id: PSID | IGSID }, messaging_type: "RESPONSE", message: { text } } -> { recipient_id, message_id }
+ *   GET  https://graph.facebook.com/{version}/{psid|igsid}?fields=name   (display name; best effort)
+ * Page access token in the Authorization header, never in a URL. Sends are never retried here (a timeout may still
+ * have delivered the message).
+ */
+export async function metaPage(fetchImpl: FetchLike, token: string, pageId: string): Promise<ProviderResult & { name?: string; instagramAccountId?: string }> {
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(pageId)}?fields=id,name,instagram_business_account`, { headers: { Authorization: `Bearer ${token}` } }, [token]);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { id?: string; name?: string; instagram_business_account?: { id?: string } };
+    if (j.id !== pageId) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered, but not with this Page.' };
+    return { ok: true, latencyMs: r.ms, name: j.name, instagramAccountId: j.instagram_business_account?.id, message: `Page "${j.name ?? j.id}" is readable with this token${j.instagram_business_account?.id ? ' and has a linked Instagram account' : ''}.` };
+  }
+  return fail(r, 'Reading the Page', 'Check the Page ID and that the token belongs to this Page.');
+}
+
+export async function metaSocialSend(fetchImpl: FetchLike, token: string, pageId: string, recipientId: string, text: string): Promise<ProviderResult & { messageId?: string; ambiguous?: boolean }> {
+  const body = { recipient: { id: recipientId }, messaging_type: 'RESPONSE', message: { text: text.slice(0, 1000) } };
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(pageId)}/messages`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, [token], false);
+  if (r.status === 200) {
+    const j = (r.json ?? {}) as { message_id?: string };
+    if (!j.message_id) return { ok: false, latencyMs: r.ms, errorCode: 'invalid_response', message: 'Meta answered without a message id: delivery unknown.', ambiguous: true };
+    return { ok: true, latencyMs: r.ms, messageId: j.message_id, message: 'Meta accepted the message.' };
+  }
+  const res = fail(r, 'Sending the message', r.status === 400 ? 'Outside the 24-hour window, or the person cannot be messaged.' : undefined);
+  return { ...res, ambiguous: r.code === 'timeout' };
+}
+
+export async function metaProfileName(fetchImpl: FetchLike, token: string, userId: string): Promise<string | undefined> {
+  const r = await request(fetchImpl, `${GRAPH()}/${encodeURIComponent(userId)}?fields=name`, { headers: { Authorization: `Bearer ${token}` } }, [token], false);
+  const n = r.status === 200 ? (r.json as { name?: string } | null)?.name : undefined;
+  return typeof n === 'string' && n.trim() ? n.trim().slice(0, 120) : undefined;
+}

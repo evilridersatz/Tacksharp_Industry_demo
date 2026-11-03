@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API (P3)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger (P3)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,10 +10,11 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Instagram & Messenger (P3) | Done for the team inbox (AI replies pending; not yet tested against Meta) | Settings → Integrations → Instagram & Messenger, `/inbox`, `apps/api/src/social/` |
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
 
 Migrations (additive only: new columns / tables, nothing dropped or rewritten):
-`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`.
+`20261103000000_team_inbox`, `20261103100000_crm`, `20261103200000_drip`, `20261103300000_meta_capi`, `20261103400000_social_identity`.
 
 ## Team inbox and human hand-over
 
@@ -103,14 +104,46 @@ fallback.
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
 
+## Instagram & Messenger (P3)
+
+Instagram Direct and Facebook Messenger messages arrive in the **team inbox** and the team replies from there.
+
+- Setup (Settings → Integrations → Instagram & Messenger): Page access token and app secret (encrypted, never shown
+  again), Facebook Page ID, optional Instagram account ID, optional automatic acknowledgement. **Test connection**
+  reads the Page (`GET /{page-id}?fields=id,name,instagram_business_account`) and checks the linked Instagram account.
+  **Enable** (only after a passing test) routes this Page / Instagram account to the workspace; it is refused if
+  another organization already has it. **Disable / delete** removes the routing at once.
+- Webhook `POST /webhooks/meta-social` (Messenger `object: page`, Instagram `object: instagram`; verify with
+  `META_SOCIAL_VERIFY_TOKEN` or the WhatsApp verify token). The `X-Hub-Signature-256` signature is **always required**
+  (the organization's app secret, or `META_APP_SECRET`); with no secret every delivery is refused. Unknown or disabled
+  Page / account → dropped. There is no default-organization fallback.
+- Each message is stored once (Meta's message id, under a per-person lock); echoes of our own sends are ignored; images,
+  video, audio and files are shown as labels (`[Image]` ...) and never downloaded or stored. A customer record is
+  created on first contact (no phone; `SocialIdentity` links the Meta user id, the display name is read from Meta when
+  live) and the conversation opens in the inbox with the AI off and the reason shown.
+- STOP / START are honoured (confirmation sent through the live gate). The optional acknowledgement goes out once after
+  24 hours of silence, never to an opted-out customer.
+- Staff replies: refused when the customer opted out or more than 24 hours after their last message (Meta's rule);
+  sent through the Page (`POST /{page-id}/messages`, `messaging_type: RESPONSE`, token in the header). Live gate:
+  `DRY_RUN` → saved but not sent; live only to ids in `LIVE_TEST_SOCIAL_IDS` until `LIVE_ALLOW_ALL_CUSTOMERS=true`;
+  demo customers never. A rejected send is shown; a send with unknown delivery is marked "unknown" and never resent.
+- Inbox: channel filter (WhatsApp / Instagram / Messenger / Phone), channel badges, masked Meta id, "Team only · AI on
+  Messenger pending"; "Return to AI" is refused on these channels.
+- Tests: `test/social.integration.spec.ts` (6) and `tests/ui-social.py` (16; real signed webhooks to the running API;
+  the passing connection test is seeded because Meta is unreachable here).
+- **Pending:** AI replies on Instagram / Messenger (the AI engines identify customers by phone; extending them is a
+  separate change kept away from the GR Chicken launch), media download / viewing, delivery and read receipts,
+  comments and story replies, the Human Agent tag (7-day window). **Not verified against Meta**: needs a Page, an app
+  with `pages_messaging` / `instagram_manage_messages` and the webhook subscribed.
+
 ## Not done (pending)
 
-P3: Visual Workflow Studio, Instagram / Messenger, live AI steering, advanced analytics, more
+P3: Visual Workflow Studio, AI replies on Instagram / Messenger, live AI steering, advanced analytics, more
 integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
 
 ## Production
 
-Apply the four migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
+Apply the five migrations above after a verified backup (`GR-CHICKEN-SARVAM-LAUNCH.md` has the runbook). They only
 add columns and tables. Drip sends nothing until a sequence is created, activated and customers are enrolled.

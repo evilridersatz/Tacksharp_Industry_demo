@@ -42,6 +42,7 @@ import { SarvamToolsModule } from './telephony/sarvam-tools.module.js';
 import { InboxModule } from './inbox/inbox.module.js';
 import { DripModule } from './drip/drip.module.js';
 import { MetaCapiModule } from './meta-capi/meta-capi.module.js';
+import { SocialWebhookModule } from './social/social-webhook.module.js';
 import { HomeModule } from './home/home.module.js';
 
 @Module({
@@ -85,6 +86,7 @@ import { HomeModule } from './home/home.module.js';
     InboxModule,
     DripModule,
     MetaCapiModule,
+    SocialWebhookModule,
     HomeModule,
   ],
   controllers: [AppController, PrivacyController],

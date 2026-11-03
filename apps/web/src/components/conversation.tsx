@@ -43,7 +43,7 @@ export function Thread({ messages, name }: { messages: Message[]; name: string }
                 {template ? `Template message sent (${m.content.slice(10, m.content.indexOf(']'))})` : m.content}
               </p>
               <span className="mt-0.5 text-[11px] text-faint">
-                {mine ? `${(m.metadata as { author?: string; authorName?: string } | null)?.author === 'staff' ? (m.metadata as { authorName?: string }).authorName ?? 'Team' : 'AI'} · ` : ''}
+                {mine ? `${(m.metadata as { author?: string; authorName?: string } | null)?.author === 'staff' ? (m.metadata as { authorName?: string }).authorName ?? 'Team' : (m.metadata as { autoReply?: boolean } | null)?.autoReply ? 'Automatic' : 'AI'} · ` : ''}
                 {timeOnly(m.createdAt)}
                 {mine && (m.metadata as { simulated?: boolean } | null)?.simulated && <span className="ml-1 font-semibold text-amber-800"> · not sent (test mode)</span>}
                 {mine && m.deliveryStatus && DELIVERY[m.deliveryStatus] && (

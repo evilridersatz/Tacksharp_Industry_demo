@@ -4,7 +4,7 @@ import { config } from '../common/config.js';
 import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
 
-export type ChannelKind = 'whatsapp_phone_number_id' | 'plivo_number' | 'meta_page_id' | 'web_chat_key';
+export type ChannelKind = 'whatsapp_phone_number_id' | 'plivo_number' | 'meta_page_id' | 'web_chat_key' | 'messenger_page_id' | 'instagram_account_id';
 export type Vertical = 'real_estate' | 'restaurant';
 
 /**

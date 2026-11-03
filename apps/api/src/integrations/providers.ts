@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
  * Provider definitions: which fields are SECRET (encrypted, never returned) and which are plain configuration
  * (returned as-is), with validation. The backend decides what is allowed; the browser only renders it.
  */
-export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony', 'meta_capi'] as const;
+export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony', 'meta_capi', 'meta_social'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
@@ -57,6 +57,13 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
     { key: 'events', label: 'Events to send', secret: false, required: true, options: CAPI_EVENT_SETS, help: 'Purchase = a completed order; Lead = a new enquiry.' },
     { key: 'testEventCode', label: 'Test event code', secret: false, required: false, help: 'From Events Manager → Test events. While set, events appear only under Test events and are not used for ads. Clear it to go live.' },
   ],
+  meta_social: [
+    { key: 'pageAccessToken', label: 'Page access token', secret: true, required: true, help: 'Meta Business → System users → token for your Facebook Page with pages_messaging (and instagram_manage_messages for Instagram).' },
+    { key: 'appSecret', label: 'App secret', secret: true, required: true, help: 'Your Meta app → Settings → Basic. Used to verify that every webhook really comes from Meta.' },
+    { key: 'pageId', label: 'Facebook Page ID', secret: false, required: true, help: 'Page → About → Page transparency, or Business settings → Pages.' },
+    { key: 'instagramAccountId', label: 'Instagram account ID', secret: false, required: false, help: 'The Instagram professional account linked to this Page. Leave empty for Messenger only.' },
+    { key: 'autoReply', label: 'Automatic acknowledgement', secret: false, required: false, help: 'Sent once when a customer writes after 24 hours of silence, e.g. "Thanks! Our team will reply shortly." Leave empty for none.' },
+  ],
 };
 
 export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
@@ -65,6 +72,7 @@ export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
   whatsapp: {},
   sarvam_telephony: {},
   meta_capi: { events: 'purchase_and_lead' },
+  meta_social: {},
 };
 
 const digits = (v: string) => v.replace(/[\s()+-]/g, '');
@@ -97,6 +105,8 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
         if (!/^\d{8,15}$/.test(v)) { errors[f.key] = 'Digits with country code, 8 to 15 long.'; continue; }
       }
       if (provider === 'sarvam_telephony' && ['orgId', 'workspaceId', 'connectionId'].includes(f.key) && v && !/^[\w-]{2,100}$/.test(v)) { errors[f.key] = 'Letters, digits, - and _ only (copy it from Sarvam).'; continue; }
+      if (provider === 'meta_social' && (f.key === 'pageId' || f.key === 'instagramAccountId') && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy it from Meta Business settings).'; continue; }
+      if (provider === 'meta_social' && f.key === 'autoReply' && v.length > 500) { errors[f.key] = 'Keep it under 500 characters.'; continue; }
       if (provider === 'meta_capi' && f.key === 'pixelId' && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy the dataset ID from Events Manager).'; continue; }
       if (provider === 'meta_capi' && f.key === 'testEventCode' && v && !/^[A-Za-z0-9]{4,40}$/.test(v)) { errors[f.key] = 'Letters and digits only (copy it from Test events).'; continue; }
       if (provider === 'whatsapp' && (f.key === 'phoneNumberId' || f.key === 'businessAccountId') && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy it from WhatsApp Manager).'; continue; }

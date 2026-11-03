@@ -105,7 +105,7 @@ model Organization {
 model OrganizationChannel {
   id             String       @id @default(cuid())
   organizationId String
-  /// whatsapp_phone_number_id | plivo_number | meta_page_id
+  /// whatsapp_phone_number_id | plivo_number | meta_page_id | web_chat_key | messenger_page_id | instagram_account_id
   kind           String
   externalId     String
   createdAt      DateTime     @default(now())
@@ -183,6 +183,7 @@ model Customer {
   followUpAt           DateTime?
   crmNotes             CustomerNote[]
   dripEnrollments      DripEnrollment[]
+  socialIdentities     SocialIdentity[]
   organization         Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   calls                Call[]
   Conversation         Conversation[]
@@ -2628,4 +2629,22 @@ model MetaCapiEvent {
   @@unique([organizationId, eventId])
   @@index([status, nextAttemptAt])
   @@index([organizationId, createdAt])
+}
+
+/// Instagram / Messenger: the Meta user id (page-scoped PSID or Instagram-scoped IGSID) behind a customer record.
+/// These customers have no phone number; the conversation's externalId is this id.
+model SocialIdentity {
+  id             String   @id @default(cuid())
+  organizationId String
+  /// instagram | messenger
+  channel        String   @db.VarChar(20)
+  externalUserId String
+  customerId     String
+  displayName    String?  @db.VarChar(120)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, channel, externalUserId])
+  @@index([customerId])
 }

@@ -9,7 +9,7 @@ import { Badge, Button, Card, CardHeader, ErrorBanner, Skeleton, cx } from './ui
 import { Dialog, inputCls } from './textile';
 import { toast } from './toast';
 
-export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony' | 'meta_capi';
+export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony' | 'meta_capi' | 'meta_social';
 type Field = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: string[] };
 type Usage = {
   days: number; total: number; failed: number; costEstimate: number | null; costNote: string;
@@ -41,6 +41,7 @@ export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrati
   sarvam: { name: 'Sarvam AI', group: 'AI providers', href: '/settings/ai-providers/sarvam', blurb: 'Speech recognition and Tamil / English voices for calls.' },
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
   sarvam_telephony: { name: 'Sarvam Voice Agents (telephony)', group: 'Integrations', href: '/settings/integrations/sarvam-telephony', blurb: 'Calls answered by an agent hosted on Sarvam: outbound calls and post-call results.' },
+  meta_social: { name: 'Instagram & Messenger', group: 'Integrations', href: '/settings/integrations/meta-social', blurb: 'Instagram and Facebook Messenger messages in the team inbox; your team replies from there.' },
   meta_capi: { name: 'Meta Conversions API', group: 'Integrations', href: '/settings/integrations/meta-capi', blurb: 'Report completed orders and new enquiries to your Meta ads dataset (hashed customer data only).' },
 };
 
@@ -268,6 +269,7 @@ export function ProviderSettings({ provider }: { provider: ProviderId }) {
         </Card>
 
         {provider === 'sarvam_telephony' && <SarvamTestCall data={data} canManage={canManage} busy={busy} test={test} />}
+        {provider === 'meta_social' && <SocialSetup data={data} />}
         {provider === 'meta_capi' && <CapiPanel data={data} canManage={canManage} busy={busy} test={test} />}
         <UsageCard usage={data.usage} />
       </div>
@@ -538,6 +540,26 @@ function CapiPanel({ data, canManage, busy, test }: { data: Integration; canMana
           {log.data.items.length > shown && <Button variant="ghost" className="mt-2" onClick={() => setShown((n) => n + 40)}>Show more ({log.data.items.length - shown} more of the latest 200)</Button>}
         </div>
       )}
+      </div>
+    </Card>
+  );
+}
+
+/** Instagram & Messenger: the webhook Meta must call, and what works today. */
+function SocialSetup({ data }: { data: Integration }) {
+  const url = `${data.deployment.publicBaseUrl}/webhooks/meta-social`;
+  return (
+    <Card data-testid="social-setup">
+      <CardHeader title="Connect the webhook" subtitle="In your Meta app → Webhooks: subscribe the Page's messages field and the Instagram messages field to this URL." />
+      <div className="space-y-2 px-5 pb-5 text-[13px] text-body">
+        <Row k="Callback URL"><code className="break-all text-[12px]">{url}</code></Row>
+        <Row k="Verify token">the deployment's WhatsApp verify token (or META_SOCIAL_VERIFY_TOKEN)</Row>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[12.5px] text-muted">
+          <li>Every delivery must be signed with the app secret saved here; unsigned or wrongly signed deliveries are refused.</li>
+          <li>Enabling routes this Page and Instagram account to your workspace; disabling stops it.</li>
+          <li>Messages appear in the Team inbox. Your team replies within 24 hours of the customer&apos;s last message (Meta&apos;s rule). STOP / START are honoured.</li>
+          <li><b>Pending:</b> AI replies on Instagram / Messenger, images and files (shown as labels, not downloaded), delivery receipts.</li>
+        </ul>
       </div>
     </Card>
   );

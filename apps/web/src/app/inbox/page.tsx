@@ -35,6 +35,10 @@ const STATUS_LABEL = { open: 'Open', pending: 'Pending', resolved: 'Resolved' } 
 const MANAGE = ['admin', 'manager', 'team_lead'];
 const REPLY = [...MANAGE, 'sales', 'front_desk', 'reception', 'operator', 'support'];
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger', voice: 'Phone', web: 'Web chat' };
+const SOCIAL = ['instagram', 'messenger'];
+/** Who the conversation is with: a phone number, or (Instagram / Messenger) the channel and a masked Meta id. */
+const contactLine = (channel: string, externalId: string | null) => (SOCIAL.includes(channel) ? `${CHANNEL_LABEL[channel]} id ••${(externalId ?? '').slice(-4)}` : formatPhone(externalId));
 
 /** Team inbox: every conversation of this workspace, shared by the team and the AI. */
 export default function InboxPage() {
@@ -42,12 +46,13 @@ export default function InboxPage() {
   const [status, setStatus] = useState<'open' | 'pending' | 'resolved' | 'all'>('open');
   const [who, setWho] = useState<'all' | 'me' | 'unassigned'>('all');
   const [q, setQ] = useState('');
+  const [channel, setChannel] = useState('all');
   const [query, setQuery] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setQuery(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
-  const params = new URLSearchParams({ status, assignee: who, ...(query ? { q: query } : {}) });
+  const params = new URLSearchParams({ status, assignee: who, ...(channel !== 'all' ? { channel } : {}), ...(query ? { q: query } : {}) });
   const { data, error, reload } = useApi<List>(`/inbox/conversations?${params}`, 8_000);
   const [selected, setSelected] = useState<string | null>(null);
   const current = useMemo(() => data?.items.find((i) => i.id === selected) ?? data?.items[0] ?? null, [data, selected]);
@@ -61,6 +66,10 @@ export default function InboxPage() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Segmented label="Status" value={status} onChange={setStatus} options={[{ value: 'open', label: `Open (${data?.counts.open ?? 0})` }, { value: 'pending', label: `Pending (${data?.counts.pending ?? 0})` }, { value: 'resolved', label: 'Resolved' }, { value: 'all', label: 'All' }]} />
         <Segmented label="Assignee" value={who} onChange={setWho} options={[{ value: 'all', label: 'Everyone' }, { value: 'me', label: `Mine (${data?.counts.mine ?? 0})` }, { value: 'unassigned', label: `Unassigned (${data?.counts.unassigned ?? 0})` }]} />
+        <select aria-label="Channel" className={cx(inputCls.replace('w-full', ''), 'h-9 w-44')} value={channel} onChange={(e) => setChannel(e.target.value)}>
+          <option value="all">All channels</option>
+          {['whatsapp', 'instagram', 'messenger', 'voice'].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+        </select>
         {data && data.counts.needsHuman > 0 && <Badge tone="rose">{data.counts.needsHuman} need a person</Badge>}
         {data && data.counts.aiOff > 0 && <Badge tone="amber">{data.counts.aiOff} handled by the team (AI off)</Badge>}
       </div>
@@ -81,11 +90,12 @@ export default function InboxPage() {
                   <Avatar person={c.customer ?? { name: null, phone: c.externalId }} size={34} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate text-[13.5px] font-semibold text-ink">{c.customer ? displayName(c.customer) : formatPhone(c.externalId)}</span>
+                      <span className="truncate text-[13.5px] font-semibold text-ink">{c.customer ? displayName(c.customer) : contactLine(c.channel, c.externalId)}</span>
                       <span className="ml-auto shrink-0 text-[11px] text-faint">{timeAgo(c.updatedAt)}</span>
                     </span>
                     <span className="block truncate text-[12.5px] text-muted">{c.lastMessage ? `${c.lastMessage.role === 'user' ? '' : 'Reply: '}${c.lastMessage.content}` : 'No messages'}</span>
                     <span className="mt-1 flex flex-wrap gap-1">
+                      {c.channel !== 'whatsapp' && <Badge tone="violet">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>}
                       {c.needsHuman && <Badge tone="rose">needs a person</Badge>}
                       {!c.aiEnabled && <Badge tone="amber">AI off</Badge>}
                       {c.priority !== 'normal' && <Badge tone={PRIORITY_TONE[c.priority]}>{c.priority}</Badge>}
@@ -136,10 +146,12 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
       <div className="flex min-w-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[15px] font-semibold text-ink">{d.customer ? displayName(d.customer) : formatPhone(d.externalId)}</p>
-            <p className="text-[12px] text-muted">{formatPhone(d.externalId)} · {d.channel === 'whatsapp' ? 'WhatsApp' : d.channel}</p>
+            <p className="truncate text-[15px] font-semibold text-ink">{d.customer ? displayName(d.customer) : contactLine(d.channel, d.externalId)}</p>
+            <p className="text-[12px] text-muted" data-testid="contact-line">{contactLine(d.channel, d.externalId)} · {CHANNEL_LABEL[d.channel] ?? d.channel}</p>
           </div>
-          {d.aiEnabled ? (
+          {SOCIAL.includes(d.channel) ? (
+            <Badge tone="amber">Team only · AI on {CHANNEL_LABEL[d.channel]} pending</Badge>
+          ) : d.aiEnabled ? (
             <Button disabled={!canReply} busy={busy === 'take'} onClick={() => void run('take', () => api.post(`/inbox/conversations/${id}/take-over`), 'You are handling this conversation. The AI will not reply.')}><Hand className="size-4" />Take over</Button>
           ) : (
             <Button disabled={!canReply} busy={busy === 'ai'} onClick={() => void run('ai', () => api.post(`/inbox/conversations/${id}/return-to-ai`), 'Returned to the AI.')}><Bot className="size-4" />Return to AI</Button>
@@ -180,7 +192,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
             const ok = await run('send', () => (tab === 'reply' ? api.post(`/inbox/conversations/${id}/reply`, { text: body }) : api.post(`/inbox/conversations/${id}/notes`, { body })), tab === 'reply' ? (r) => ((r as { sent?: boolean; notSentReason?: string }).sent === false ? `Saved but NOT sent: ${(r as { notSentReason?: string }).notSentReason ?? 'test mode'}.` : 'Sent to WhatsApp. Delivery shows when Meta reports it.') : 'Note added (only your team sees it).');
             if (ok) setText('');
           }}>
-            <textarea className={cx(inputCls, 'h-20 py-2')} aria-label={tab === 'reply' ? 'Reply message' : 'Internal note'} placeholder={tab === 'reply' ? 'Write to the customer (sent as your business on WhatsApp)…' : 'Write a note for your team (never sent to the customer)…'} value={text} onChange={(e) => setText(e.target.value)} disabled={!canReply || (tab === 'reply' && !d.replyWindow.open)} />
+            <textarea className={cx(inputCls, 'h-20 py-2')} aria-label={tab === 'reply' ? 'Reply message' : 'Internal note'} placeholder={tab === 'reply' ? `Write to the customer (sent as your business on ${CHANNEL_LABEL[d.channel] ?? 'WhatsApp'})…` : 'Write a note for your team (never sent to the customer)…'} value={text} onChange={(e) => setText(e.target.value)} disabled={!canReply || (tab === 'reply' && !d.replyWindow.open)} />
             <Button type="submit" variant="primary" className="self-end" busy={busy === 'send'} disabled={!canReply || !text.trim() || (tab === 'reply' && !d.replyWindow.open)}>{tab === 'reply' ? <><Send className="size-4" />Send</> : <><StickyNote className="size-4" />Add note</>}</Button>
           </form>
         </div>
@@ -223,7 +235,7 @@ function ConversationPane({ id, canReply, canManage, me, onChanged }: { id: stri
               <li>{displayName(d.customer)} · {formatPhone(d.customer.phone)}</li>
               {d.customer.email && <li>{d.customer.email}</li>}
               <li>Language: {d.customer.language ?? 'not known yet'}</li>
-              <li>WhatsApp consent: {d.customer.messagingConsent ? 'yes' : 'no'}{d.customer.optedOutAt ? ' · opted out (STOP)' : ''}</li>
+              <li>{SOCIAL.includes(d.channel) ? `Wrote on ${CHANNEL_LABEL[d.channel]}` : `WhatsApp consent: ${d.customer.messagingConsent ? 'yes' : 'no'}`}{d.customer.optedOutAt ? ' · opted out (STOP)' : ''}</li>
               {d.customer.source && <li>Source: {d.customer.source}</li>}
             </ul>
           ) : <p className="text-muted">No customer record.</p>}

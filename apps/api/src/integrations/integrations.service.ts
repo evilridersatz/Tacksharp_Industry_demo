@@ -25,6 +25,8 @@ export const OPERATIONS: Record<Provider, string[]> = {
   sarvam_telephony: ['call'],
   // connection = read the dataset with the token (no event sent); test_event = one event under Test events only.
   meta_capi: ['connection', 'test_event'],
+  // connection = read the Page (and its linked Instagram account) with the token; nothing is sent.
+  meta_social: ['connection'],
 };
 
 const SAMPLE_TEXT: Record<string, string> = {
@@ -156,6 +158,7 @@ export class IntegrationsService {
     const row = await this.creds.row(actor.org, provider);
     if (!row) throw new NotFoundException('Save the credentials first.');
     if (enabled && row.status !== 'ok') throw new BadRequestException('Run a successful connection test before enabling. Saving credentials does not prove they work.');
+    if (provider === 'meta_social') await this.routeSocial(actor, (row.config ?? {}) as Record<string, string>, enabled);
     await this.prisma.integrationCredential.update({ where: { id: row.id }, data: { enabled, updatedBy: who(actor) } });
     this.creds.invalidate(actor.org, provider);
     await this.audit(actor.org, who(actor), provider, enabled ? 'integration.enabled' : 'integration.disabled');
@@ -166,6 +169,7 @@ export class IntegrationsService {
     const provider = this.provider(providerRaw);
     const row = await this.creds.row(actor.org, provider);
     if (!row) throw new NotFoundException('Nothing saved for this integration.');
+    if (provider === 'meta_social') await this.routeSocial(actor, (row.config ?? {}) as Record<string, string>, false);
     await this.prisma.integrationCredential.delete({ where: { id: row.id } });
     this.creds.invalidate(actor.org, provider);
     await this.audit(actor.org, who(actor), provider, 'integration.deleted');
@@ -234,6 +238,13 @@ export class IntegrationsService {
           : { ...t, latencyMs: n.latencyMs + t.latencyMs, message: `The number works, but templates could not be read: ${t.message}` };
         break;
       }
+      case 'meta_social:connection': {
+        const pg = await clients.metaPage(this.fetchImpl, secrets.pageAccessToken, cfg.pageId);
+        result = pg.ok && cfg.instagramAccountId && pg.instagramAccountId !== cfg.instagramAccountId
+          ? { ok: false, latencyMs: pg.latencyMs, errorCode: 'mismatch', message: `The Page works, but its linked Instagram account is ${pg.instagramAccountId ? `••••${pg.instagramAccountId.slice(-4)}` : 'not set'}, not the one entered.` }
+          : pg;
+        break;
+      }
       case 'meta_capi:connection':
         result = await clients.metaPixel(this.fetchImpl, secrets.accessToken, cfg.pixelId);
         break;
@@ -282,6 +293,29 @@ export class IntegrationsService {
   }
 
   /** Route this organization's WhatsApp number (verified with its own token) to it. */
+  /**
+   * Messenger / Instagram webhooks are routed by the Page id and Instagram account id Meta puts in each delivery.
+   * Enabling maps them to this organization (refused if another organization already has them); disabling or
+   * deleting removes the mapping, so messages stop arriving here. There is no default-organization fallback.
+   */
+  private async routeSocial(actor: Actor, cfg: Record<string, string>, on: boolean) {
+    const ids: Array<{ kind: 'messenger_page_id' | 'instagram_account_id'; externalId: string }> = [];
+    if (cfg.pageId) ids.push({ kind: 'messenger_page_id', externalId: cfg.pageId });
+    if (cfg.instagramAccountId) ids.push({ kind: 'instagram_account_id', externalId: cfg.instagramAccountId });
+    if (!on) {
+      await this.prisma.organizationChannel.deleteMany({ where: { organizationId: actor.org, kind: { in: ['messenger_page_id', 'instagram_account_id'] } } });
+      return;
+    }
+    for (const i of ids) {
+      const existing = await this.prisma.organizationChannel.findUnique({ where: { kind_externalId: i } });
+      if (existing && existing.organizationId !== actor.org) throw new ConflictException(`This ${i.kind === 'messenger_page_id' ? 'Facebook Page' : 'Instagram account'} is already connected to another organization. Contact Tacksharp support if it is yours.`);
+    }
+    // Only the ids saved now: a Page / account removed from the settings stops routing here.
+    await this.prisma.organizationChannel.deleteMany({ where: { organizationId: actor.org, kind: { in: ['messenger_page_id', 'instagram_account_id'] } } });
+    for (const i of ids) await this.prisma.organizationChannel.create({ data: { organizationId: actor.org, ...i } });
+    await this.audit(actor.org, who(actor), 'meta_social', 'integration.channels_mapped', { kinds: ids.map((i) => i.kind) });
+  }
+
   async mapWhatsappNumber(actor: Actor) {
     const eff = await this.creds.resolve(actor.org, 'whatsapp');
     if (eff.source !== 'organization') throw new BadRequestException('Save, test and enable your own WhatsApp credentials first.');
