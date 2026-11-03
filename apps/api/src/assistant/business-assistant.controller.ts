@@ -6,7 +6,10 @@ import { TenancyService } from '../tenancy/tenancy.service.js';
 import { AiService } from '../ai/ai.service.js';
 import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
-import { AssistantService, detectStyle } from './assistant.service.js';
+import { config } from '../common/config.js';
+import { providerCredentials } from '../integrations/provider-scope.js';
+import { SARVAM_SPEAKERS } from '../integrations/providers.js';
+import { AssistantService, detectStyle, type AssistantVoice } from './assistant.service.js';
 import type { Style } from './knowledge.js';
 
 /** The business's own greeting in the dashboard assistant (Tamil, Tanglish, English). */
@@ -47,18 +50,57 @@ export class BusinessAssistantController {
     return { name: org?.name ?? 'Your business', isDemo: Boolean(org?.isDemo), ordering, industry, enabled };
   }
 
+  /**
+   * The agent that answers the business's phone: the one chosen for calls in Settings, else the most recently updated
+   * Sarvam phone agent (active first). Its voice and greeting are used here so the assistant sounds like the phone line.
+   */
+  private async phoneAgent(organizationId: string) {
+    const st = await this.prisma.organizationSettings.findUnique({ where: { organizationId } }).catch(() => null);
+    const chosen = (st?.data as { telephony?: { systemAgentId?: string } } | null)?.telephony?.systemAgentId;
+    const select = { id: true, name: true, voice: true, greeting: true } as const;
+    if (chosen) {
+      const a = await this.prisma.voiceAgent.findFirst({ where: { id: chosen, organizationId }, select });
+      if (a) return a;
+    }
+    const rows = await this.prisma.voiceAgent.findMany({ where: { organizationId, sarvamAppId: { not: null }, status: { not: 'archived' } }, orderBy: [{ updatedAt: 'desc' }], select: { ...select, status: true }, take: 10 });
+    return rows.find((r) => r.status === 'active') ?? rows[0] ?? null;
+  }
+
+  /**
+   * The phone call's voice: the business's Sarvam account (its own key when it has one), the phone agent's speaker
+   * and pace when set, otherwise the account / deployment phone voice; same model and temperature as calls.
+   */
+  private async phoneVoice(organizationId: string): Promise<AssistantVoice & { agentName: string | null; source: 'agent' | 'account' }> {
+    const [agent, cred] = await Promise.all([this.phoneAgent(organizationId), providerCredentials('sarvam', organizationId).catch(() => null)]);
+    const key = cred && cred.source !== 'none' ? String(cred.secrets.apiKey ?? '') : '';
+    const model = String(cred?.config.ttsModel || config.sarvam.ttsModel);
+    const v = (agent?.voice ?? null) as { speaker?: string; pace?: number } | null;
+    const fromAgent = Boolean(v?.speaker && (SARVAM_SPEAKERS as readonly string[]).includes(v.speaker));
+    const speaker = fromAgent ? v!.speaker! : String(cred?.config.ttsSpeaker || config.sarvam.ttsSpeaker);
+    const pace = fromAgent && typeof v?.pace === 'number' && v.pace >= 0.5 && v.pace <= 2 ? v.pace : config.sarvam.ttsPace;
+    // `temperature` exists only on bulbul:v3 / v4-flash (as in the phone path).
+    const temperature = /^bulbul:(v3|v4-flash)/.test(model) ? config.sarvam.ttsTemperature : undefined;
+    return { key: key || config.sarvam.apiKey, model, speaker, pace, temperature, agentName: agent?.name ?? null, source: fromAgent ? 'agent' : 'account' };
+  }
+
   @Get('status')
   async status(@Org() organizationId: string, @Query('lang') lang?: string) {
     const ws = await this.workspace(organizationId);
     const style = (['ta', 'en', 'tanglish'].includes(String(lang)) ? lang : 'en') as Style;
+    const [agent, voice] = await Promise.all([this.phoneAgent(organizationId), this.phoneVoice(organizationId)]);
+    const base = this.assistant.status();
     return {
-      ...this.assistant.status(),
+      ...base,
+      voice: Boolean(voice.key),
+      video: Boolean(base.video && voice.key),
       enabled: ws.enabled,
       reason: ws.enabled ? null : 'Your business assistant can be tried here in a demo workspace. Live customers talk to it on WhatsApp and phone.',
       organizationName: ws.name,
       industry: ws.industry,
       ordering: ws.ordering,
-      greeting: greeting(ws.name, ws.ordering)[style],
+      // The phone agent's own opening line when it has one: the assistant opens exactly like a call.
+      greeting: agent?.greeting?.replace(/\{\{[^}]*\}\}/g, '').replace(/\s+([,.!?])/g, '$1').replace(/\s{2,}/g, ' ').trim() || greeting(ws.name, ws.ordering)[style],
+      phoneVoice: { agent: voice.agentName, speaker: voice.speaker, pace: voice.pace, model: voice.model, source: voice.source },
     };
   }
 
@@ -125,9 +167,10 @@ export class BusinessAssistantController {
     return this.assistant.speechToText(body ?? {});
   }
 
+  /** Spoken in the phone agent's voice (speaker, pace, model, temperature), as on a call. */
   @Post('tts')
   @HttpCode(200)
-  tts(@Body() body: { text?: unknown; style?: unknown; sampleRate?: unknown }) {
-    return this.assistant.textToSpeech(body ?? {});
+  async tts(@Org() organizationId: string, @Body() body: { text?: unknown; style?: unknown; sampleRate?: unknown }) {
+    return this.assistant.textToSpeech(body ?? {}, await this.phoneVoice(organizationId));
   }
 }

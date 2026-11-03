@@ -18,7 +18,7 @@ import { encodeWav, sentences, wavPcm } from '@/lib/voice';
 type Style = 'ta' | 'en' | 'tanglish';
 type Msg = { role: 'user' | 'assistant'; content: string; voice?: boolean; order?: { orderNumber: string; total: number; status: string } };
 type Who = 'business' | 'tara';
-type Status = { chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string; enabled?: boolean; reason?: string | null; organizationName?: string; ordering?: boolean };
+type Status = { chat: 'ai' | 'faq'; voice: boolean; video?: boolean; greeting: string; enabled?: boolean; reason?: string | null; organizationName?: string; ordering?: boolean; phoneVoice?: { agent: string | null; speaker: string; pace: number; source: 'agent' | 'account' } };
 type Memory = { known: boolean; phone: string; name?: string | null; orderCount?: number; recentOrders?: Array<{ orderNumber: string; total: number; status: string; channel: string; at: string }>; channels?: string[] };
 type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting';
 /** Video call states shown to the visitor. */
@@ -46,6 +46,7 @@ const QUICK_BUSINESS: Record<Style, Array<[string, string]>> = {
   tanglish: [['🕘', 'Timings enna?'], ['💰', 'Price evlo?'], ['🙋', 'Staff kitta pesanum']],
 };
 const PHONE_STORE = 'ts-assistant-customer-v1';
+const SIDEBAR_W = 400;
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const PHASE_LABEL: Record<Phase, string> = { idle: 'Online', listening: 'Listening…', transcribing: 'Got it…', thinking: 'Thinking…', speaking: 'Speaking…', reconnecting: 'Reconnecting…' };
 /** Barge-in: the visitor talking over Tara (echo-cancelled mic, louder and sustained, so her own voice never triggers it). */
@@ -170,6 +171,16 @@ export function LiveAgent({ business = false }: { business?: boolean } = {}) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msgs, lang]);
+  // Dashboard on a wide screen: the assistant is a sidebar docked on the right and the page makes room for it
+  // (it never covers the middle of the dashboard). Phones keep the full-screen view.
+  useEffect(() => {
+    if (!business || !open) return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const apply = () => { document.body.style.paddingRight = mq.matches ? `${SIDEBAR_W}px` : ''; };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => { mq.removeEventListener('change', apply); document.body.style.paddingRight = ''; };
+  }, [business, open]);
   // The test customer's number is remembered on this device (convenience only).
   useEffect(() => {
     if (!business) return;
@@ -585,7 +596,7 @@ export function LiveAgent({ business = false }: { business?: boolean } = {}) {
         </button>
       )}
       {open && (
-        <section role="dialog" aria-modal="false" aria-label={`${assistantName}, AI assistant`} className="fixed inset-0 z-[55] flex flex-col overflow-hidden bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[680px] sm:max-h-[calc(100dvh-2rem)] sm:w-[420px] sm:rounded-[20px] sm:border sm:border-black/5 sm:shadow-[0_40px_90px_-30px_rgba(22,24,61,0.6)] print:hidden">
+        <section role="dialog" aria-modal="false" aria-label={`${assistantName}, AI assistant`} data-docked={business ? 'right' : undefined} className={cx('fixed inset-0 z-[55] flex flex-col overflow-hidden bg-white sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[680px] sm:max-h-[calc(100dvh-2rem)] sm:w-[420px] sm:rounded-[20px] sm:border sm:border-black/5 sm:shadow-[0_40px_90px_-30px_rgba(22,24,61,0.6)] print:hidden', business && 'lg:top-0 lg:right-0 lg:bottom-0 lg:h-dvh lg:max-h-none lg:w-[400px] lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l lg:border-black/10 lg:shadow-[-12px_0_40px_-24px_rgba(22,24,61,0.35)]')}>
           <header className="flex items-center gap-3 border-b border-black/5 px-4 py-3">
             <Orb size={36} level={level} phase={phase} />
             <div className="min-w-0 flex-1 leading-tight">
@@ -664,6 +675,11 @@ export function LiveAgent({ business = false }: { business?: boolean } = {}) {
             </div>
           </div>
 
+          {isBiz && biz?.phoneVoice && status?.voice && (
+            <p className="border-b border-black/5 bg-[#f7f8fc] px-3 py-1.5 text-[11.5px] text-[#16183d]/60" data-testid="assistant-voice">
+              Phone voice: <span className="font-semibold text-[#16183d]/80">{biz.phoneVoice.speaker}</span> · pace {biz.phoneVoice.pace}{biz.phoneVoice.agent ? ` · from ${biz.phoneVoice.agent}` : ''}
+            </p>
+          )}
           <div className="flex items-center gap-1 border-b border-black/5 px-3 py-2" role="radiogroup" aria-label="Reply language">
             <Languages className="mr-1 size-3.5 text-[#16183d]/40" aria-hidden />
             {LANGS.map((l) => (

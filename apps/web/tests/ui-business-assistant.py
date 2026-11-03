@@ -78,7 +78,11 @@ with sync_playwright() as p:
     pg.get_by_role('button', name=re.compile('Open the AI assistant')).click(); pg.wait_for_timeout(1800)
     dlg = pg.get_by_role('dialog', name=re.compile('assistant'))
     check('business tab selected, named after the shop', dlg.get_by_role('tab', selected=True).filter(has_text=re.compile('GR Chicken')).count() == 1)
-    check('greeting is the shop assistant', dlg.get_by_text(re.compile('GR Chicken.*assistant')).count() >= 1)
+    check('header names the shop assistant', dlg.locator('header').get_by_text(re.compile('GR Chicken.*assistant')).count() >= 1)
+    box = dlg.bounding_box(); vw, vh = 1440, 900
+    check('docked as a right sidebar, full height (not over the middle of the dashboard)', box and abs(box['x'] + box['width'] - vw) <= 1 and box['y'] <= 1 and box['height'] >= vh - 1 and box['width'] <= 420, str(box))
+    check('the dashboard makes room for it', pg.evaluate("getComputedStyle(document.body).paddingRight") == '400px' and pg.locator('main').bounding_box()['x'] + pg.locator('main').bounding_box()['width'] <= box['x'] + 1)
+    check('shows which phone voice it speaks with', dlg.get_by_test_id('assistant-voice').count() == 1 and 'pace' in dlg.get_by_test_id('assistant-voice').inner_text(), dlg.get_by_test_id('assistant-voice').inner_text() if dlg.get_by_test_id('assistant-voice').count() else '')
     # Voice replies off for the typed part (the spoken part is tested below).
     dlg.get_by_role('button', name='Mute voice replies').click()
 
@@ -123,6 +127,8 @@ with sync_playwright() as p:
     check('voice: the reply was spoken through the business voice endpoint', len(tts_requests) >= 1)
     dlg.get_by_role('button', name='Chat', exact=True).click(); pg.wait_for_timeout(500)
     pg.screenshot(path=os.path.join(SHOTS, 'business-assistant-voice.png'))
+    pg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(400)
+    check('closing gives the dashboard its full width back', pg.evaluate("getComputedStyle(document.body).paddingRight") in ('0px', ''))
     check('no page errors', not errs, '; '.join(errs)[:200])
 
     # Clean up this run's test customer and order (TEST database only).

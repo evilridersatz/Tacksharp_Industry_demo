@@ -10,6 +10,8 @@ import { FALLBACK, FAQ, GREETING, KNOWLEDGE, type Style } from './knowledge.js';
  * It uses the platform's own OpenAI and Sarvam accounts (server .env); keys never reach the browser.
  * It never claims to be a person, never invents prices or features, and stores nothing about the visitor.
  */
+/** A specific Sarvam voice (business mode: the voice of the business's phone agent). */
+export type AssistantVoice = { key: string; model: string; speaker: string; pace: number; temperature?: number };
 export type ChatTurn = { role: 'user' | 'assistant'; content: string };
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -187,16 +189,23 @@ export class AssistantService {
    * Text -> natural speech (Sarvam). Tamil and Tanglish use a Tamil voice (it reads mixed English naturally), English
    * an Indian-English voice. Short sentences are synthesised separately by the browser for a fast first word.
    */
-  async textToSpeech(body: { text?: unknown; style?: unknown; sampleRate?: unknown }) {
-    if (!config.sarvam.apiKey) throw new ServiceUnavailableException('Voice replies are not available right now.');
-    const text = forSpeech(typeof body?.text === 'string' ? body.text : '').slice(0, 500);
+  async textToSpeech(body: { text?: unknown; style?: unknown; sampleRate?: unknown }, voice?: AssistantVoice) {
+    if (!(voice?.key ?? config.sarvam.apiKey)) throw new ServiceUnavailableException('Voice replies are not available right now.');
+    const spokenText = forSpeech(typeof body?.text === 'string' ? body.text : '');
+    // As on a phone call: long numbers are grouped the Indian way so they are read as amounts, not digit strings.
+    const text = (voice ? spokenText.replace(/\b\d{5,}\b/g, (n) => Number(n).toLocaleString('en-IN')) : spokenText).slice(0, 500);
     if (!text) throw new BadRequestException('Nothing to say.');
     const style = ['ta', 'en', 'tanglish'].includes(String(body?.style)) ? (body.style as Style) : detectStyle(text);
-    const language = style === 'en' && !/[஀-௿]/.test(text) ? 'en-IN' : 'ta-IN';
-    const speaker = process.env.ASSISTANT_TTS_SPEAKER || config.sarvam.ttsSpeaker;
+    // The phone voice (business mode) picks the language exactly as a call does: Tamil script -> ta-IN, else en-IN.
+    const language = voice ? (/[஀-௿]/.test(text) ? 'ta-IN' : 'en-IN') : style === 'en' && !/[஀-௿]/.test(text) ? 'en-IN' : 'ta-IN';
+    const speaker = voice?.speaker ?? (process.env.ASSISTANT_TTS_SPEAKER || config.sarvam.ttsSpeaker);
+    const model = voice?.model ?? config.sarvam.ttsModel;
+    const pace = voice?.pace ?? (Number(process.env.ASSISTANT_TTS_PACE) || 1.05);
+    const temperature = voice?.temperature;
+    const apiKey = voice?.key ?? config.sarvam.apiKey;
     // 16 kHz drives the video presenter's lip-sync (PCM16 16 kHz mono); 22.05 kHz otherwise.
     const rate = Number(body?.sampleRate) === 16000 ? 16000 : 22050;
-    const key = createHash('sha1').update(`${language}|${speaker}|${config.sarvam.ttsModel}|${rate}|${text}`).digest('hex');
+    const key = createHash('sha1').update(`${language}|${speaker}|${model}|${pace}|${temperature ?? ''}|${rate}|${text}`).digest('hex');
     const hit = this.ttsCache.get(key);
     if (hit) return { audioBase64: hit, cached: true, language };
     const started = Date.now();
@@ -204,8 +213,8 @@ export class AssistantService {
     try {
       res = await this.fetchImpl('https://api.sarvam.ai/text-to-speech', {
         method: 'POST',
-        headers: { 'api-subscription-key': config.sarvam.apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model: config.sarvam.ttsModel, speaker, language_code: language, pace: Number(process.env.ASSISTANT_TTS_PACE) || 1.05, speech_sample_rate: rate, output_audio_codec: 'wav' }),
+        headers: { 'api-subscription-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, model, speaker, language_code: language, pace, ...(temperature !== undefined ? { temperature } : {}), speech_sample_rate: rate, output_audio_codec: 'wav' }),
         signal: AbortSignal.timeout(config.sarvam.ttsTimeoutMs * 2),
       });
     } catch (e) {

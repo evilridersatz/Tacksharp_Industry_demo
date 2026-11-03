@@ -19,6 +19,7 @@ if (enabled) {
   delete process.env.LIVE_ALLOW_ALL_CUSTOMERS;
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_BASE_URL;
+  process.env.SARVAM_API_KEY = 'test-sarvam-key-not-real';
 }
 
 const ORG = 'org_test_ba_a';
@@ -28,7 +29,7 @@ const NOW = new Date();
 const staff = { sub: 'u_ba', org: ORG, role: 'admin' } as any;
 
 describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
-  let prisma: any, conversations: any, catalog: any, orders: any, offers: any, engine: any, store: any, tenancy: any, ai: any, llmFake: any, reEngine: any, ctl: any, sender: any;
+  let prisma: any, conversations: any, catalog: any, orders: any, offers: any, engine: any, store: any, tenancy: any, ai: any, llmFake: any, reEngine: any, ctl: any, sender: any, assistant: any;
   const pending: Promise<unknown>[] = [];
   let n = 0;
   const phone = () => `96${String(Date.now()).slice(-6)}${String(n++ % 100).padStart(2, '0')}`;
@@ -99,7 +100,8 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     ai = new AiService(reEngine as any, tenancy, engine);
     const { AssistantService } = await import('../src/assistant/assistant.service.js');
     const { BusinessAssistantController } = await import('../src/assistant/business-assistant.controller.js');
-    ctl = new BusinessAssistantController(prisma, tenancy, ai, new AssistantService());
+    assistant = new AssistantService();
+    ctl = new BusinessAssistantController(prisma, tenancy, ai, assistant);
     await seedOrg(ORG);
     await seedOrg(ORG_B, 'Other Shop');
     await prisma.menuItem.updateMany({ where: { organizationId: ORG_B, name: 'Broiler Chicken' }, data: { price: 999 } });
@@ -166,6 +168,24 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     await chat(p, 'Hi');
     expect((await ctl.customer(ORG, p)).known).toBe(true);
     expect((await ctl.customer(ORG_B, p)).known).toBe(false);
+  });
+
+  it('speaks in the phone agent\'s voice (speaker, pace, model) and opens with its greeting', async () => {
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: ORG } });
+    const before = await ctl.status(ORG, 'en');
+    expect(before.phoneVoice.source).toBe('account');
+    await prisma.voiceAgent.create({ data: { organizationId: ORG, name: 'GR Phone Agent', industry: 'restaurant', instructions: 'x', languages: ['ta', 'en'], voice: { speaker: 'anushka', pace: 1.1 }, greeting: 'Vanakkam {{customer_name}}, GR Chicken pesuren!', fallbackMessage: 'x', status: 'active', telephonyProvider: 'sarvam', sarvamAppId: 'GR-test-app', sarvamAppVersion: 3 } });
+    const s = await ctl.status(ORG, 'en');
+    expect(s.phoneVoice).toMatchObject({ agent: 'GR Phone Agent', speaker: 'anushka', pace: 1.1, source: 'agent' });
+    expect(s.greeting).toBe('Vanakkam, GR Chicken pesuren!');
+    const sent: any[] = [];
+    assistant.fetchImpl = async (_url: string, init: RequestInit) => { sent.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ audios: ['UklGRg=='] }), { status: 200 }); };
+    await ctl.tts(ORG, { text: 'Broiler 220 rupees. Total 12500.', style: 'en' });
+    await ctl.tts(ORG, { text: 'ப்ராய்லர் கிலோ 220 ரூபாய்.' });
+    expect(sent[0]).toMatchObject({ speaker: 'anushka', pace: 1.1, language_code: 'en-IN' });
+    expect(sent[0].text).toContain('12,500');
+    expect(sent[1].language_code).toBe('ta-IN');
+    await prisma.voiceAgent.deleteMany({ where: { organizationId: ORG } });
   });
 
   it('refuses: viewers, a missing number, and a live non-restaurant workspace', async () => {
