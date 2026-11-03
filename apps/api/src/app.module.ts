@@ -44,6 +44,7 @@ import { DripModule } from './drip/drip.module.js';
 import { MetaCapiModule } from './meta-capi/meta-capi.module.js';
 import { SocialWebhookModule } from './social/social-webhook.module.js';
 import { WorkflowsModule } from './workflows/workflows.module.js';
+import { AnalyticsModule } from './analytics/analytics.module.js';
 import { HomeModule } from './home/home.module.js';
 
 @Module({
@@ -89,6 +90,7 @@ import { HomeModule } from './home/home.module.js';
     MetaCapiModule,
     SocialWebhookModule,
     WorkflowsModule,
+    AnalyticsModule,
     HomeModule,
   ],
   controllers: [AppController, PrivacyController],

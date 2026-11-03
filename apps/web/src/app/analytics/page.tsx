@@ -1,6 +1,7 @@
 'use client';
 
 import { IndustryDashboard } from '@/components/industry-dashboard';
+import { AdvancedAnalytics } from '@/components/advanced-analytics';
 import { useWorkspace } from '@/lib/industry';
 import { industryDef } from '@/lib/industries';
 
@@ -9,5 +10,10 @@ export default function AnalyticsPage() {
   const { workspace } = useWorkspace();
   const def = industryDef(workspace?.industry);
   const title = def.nav.flatMap((g) => g.items).find((i) => i.href === '/analytics')?.label ?? 'Reports & analytics';
-  return <IndustryDashboard title={workspace ? title : 'Reports & analytics'} analytics />;
+  return (
+    <>
+      <IndustryDashboard title={workspace ? title : 'Reports & analytics'} analytics />
+      <AdvancedAnalytics />
+    </>
+  );
 }

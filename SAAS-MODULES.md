@@ -1,4 +1,4 @@
-# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio (P3)
+# SaaS modules: team inbox, CRM, Campaign Studio, drip automation (P2); Meta Conversions API, Instagram & Messenger, Visual Workflow Studio, advanced analytics (P3)
 
 One backend, one login, one tenant model, one dashboard. Every module is organization-scoped from the session, checks
 permissions per action, writes audit events, and sends nothing to a customer except through the same live gate as the
@@ -10,6 +10,7 @@ rest of the product (`DRY_RUN`, approved test numbers, demo customers never cont
 | CRM | Done | `/contacts` (drawer → CRM panel), `apps/api/src/customers/` |
 | Campaign Studio | Existed already; verified | `/marketing`, `apps/api/src/marketing/` |
 | Drip automation | Done | `/drips`, `apps/api/src/drip/` |
+| Advanced analytics (P3) | Done | Reports & analytics → Advanced analytics, `apps/api/src/analytics/` |
 | Visual Workflow Studio (P3) | Done | `/workflows`, `apps/api/src/workflows/` |
 | Instagram & Messenger (P3) | Done for the team inbox (AI replies pending; not yet tested against Meta) | Settings → Integrations → Instagram & Messenger, `/inbox`, `apps/api/src/social/` |
 | Meta Conversions API (P3) | Done (not yet tested against Meta) | Settings → Integrations → Meta Conversions API, `apps/api/src/meta-capi/` |
@@ -105,6 +106,30 @@ fallback.
 - **Not verified against Meta**: needs a real dataset, token and test event code. With `DRY_RUN=false` for the test
   only, set the test event code, press Send test event, and check Events Manager → Test events.
 
+## Advanced analytics (P3)
+
+A section under **Reports & analytics** (every industry) for the last 7 / 30 / 90 days, each figure compared with the
+previous period of the same length. Every number is counted from the database; each tile has its definition on hover.
+No migration.
+
+- KPIs: customer messages, active conversations, AI reply time (median), team reply time (median), share handed to a
+  person, conversations waiting for an answer, new leads, lead conversion, completed orders, revenue, average order.
+  Response time = from a customer message (the first of consecutive ones) to the first AI / team answer; automatic
+  messages (acknowledgement, drip, workflow) close a turn but are not counted as AI or team. Lower is shown as better
+  for response times, hand-overs and waiting conversations.
+- Cards: messages per day (customer / AI / team); who answered (AI / team / automatic; test-mode replies flagged); AI
+  and team median and p90; channels (messages and conversations); CRM pipeline (current stages, demo records excluded);
+  lead sources with won and rate; completed orders per day, buyers and repeat buyers; automation started in the period
+  (campaign recipients, drip enrolments and stop reasons, workflow runs, Meta conversions); team (replies, open
+  conversations assigned now, median reply time); busy hours (IST weekday × hour heatmap).
+- `GET /analytics/advanced?days=`, `GET /analytics/advanced/export?days=` (CSV with BOM, formula-safe). Requires
+  `customers.view`; organization from the session. At most 50 000 messages are read per period (the page says so when
+  the cap is reached). Measured locally with ~49 000 messages in 30 days: 1.5 s (30 days), 1.7 s (90 days).
+- Tests: `src/analytics/metrics.spec.ts` (4), `test/analytics-advanced.integration.spec.ts` (3: every figure checked
+  exactly on seeded data, previous period, isolation, CSV) and `tests/ui-analytics.py` (10).
+- Pending: scheduled e-mailed reports, custom date ranges, revenue for non-order industries (bookings, appointments,
+  sales orders), cost / ROI per channel in this view (the ROI card on the overview stays the source for that).
+
 ## Visual Workflow Studio (P3)
 
 A visual editor at `/workflows`: a trigger card, then steps connected top to bottom; a **Condition** splits into **Yes**
@@ -168,7 +193,7 @@ Instagram Direct and Facebook Messenger messages arrive in the **team inbox** an
 
 ## Not done (pending)
 
-P3: AI replies on Instagram / Messenger, live AI steering, advanced analytics, more
+P3: AI replies on Instagram / Messenger, live AI steering, more
 integrations. P4: MCP server, advanced agent builder and versioning, knowledge studio, enterprise subscriptions and
 billing. Drip: per-step A/B variants and entry triggers (enrol automatically on a stage change) are not built; enrolment
 is manual (by stage, tag or customer).
