@@ -78,7 +78,12 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     const r = await sarvamOutboundCall(this.fetchImpl, acct, { appId: req.agent.sarvamAppId, appVersion: req.agent.sarvamAppVersion ?? 1, to: req.to, webhookUrl, variables: req.variables });
     await this.prisma.integrationEvent.create({ data: { organizationId: req.organizationId, provider: 'sarvam_telephony', kind: 'call', ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: r.message.slice(0, 500), units: r.ok ? 1 : null, unitType: 'calls', source: 'organization' } }).catch(() => undefined);
     if (r.ok) return { ok: true, providerCallId: r.attemptId ?? null, latencyMs: Date.now() - started };
-    return { ok: false, reason: `sarvam_${r.errorCode ?? 'error'}: ${r.message}`.slice(0, 180), retryable: Boolean(r.retryable), latencyMs: Date.now() - started };
+    // The stored reason keeps what Sarvam itself said (the full message is in the integration event): it is what staff
+    // need to fix the setup, and the generic part is explained by the dashboard.
+    const said = r.message.match(/Provider said: ([\s\S]+)$/)?.[1]?.replace(/\s+/g, ' ').trim();
+    const reason = `sarvam_${r.errorCode ?? 'error'}: ${said ? `Provider said: ${said}` : r.message}`.slice(0, 180);
+    log.warn('telephony.sarvam_outbound_refused', { organizationId: req.organizationId, errorCode: r.errorCode ?? null, message: r.message.slice(0, 400) });
+    return { ok: false, reason, retryable: Boolean(r.retryable), latencyMs: Date.now() - started };
   }
 
   async handleInboundCall(): Promise<{ handledBy: 'provider' }> {

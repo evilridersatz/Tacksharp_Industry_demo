@@ -17,6 +17,15 @@ const RULES: Array<[RegExp, string]> = [
   [/^call_already_in_progress/, 'A call to this customer is already in progress.'],
   [/^unknown_number/, 'This number is not one of your customers. Add them and record consent first.'],
   [/^customer_has_no_phone/, 'The customer has no phone number.'],
+  // Sarvam outbound request refused (codes from provider-clients: classify / request), most specific first.
+  [/^sarvam_auth_failed/, 'Sarvam rejected the calling API key (SARVAM_AGENTS_API_KEY): check it in the Sarvam console → Settings → API keys.'],
+  [/^sarvam_not_found/, 'Sarvam could not find the organisation, workspace or agent: check SARVAM_AGENTS_ORG_ID / WORKSPACE_ID and the agent id.'],
+  [/^sarvam_rejected.*(version|app)/i, 'Sarvam refused the agent: the Sarvam agent id or "App version" is wrong, or that version is not committed.'],
+  [/^sarvam_rejected/, 'Sarvam refused the request: check the agent id and version, the connection id and the calling number (it must be on that connection).'],
+  [/^sarvam_rate_limited/, 'Sarvam’s calling limit was reached (concurrent calls or calls per minute). Try again in a minute.'],
+  [/^sarvam_provider_error/, 'Sarvam had an error on its side. Try again in a few minutes.'],
+  [/^sarvam_(timeout|network)/, 'Sarvam could not be reached from the server. Try again; if it keeps failing, check the server’s internet access.'],
+  [/^sarvam_invalid_response/, 'Sarvam answered without a call id. The call may not have been placed.'],
   [/^sarvam_/, 'The voice provider refused the call or could not be reached.'],
   [/^(no_answer)$/, 'The customer did not answer.'],
   [/^(busy)$/, "The customer's line was busy."],
@@ -25,5 +34,8 @@ const RULES: Array<[RegExp, string]> = [
 export function explainCallReason(code: string | null | undefined): string {
   const c = (code ?? '').trim();
   if (!c) return 'No reason was given.';
-  return RULES.find(([r]) => r.test(c))?.[1] ?? 'The call could not be completed. See the technical details.';
+  const text = RULES.find(([r]) => r.test(c))?.[1] ?? 'The call could not be completed. See the technical details.';
+  // Provider refusals: also show what Sarvam itself said (secrets are already removed by the API).
+  const said = /^sarvam_/.test(c) ? c.match(/Provider said: (.+)$/)?.[1]?.trim() : undefined;
+  return said ? `${text} Sarvam said: ${said.slice(0, 160)}` : text;
 }
