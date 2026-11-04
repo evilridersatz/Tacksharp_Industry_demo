@@ -17,13 +17,13 @@ import { cx } from './ui';
  * The Sarvam key never reaches the browser: our API hands out a two-minute ticket for one call.
  * Workspaces where the business assistant is not available get Tara (help with Tacksharp) instead.
  */
-type Msg = { role: 'user' | 'assistant'; content: string; via?: 'call' | 'chat'; order?: { orderNumber: string; total: number } };
+type Msg = { role: 'user' | 'assistant'; content: string; via?: 'call' | 'chat'; order?: { id?: string; orderNumber: string; total: number } };
 type Status = {
   enabled?: boolean; organizationName?: string; ordering?: boolean; greeting: string; video?: boolean; videoReason?: string | null;
   liveAgent?: { name: string; version: number | null } | null;
   phoneVoice?: { speaker: string; pace: number } | null;
 };
-type Memory = { known: boolean; name?: string | null; orderCount?: number; recentOrders?: Array<{ orderNumber: string; total: number; status: string; at: string }>; channels?: string[] };
+type Memory = { known: boolean; name?: string | null; orderCount?: number; recentOrders?: Array<{ id?: string; orderNumber: string; total: number; status: string; at: string }>; channels?: string[] };
 type CallState = 'off' | 'connecting' | 'listening' | 'speaking' | 'ended';
 type SimliLike = { start(): Promise<void>; stop(): Promise<void>; sendAudioData(d: Uint8Array): void; ClearBuffer: () => void; on(ev: string, cb: (...a: unknown[]) => void): void };
 type AgentLike = { start(): Promise<void>; stop(): Promise<void>; waitForConnect(t?: number): Promise<boolean>; mute(): void; unmute(): void; getInteractionId(): string | undefined };
@@ -147,7 +147,7 @@ export function BusinessAssistant() {
       for (const o of fresh.reverse()) {
         seenOrders.current.add(o.orderNumber);
         mergeRole.current = null;
-        setMsgs((list) => [...list, { role: 'assistant', content: 'Order saved from this call.', via: 'call', order: { orderNumber: o.orderNumber, total: o.total } }]);
+        setMsgs((list) => [...list, { role: 'assistant', content: 'Order saved from this call.', via: 'call', order: { id: o.id, orderNumber: o.orderNumber, total: o.total } }]);
       }
       if (fresh.length) announceChange();
     };
@@ -310,7 +310,7 @@ export function BusinessAssistant() {
     setMsgs((m) => [...m, { role: 'user', content: message, via: 'chat' }]);
     setThinking(true);
     try {
-      const r = await api.post<{ reply: string; order?: { orderNumber: string; total: number } | null }>('/business-assistant/chat', { message, phone, name: name || undefined, spoken: false });
+      const r = await api.post<{ reply: string; order?: { id?: string; orderNumber: string; total: number } | null }>('/business-assistant/chat', { message, phone, name: name || undefined, spoken: false });
       setMsgs((m) => [...m, { role: 'assistant', content: r.reply, via: 'chat', ...(r.order ? { order: r.order } : {}) }]);
       loadMemory(phone);
       // The order is in the database now: every open dashboard view (Orders, Home, Customers) reloads at once.
@@ -459,6 +459,7 @@ export function BusinessAssistant() {
                       {m.order && (
                         <span className="mt-2 flex items-center gap-2 rounded-[10px] bg-emerald-50 px-2.5 py-1.5 text-[12.5px] font-semibold text-emerald-900 ring-1 ring-emerald-200" data-testid="assistant-order">
                           <ReceiptText className="size-4 shrink-0" aria-hidden />Order {m.order.orderNumber} · {inr(m.order.total)} · saved in Orders
+                          {m.order.id && <a href={`/orders/${m.order.id}`} target="_blank" rel="noreferrer" className="ml-auto shrink-0 text-emerald-800 underline">Open</a>}
                         </span>
                       )}
                     </div>

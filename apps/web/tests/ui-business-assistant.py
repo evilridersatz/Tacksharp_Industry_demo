@@ -155,6 +155,17 @@ with sync_playwright() as p:
     mem = dlg.get_by_test_id('assistant-memory').inner_text()
     check('memory: the customer now shows the order', 'UI Tester' in mem and '1 order' in mem and number in mem, mem.replace('\n', ' | '))
 
+    # The order on its own page (like a web order), with the WhatsApp confirmation to the customer or another number.
+    oid = sql(f"SELECT id FROM `Order` WHERE organizationId='{ORG}' AND orderNumber='{number}'") if number else ''
+    pg3 = ctx.new_page(); pg3.goto(f'{WEB}/orders/{oid}'); pg3.wait_for_timeout(2500)
+    check('order page: its own page with items, customer and total', pg3.get_by_role('heading', name=re.compile(number)).count() >= 1 and pg3.get_by_text('To cut & pack').count() == 1 and pg3.get_by_text('AI assistant').count() >= 1)
+    sc = pg3.get_by_test_id('send-confirmation')
+    sc.get_by_role('button', name='Send to customer').click(); pg3.wait_for_timeout(1500)
+    check('order page: confirmation to the customer (test mode: simulated, recorded)', sc.get_by_role('status').count() == 1 and 'simulated' in sc.get_by_role('status').inner_text(), sc.get_by_role('status').inner_text() if sc.get_by_role('status').count() else '')
+    sc.get_by_label('Another WhatsApp number').fill('9876512345'); sc.get_by_role('button', name='Send', exact=True).click(); pg3.wait_for_timeout(1500)
+    check('order page: confirmation to another number', 'another number' in sc.get_by_role('status').inner_text())
+    pg3.screenshot(path=os.path.join(SHOTS, 'order-page.png')); pg3.close()
+
     # Live voice call: the business's Sarvam phone agent through the official SDK.
     dlg.get_by_role('button', name='Voice call').click()
     pg.wait_for_timeout(6000)

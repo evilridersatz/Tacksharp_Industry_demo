@@ -185,7 +185,7 @@ describe.skipIf(!enabled)('voice agents, knowledge base, telephony (integration)
     await prisma.telephonyCallRequest.updateMany({ where: { organizationId: A }, data: { status: 'completed' } });
     sarvamFetch.mockImplementation(async () => new Response('{"detail":"bad"}', { status: 422 }));
     sarvamFetch.mockClear();
-    expect(await tel.placeCall(actorA, { agentId: agentA.id, confirm: true, ignoreCallWindow: true, to: '+919800011122', idempotencyKey: `rej-${run}` })).toMatchObject({ status: 'failed', failureReason: expect.stringMatching(/^sarvam_rejected: Provider said: \{"detail":"bad"\}/) });
+    expect(await tel.placeCall(actorA, { agentId: agentA.id, confirm: true, ignoreCallWindow: true, to: '+919800011122', idempotencyKey: `rej-${run}` })).toMatchObject({ status: 'failed', failureReason: expect.stringMatching(/^sarvam_rejected: Provider said: bad$/) });
     expect(sarvamFetch).toHaveBeenCalledTimes(1);
     sarvamFetch.mockImplementation(async () => new Response('{}', { status: 429 }));
     sarvamFetch.mockClear();

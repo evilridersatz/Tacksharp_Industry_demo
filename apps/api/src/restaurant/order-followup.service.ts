@@ -13,6 +13,7 @@ import { errorMessage, log } from '../common/logger.js';
 import { dependencyOf, describeError } from '../common/errors.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
 import { firstName } from '../whatsapp/message-templates.js';
+import { normalizePhone } from '../common/phone.js';
 import { describeWhen } from '../conversation/when.js';
 import { FeedbackService } from './feedback.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
@@ -365,6 +366,45 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { result: { ...baseResult, ...((current.result as object | null) ?? {}), simulatedReplies } as never } });
     }
     return { status: 'sent', result: baseResult };
+  }
+
+  /**
+   * Staff "Send confirmation on WhatsApp" from the order page: the order confirmation to the customer's number or to
+   * ANOTHER number staff type (a family member, a second phone). Staff pressing the button is the request; the same
+   * protections apply: STOP / do-not-contact of that number, DRY_RUN, the live test gate, the 24 h window (text) or the
+   * approved confirmation template outside it. Recorded on the order (event) and in that number's conversation.
+   */
+  async sendConfirmationNow(organizationId: string, orderId: string, toRaw: string | undefined, actor: string): Promise<{ sent: boolean; simulated: boolean; to: string; note: string }> {
+    const cfg = followUpConfig();
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, organizationId }, include: { customer: true, items: true, outlet: true } });
+    if (!order) throw new Error('Order not found');
+    if (order.status === 'cancelled') throw new Error('This order is cancelled: no confirmation is sent.');
+    const to = toRaw ? normalizePhone(toRaw) : order.customer.phone ?? undefined;
+    if (!to) throw new Error('Enter a valid mobile number.');
+    // The receiving number's own choices win (it may be another customer of this business).
+    const other = to === order.customer.phone ? order.customer : await this.prisma.customer.findFirst({ where: { organizationId, phone: to } });
+    if (other?.optedOutAt) throw new Error('This number replied STOP: WhatsApp messages are not sent to it.');
+    if (other?.doNotContact) throw new Error('This number is marked do-not-contact.');
+    const gate = liveGate(cfg, { phone: to, isDemo: order.isDemo || Boolean(other?.isDemo) });
+    const simulated = cfg.dryRun || !gate.live;
+    const text = this.messageText('order_confirmation', order);
+    const params = [order.orderNumber, firstName(order.customer.name) || 'Customer'];
+    const receiver = other ?? (await this.conversations.getOrCreateCustomerByPhone(organizationId, to, { source: 'order_confirmation_forward' }));
+    const windowOpen = await this.conversations.isWhatsAppWindowOpen(organizationId, receiver.id);
+    let payload: WhatsAppPayload;
+    if (windowOpen) payload = textPayload(to, text);
+    else if (cfg.confirmationTemplate) payload = templatePayload(to, cfg.confirmationTemplate, params);
+    else if (simulated) payload = templatePayload(to, 'gr_order_update', params);
+    else throw new Error('This number has not messaged the shop in the last 24 hours, and no approved WhatsApp confirmation template is set (FOLLOWUP_CONFIRMATION_TEMPLATE). Ask the customer to message the shop first, or add the template.');
+    const sent = await (simulated ? this.mockWhatsApp : this.liveWhatsApp).send(payload);
+    const conv = await this.conversations.getOrCreateConversation({ organizationId, channel: 'whatsapp', externalId: to, customerId: receiver.id });
+    await this.conversations.addMessage({ organizationId, conversationId: conv.id, role: 'assistant', content: payload.type === 'text' ? text : `[template:${payload.template.name}] ${params.join(' | ')}`, externalId: sent.messageId, metadata: { kind: 'order_confirmation', orderId: order.id, by: actor, simulated: sent.simulated } });
+    const masked = `${to.slice(0, 2)}••••${to.slice(-4)}`;
+    const note = `Order confirmation ${sent.simulated ? `simulated (${cfg.dryRun ? 'DRY_RUN' : gate.reason})` : 'sent'} on WhatsApp to ${masked}${to === order.customer.phone ? '' : ' (another number)'}`;
+    await this.prisma.orderEvent.create({ data: { organizationId, orderId: order.id, type: 'follow_up', actor, note } });
+    await this.prisma.order.update({ where: { id: order.id }, data: { lastContactAt: new Date() } });
+    log.info('followup.confirmation_sent', { organizationId, orderId: order.id, simulated: sent.simulated, otherNumber: to !== order.customer.phone });
+    return { sent: !sent.simulated, simulated: sent.simulated, to: masked, note };
   }
 
   /** WhatsApp delivery receipts (sent / delivered / read / failed) from the webhook. */

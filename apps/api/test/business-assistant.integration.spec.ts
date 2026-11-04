@@ -35,7 +35,7 @@ const NOW = new Date();
 const staff = { sub: 'u_ba', org: ORG, role: 'admin' } as any;
 
 describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
-  let prisma: any, conversations: any, catalog: any, orders: any, offers: any, engine: any, store: any, tenancy: any, ai: any, llmFake: any, reEngine: any, ctl: any, sender: any, assistant: any;
+  let prisma: any, conversations: any, catalog: any, orders: any, offers: any, engine: any, store: any, tenancy: any, ai: any, llmFake: any, reEngine: any, ctl: any, sender: any, assistant: any, followUps: any;
   const pending: Promise<unknown>[] = [];
   let n = 0;
   const phone = () => `96${String(Date.now()).slice(-6)}${String(n++ % 100).padStart(2, '0')}`;
@@ -88,7 +88,7 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     const sarvam = { enabled: true, keyterms: [], textToSpeechUrl: vi.fn(async () => 'https://example.test/voice/audio/x.wav'), textToSpeech: vi.fn(async () => ({ url: 'https://example.test/voice/audio/y.wav', cached: true, attempts: 0, languageCode: 'ta-IN' })), speechToText: vi.fn(), deleteAudio: vi.fn(async () => undefined) };
     const feedback = new FeedbackService(prisma);
     const ready = { voiceStatus: () => ({ ready: false, missing: [] }) };
-    const followUps = new OrderFollowUpService(prisma, conversations, sender as any, ready as any, sarvam as any, feedback);
+    followUps = new OrderFollowUpService(prisma, conversations, sender as any, ready as any, sarvam as any, feedback);
     followUps.queue = { add: vi.fn(async () => undefined) };
     engine = new OrderingEngine(prisma, conversations, catalog, orders, offers, feedback, followUps, store, llmFake);
     tenancy = new TenancyService(prisma);
@@ -168,6 +168,29 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     expect(mem.name).toBe('Priya');
     expect(mem.orderCount).toBe(1);
     expect(mem.recentOrders[0].orderNumber).toBe(placed.order.orderNumber);
+  });
+
+  it('order page: send the confirmation on WhatsApp to the customer or another number (DRY_RUN: simulated); STOP refused', async () => {
+    const p = phone();
+    await chat(p, 'Hi');
+    await chat(p, 'rendu kilo broiler curry cut, cash, 2 mani nerathula varen');
+    const placed = await chat(p, 'sari');
+    const id = placed.order.id;
+    expect(id).toBeTruthy();
+    const r1 = await followUps.sendConfirmationNow(ORG, id, undefined, 'user:u_ba');
+    expect(r1).toMatchObject({ simulated: true, sent: false });
+    expect(r1.note).toMatch(/simulated \(DRY_RUN\).*WhatsApp to 91••••/);
+    const other = phone();
+    const r2 = await followUps.sendConfirmationNow(ORG, id, other, 'user:u_ba');
+    expect(r2.note).toContain('(another number)');
+    const events = await prisma.orderEvent.findMany({ where: { orderId: id, type: 'follow_up' } });
+    expect(events.length).toBe(2);
+    expect(events.map((e: any) => e.actor)).toEqual(['user:u_ba', 'user:u_ba']);
+    // The other number's own STOP wins.
+    await prisma.customer.updateMany({ where: { organizationId: ORG, phone: `91${other.slice(-10)}` }, data: { optedOutAt: new Date() } });
+    await expect(followUps.sendConfirmationNow(ORG, id, other, 'user:u_ba')).rejects.toThrow(/STOP/);
+    await expect(followUps.sendConfirmationNow(ORG, id, '12', 'user:u_ba')).rejects.toThrow(/valid mobile/);
+    expect(sender.sendText).not.toHaveBeenCalled();
   });
 
   it('an unknown number is a new customer; another tenant never sees this customer', async () => {

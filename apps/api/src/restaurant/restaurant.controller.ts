@@ -118,6 +118,20 @@ export class RestaurantController {
     return order;
   }
 
+  /** "Send confirmation on WhatsApp" from the order page: to the customer, or to another number staff type. */
+  @Post('orders/:id/send-confirmation')
+  async sendConfirmation(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string, @Body() body: { to?: unknown }) {
+    requireStaff(user);
+    const to = typeof body?.to === 'string' && body.to.trim() ? body.to.trim().slice(0, 20) : undefined;
+    try {
+      const r = await this.followUps.sendConfirmationNow(organizationId, id, to, `user:${user.sub}`);
+      return { ...r, order: await this.orders.getOrder(organizationId, id) };
+    } catch (e) {
+      if (e instanceof NotFoundException) throw e;
+      throw new BadRequestException(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   /** "Call again" from the order screen. */
   @Post('orders/:id/notify-ready')
   async notifyReady(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string) {

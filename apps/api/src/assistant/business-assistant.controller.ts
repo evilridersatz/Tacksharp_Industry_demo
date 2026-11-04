@@ -135,7 +135,7 @@ export class BusinessAssistantController {
     const c = await this.prisma.customer.findFirst({ where: { organizationId, phone }, select: { id: true, name: true, language: true, createdAt: true } });
     if (!c) return { known: false, phone };
     const [orders, count, conversations] = await Promise.all([
-      this.prisma.order.findMany({ where: { organizationId, customerId: c.id }, orderBy: { createdAt: 'desc' }, take: 3, select: { orderNumber: true, total: true, status: true, channel: true, createdAt: true } }).catch(() => []),
+      this.prisma.order.findMany({ where: { organizationId, customerId: c.id }, orderBy: { createdAt: 'desc' }, take: 3, select: { id: true, orderNumber: true, total: true, status: true, channel: true, createdAt: true } }).catch(() => []),
       this.prisma.order.count({ where: { organizationId, customerId: c.id } }).catch(() => 0),
       this.prisma.conversation.findMany({ where: { organizationId, customerId: c.id }, orderBy: { updatedAt: 'desc' }, take: 5, select: { channel: true, updatedAt: true } }),
     ]);
@@ -146,7 +146,7 @@ export class BusinessAssistantController {
       language: c.language,
       since: c.createdAt,
       orderCount: count,
-      recentOrders: orders.map((o) => ({ orderNumber: o.orderNumber, total: Number(o.total), status: o.status, channel: o.channel, at: o.createdAt })),
+      recentOrders: orders.map((o) => ({ id: o.id, orderNumber: o.orderNumber, total: Number(o.total), status: o.status, channel: o.channel, at: o.createdAt })),
       channels: [...new Set(conversations.map((v) => v.channel))],
       lastContactAt: conversations[0]?.updatedAt ?? null,
     };
@@ -175,7 +175,7 @@ export class BusinessAssistantController {
         // Orders confirmed here are real orders of this customer (channel "assistant"), not test-chat orders.
         metadata: { assistant: 'dashboard', by: `user:${user.sub}`, spoken, orderChannel: 'assistant', ...(typeof body?.sttLanguage === 'string' ? { sttLanguage: body.sttLanguage.slice(0, 10) } : {}) },
       });
-      const order = (r as { order?: { status: string; orderNumber: string; total: number } }).order ?? null;
+      const order = (r as { order?: { status: string; id: string; orderNumber: string; total: number } }).order ?? null;
       log.info('business_assistant.reply', { organizationId, spoken, ms: Date.now() - started, path: r.path ?? null, order: order?.orderNumber ?? null });
       return { reply: r.response, style: detectStyle(r.response), step: r.state ?? null, order, path: r.path ?? 'rules', sent: false };
     } catch (e) {

@@ -170,7 +170,7 @@ export async function sarvamOutboundCall(
 
 /** Variable names from Sarvam's "Agent variables '{...}' not found" refusal ([] for any other refusal). */
 export function unknownAgentVariables(message: string): string[] {
-  const m = message.match(/Agent variables '\{(.*?)\}' not found/);
+  const m = message.match(/Agent variables?\s*'?\{(.*?)\}'?\s*(?:not found|are not|is not)/i);
   return m ? [...m[1].matchAll(/'([A-Za-z_][\w]*)'/g)].map((x) => x[1]) : [];
 }
 

@@ -80,7 +80,15 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     if (r.ok) return { ok: true, providerCallId: r.attemptId ?? null, latencyMs: Date.now() - started };
     // The stored reason keeps what Sarvam itself said (the full message is in the integration event): it is what staff
     // need to fix the setup, and the generic part is explained by the dashboard.
-    const said = r.message.match(/Provider said: ([\s\S]+)$/)?.[1]?.replace(/\s+/g, ' ').trim();
+    const body = r.message.match(/Provider said: ([\s\S]+)$/)?.[1]?.trim();
+    // Sarvam's JSON error: keep its human part ("data.details", else "message"), which fits in the stored reason.
+    let said = body?.replace(/\s+/g, ' ');
+    try {
+      const j = body ? (JSON.parse(body) as { error?: { message?: string; data?: { details?: unknown } }; detail?: unknown; message?: unknown }) : null;
+      const human = j?.error?.data?.details ?? j?.error?.message ?? j?.detail ?? j?.message;
+      if (typeof human === 'string' && human.trim()) said = human.trim();
+      else if (human) said = JSON.stringify(human);
+    } catch { /* not JSON: keep the text */ }
     const reason = `sarvam_${r.errorCode ?? 'error'}: ${said ? `Provider said: ${said}` : r.message}`.slice(0, 180);
     log.warn('telephony.sarvam_outbound_refused', { organizationId: req.organizationId, errorCode: r.errorCode ?? null, message: r.message.slice(0, 400) });
     return { ok: false, reason, retryable: Boolean(r.retryable), latencyMs: Date.now() - started };

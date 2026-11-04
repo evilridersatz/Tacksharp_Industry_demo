@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Check, Clock, Gift, IndianRupee, MessageSquare, Phone, PhoneCall, Store, X } from 'lucide-react';
+import { Check, Clock, ExternalLink, Gift, IndianRupee, MessageSquare, Phone, PhoneCall, Send, Store, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { dateTime, displayName, formatPhone } from '@/lib/format';
 import { ACTION_LABEL, CHANNEL_LABEL, FOLLOWUP_KIND, FOLLOWUP_STATUS, ORDER_STATUS, READY_NOTICE, SOURCE_LABEL, actorLabel, inr, paymentLabel, pickupLabel, qty, type FollowUpRow, type Order, type OrderStatus } from '@/lib/restaurant';
@@ -14,6 +14,8 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
   const { data: followUps } = useApi<FollowUpRow[]>(`/restaurant/followups?orderId=${orderId}`, 6_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [sendTo, setSendTo] = useState('');
+  const [sentNote, setSentNote] = useState<string | null>(null);
 
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key);
@@ -55,11 +57,18 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
             {order.isDemo && <Badge tone="amber">Demo order</Badge>}
           </div>
         </div>
-        {onClose && (
-          <button onClick={onClose} aria-label="Close order" className="text-muted hover:text-ink">
-            <X className="size-5" />
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {onClose && (
+            <Link href={`/orders/${order.id}`} className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand hover:underline">
+              Open full page <ExternalLink className="size-3.5" />
+            </Link>
+          )}
+          {onClose && (
+            <button onClick={onClose} aria-label="Close order" className="text-muted hover:text-ink">
+              <X className="size-5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-2 bg-sky-soft px-5 py-2.5 text-[13.5px] font-semibold text-[#075985]">
@@ -171,6 +180,25 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
           )}
         </section>
       </div>
+
+      {canEdit && order.status !== 'cancelled' && (
+        <section className="border-t border-line px-5 py-4 text-[13px]" data-testid="send-confirmation">
+          <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">Order confirmation on WhatsApp</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" busy={busy === 'confirm-customer'} disabled={!order.customerPhone} onClick={() => run('confirm-customer', async () => { const r = await api.post<{ note: string }>(`/restaurant/orders/${orderId}/send-confirmation`, {}); setSentNote(r.note); })}>
+              <Send className="size-4" /> Send to customer
+            </Button>
+            <span className="text-[12px] text-muted">or another number:</span>
+            <label className="sr-only" htmlFor={`confirm-to-${orderId}`}>Another WhatsApp number</label>
+            <input id={`confirm-to-${orderId}`} inputMode="tel" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="Mobile number" className="h-9 w-[150px] rounded-[10px] border border-line bg-white px-3 text-[13px] text-ink" />
+            <Button variant="secondary" busy={busy === 'confirm-other'} disabled={sendTo.replace(/\D/g, '').length < 10} onClick={() => run('confirm-other', async () => { const r = await api.post<{ note: string }>(`/restaurant/orders/${orderId}/send-confirmation`, { to: sendTo }); setSentNote(r.note); setSendTo(''); })}>
+              <Send className="size-4" /> Send
+            </Button>
+          </div>
+          {sentNote && <p role="status" className="mt-2 rounded-[8px] bg-brand-soft px-3 py-1.5 text-[12.5px] text-brand-dark">{sentNote}</p>}
+          <p className="mt-1.5 text-[11.5px] text-faint">Order number, pickup shop and time. Numbers that replied STOP are never messaged.</p>
+        </section>
+      )}
 
       {(order.feedbackRating !== null || order.complaintStatus || (followUps && followUps.length > 0)) && (
         <section className="border-t border-line px-5 py-4 text-[13px]">
