@@ -19,7 +19,7 @@ import { cx } from './ui';
  */
 type Msg = { role: 'user' | 'assistant'; content: string; via?: 'call' | 'chat'; order?: { orderNumber: string; total: number } };
 type Status = {
-  enabled?: boolean; organizationName?: string; ordering?: boolean; greeting: string; video?: boolean;
+  enabled?: boolean; organizationName?: string; ordering?: boolean; greeting: string; video?: boolean; videoReason?: string | null;
   liveAgent?: { name: string; version: number | null } | null;
   phoneVoice?: { speaker: string; pace: number } | null;
 };
@@ -404,10 +404,11 @@ export function BusinessAssistant() {
                 ) : (
                   <>
                     <button onClick={() => void startCall(false)} disabled={!status.liveAgent} className="inline-flex h-12 items-center gap-2 rounded-full bg-emerald-500 px-6 text-[15px] font-semibold text-white shadow-[0_12px_30px_-12px_rgba(16,185,129,0.9)] transition-transform hover:scale-[1.03] disabled:opacity-40 disabled:hover:scale-100"><Phone className="size-5" />Voice call</button>
-                    {status.video && <button onClick={() => void startCall(true)} disabled={!status.liveAgent} className="inline-flex h-12 items-center gap-2 rounded-full bg-white/12 px-6 text-[15px] font-semibold text-white ring-1 ring-white/20 transition-transform hover:scale-[1.03] disabled:opacity-40 disabled:hover:scale-100"><Video className="size-5" />Video call</button>}
+                    <button onClick={() => void startCall(true)} disabled={!status.video} title={status.videoReason ?? undefined} className="inline-flex h-12 items-center gap-2 rounded-full bg-white/12 px-6 text-[15px] font-semibold text-white ring-1 ring-white/20 transition-transform hover:scale-[1.03] disabled:opacity-40 disabled:hover:scale-100"><Video className="size-5" />Video call</button>
                   </>
                 )}
               </div>
+              {!onCall && status.liveAgent && !status.video && status.videoReason && <p className="mt-3 text-center text-[11.5px] text-amber-200/80" data-testid="video-reason">{status.videoReason}</p>}
               <p className="mt-4 hidden text-center text-[11.5px] text-white/45 lg:block">{status.liveAgent ? 'Live Sarvam phone agent: same voice, tools and answers as your phone line' : 'Add the Sarvam agent id on Voice agents to enable live calls'}</p>
             </div>
 

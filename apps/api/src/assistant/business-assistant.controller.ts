@@ -99,12 +99,21 @@ export class BusinessAssistantController {
   async status(@Org() organizationId: string, @Query('lang') lang?: string) {
     const ws = await this.workspace(organizationId);
     const style = (['ta', 'en', 'tanglish'].includes(String(lang)) ? lang : 'en') as Style;
-    const [agent, voice] = await Promise.all([this.phoneAgent(organizationId), this.phoneVoice(organizationId)]);
+    const [agent, voice, live] = await Promise.all([
+      this.phoneAgent(organizationId),
+      this.phoneVoice(organizationId),
+      this.liveAccount(organizationId).catch(() => null),
+    ]);
     const base = this.assistant.status();
+    // The video call is the live phone agent with the avatar lip-syncing ITS audio: it needs the Simli key and face and
+    // the live agent, not our own text-to-speech key.
+    const simli = Boolean(process.env.SIMLI_API_KEY && process.env.SIMLI_FACE_ID);
     return {
       ...base,
       voice: Boolean(voice.key),
-      video: Boolean(base.video && voice.key),
+      video: simli && Boolean(live),
+      // Why the Video call button is unavailable (shown on the button), or null when it works.
+      videoReason: !simli ? 'Video needs SIMLI_API_KEY and SIMLI_FACE_ID on the server.' : !live ? 'Video uses the live phone agent: set it up first (Sarvam agent id on Voice agents).' : null,
       enabled: ws.enabled,
       reason: ws.enabled ? null : 'Your business assistant can be tried here in a demo workspace. Live customers talk to it on WhatsApp and phone.',
       organizationName: ws.name,
@@ -114,7 +123,7 @@ export class BusinessAssistantController {
       greeting: agent?.greeting?.replace(/\{\{[^}]*\}\}/g, '').replace(/\s+([,.!?])/g, '$1').replace(/\s{2,}/g, ' ').trim() || greeting(ws.name, ws.ordering)[style],
       phoneVoice: { agent: voice.agentName, speaker: voice.speaker, pace: voice.pace, model: voice.model, source: voice.source },
       // Voice / video calls go to the business's real Sarvam phone agent when it is set up (same as a phone call).
-      liveAgent: await this.liveAccount(organizationId).then((a) => (a ? { name: a.agentName, version: a.version } : null)).catch(() => null),
+      liveAgent: live ? { name: live.agentName, version: live.version } : null,
     };
   }
 
