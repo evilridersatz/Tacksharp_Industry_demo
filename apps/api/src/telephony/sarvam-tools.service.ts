@@ -496,10 +496,19 @@ export class SarvamToolsService {
       }
       if (!pickupAt) questions.push(when ? 'Please confirm the pickup time (for example "6 PM today" or "in 1 hour").' : 'When will the caller pick it up?');
     }
-    if (questions.length) return { ok: false, needs: 'details', questions_text: questions.join(' ') };
+    if (questions.length) {
+      // The question is the menu's wording (no caller words): logged so we can see what is still missing.
+      log.info('sarvam_tools.quote_details', { organizationId, questions: questions.join(' ').slice(0, 200) });
+      const ask = questions.join(' ');
+      // Same question in every field an agent may read: a console that saves only "message" still asks it.
+      return { ok: false, needs: 'details', questions_text: ask, message: `Not an error: ask the caller this, then call quote_order again with the answer: ${ask}`, next_step: 'ask_caller' };
+    }
 
     const q = await this.orders.quote({ organizationId, lines, outletId: outlet!.id, pickupAt, now });
-    if (!q.ok) return { ok: false, needs: 'changes', problems_text: q.problems.join(' ') };
+    if (!q.ok) {
+      log.info('sarvam_tools.quote_changes', { organizationId, problems: q.problems.join(' ').slice(0, 200) });
+      return { ok: false, needs: 'changes', problems_text: q.problems.join(' '), message: `Not an error: tell the caller this and ask what to change, then call quote_order again: ${q.problems.join(' ')}`, next_step: 'ask_caller' };
+    }
     const summary = q.lines.map((l) => `${formatQty(l.quantity, l.unit)} ${l.name}${l.cut ? ` ${l.cut}` : ''} = ${rupees(l.lineTotal)}`).join('; ');
     const pickupText = pickupAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: 'numeric', minute: '2-digit' });
     const signed = signCart({ o: organizationId, l: lines, out: outlet!.id, p: pickupAt!.toISOString(), t: q.total, x: Date.now() + CART_TTL_MS }, secret);
@@ -558,7 +567,7 @@ export class SarvamToolsService {
       cart = signed ? readCart(signed, secret) : null;
       via = cart ? 'last_quote' : '';
     }
-    if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'The order summary expired or is not valid. Call quote_order again, read the total, then place the order.');
+    if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'No priced order yet: call quote_order first, read the total to the caller, and call place_order only after they say yes.');
     // The yes: what the agent passed, else the caller's own last words on the call (a "no" there always wins).
     const lastSaid = (await this.heard(organizationId, body, (ls) => ls.length > 0 && saidYes(ls[ls.length - 1]))).slice(-2);
     const explicit = str(body.confirmed, 60);
