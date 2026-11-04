@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Loader2, Mic, MicOff, Phone, PhoneOff, ReceiptText, Sparkles, Store, UserRound, Video, X } from 'lucide-react';
 import { API_URL, ApiError, api } from '@/lib/api';
+import { announceChange } from '@/lib/live';
 import { LiveAgent } from './live-agent';
 import { cx } from './ui';
 
@@ -84,6 +85,8 @@ export function BusinessAssistant() {
   const startedAt = useRef(0);
   const callLines = useRef<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const starting = useRef(false);
+  /** Orders of this customer already shown (an order placed during a live call is shown the moment it is saved). */
+  const seenOrders = useRef<Set<string>>(new Set());
   const phoneOk = phone.replace(/\D/g, '').length >= 10;
   const onCall = call === 'connecting' || call === 'listening' || call === 'speaking';
   const shop = status?.organizationName ?? 'Your business';
@@ -123,6 +126,26 @@ export function BusinessAssistant() {
     api.get<Memory>(`/business-assistant/customer?phone=${encodeURIComponent(p)}`).then(setMemory).catch(() => setMemory(null));
   }, [name]);
   useEffect(() => { if (open) loadMemory(phone); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+
+  // During a live call the agent places orders through its tools straight into the database. Watch this customer's
+  // orders every 2 s: a new one appears in the conversation as an order card and the dashboard reloads.
+  useEffect(() => {
+    if (!onCall || !phoneOk) return;
+    let stop = false;
+    const tick = async () => {
+      const m = await api.get<Memory>(`/business-assistant/customer?phone=${encodeURIComponent(phone)}`).catch(() => null);
+      if (stop || !m) return;
+      setMemory(m);
+      const fresh = (m.recentOrders ?? []).filter((o) => !seenOrders.current.has(o.orderNumber));
+      for (const o of fresh.reverse()) {
+        seenOrders.current.add(o.orderNumber);
+        setMsgs((list) => [...list, { role: 'assistant', content: 'Order saved from this call.', via: 'call', order: { orderNumber: o.orderNumber, total: o.total } }]);
+      }
+      if (fresh.length) announceChange();
+    };
+    const timer = setInterval(() => void tick(), 2_000);
+    return () => { stop = true; clearInterval(timer); };
+  }, [onCall, phoneOk, phone]);
 
   /** One spoken line from the live call: pieces of the same turn grow one bubble. */
   const addCallLine = useCallback((role: 'user' | 'assistant', content: string) => {
@@ -195,10 +218,13 @@ export function BusinessAssistant() {
     startedAt.current = Date.now();
     setSeconds(0);
     try {
-      const [s, sdk] = await Promise.all([
+      const [s, sdk, before] = await Promise.all([
         api.post<{ ticket: string; organizationId: string; config: Record<string, unknown> }>('/business-assistant/live/session', { phone }),
         import('sarvam-conv-ai-sdk/browser'),
+        api.get<Memory>(`/business-assistant/customer?phone=${encodeURIComponent(phone)}`).catch(() => null),
       ]);
+      // Orders that existed before the call are not "new" (no clock comparison between browser and server).
+      seenOrders.current = new Set((before?.recentOrders ?? []).map((o) => o.orderNumber));
       const presenter = video ? await startPresenter() : null;
       const onLevel = (l: { rms: number }) => setLevel(Math.min(1, l.rms * 5));
       // Video: the agent's audio drives the presenter (which plays it); voice: the SDK plays it directly.
@@ -255,6 +281,8 @@ export function BusinessAssistant() {
       const r = await api.post<{ reply: string; order?: { orderNumber: string; total: number } | null }>('/business-assistant/chat', { message, phone, name: name || undefined, spoken: false });
       setMsgs((m) => [...m, { role: 'assistant', content: r.reply, via: 'chat', ...(r.order ? { order: r.order } : {}) }]);
       loadMemory(phone);
+      // The order is in the database now: every open dashboard view (Orders, Home, Customers) reloads at once.
+      if (r.order) announceChange();
     } catch (e) {
       setNotice(errText(e));
     } finally {

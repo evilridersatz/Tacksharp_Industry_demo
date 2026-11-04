@@ -117,9 +117,16 @@ with sync_playwright() as p:
         return dlg.locator('ol li').last.inner_text()
     r = say('broiler price evlo?')
     check('chat: price comes from the shop database', broiler > 0 and f'{int(broiler)}' in r, r[:120])
+    # The Orders page open in another tab: it must show the new order at once (not at its next 8 s poll).
+    pg2 = ctx.new_page(); pg2.goto(WEB + '/orders'); pg2.wait_for_timeout(3500)
     say('rendu kilo broiler curry cut, cash, 2 mani nerathula varen')
-    say('sari', 4000)
+    say('sari', 600)
     card = dlg.get_by_test_id('assistant-order')
+    num0 = re.search(r'([A-Z]+-[A-Z0-9]+)', card.first.inner_text()).group(1) if card.count() else 'none'
+    t0 = time.time()
+    while time.time() - t0 < 3 and pg2.get_by_text(num0).count() == 0: pg2.wait_for_timeout(200)
+    check('live: the Orders page in another tab shows the new order within 3 s', pg2.get_by_text(num0).count() >= 1, f'{num0} after {time.time() - t0:.1f}s')
+    pg2.close(); pg.wait_for_timeout(2500)
     check('chat: confirmed order card', card.count() == 1, card.first.inner_text() if card.count() else '')
     number = re.search(r'([A-Z]+-[A-Z0-9]+)', card.first.inner_text()).group(1) if card.count() else ''
     pg.wait_for_timeout(600)
@@ -135,8 +142,15 @@ with sync_playwright() as p:
     check('call: microphone audio streams to the agent', ws_sent.count('client.media.audio_chunk') >= 40, str(ws_sent.count('client.media.audio_chunk')))
     texts = dlg.locator('ol li').all_inner_texts()
     check('call: the spoken conversation appears as it happens', any('Enna venum' in t for t in texts) and any('broiler price evlo?' in t for t in texts[-3:]) and any('220 rupees' in t for t in texts[-2:]), ' | '.join(texts[-3:])[:200])
+    # The agent places an order during the call (its tool writes it to the database; here the same customer's order is
+    # created through the API): it appears in the conversation within seconds, without ending the call.
+    for m in ('rendu kilo broiler curry cut, cash, 2 mani nerathula varen', 'sari'):
+        ctx.request.post(API + '/business-assistant/chat', data={'phone': PHONE, 'message': m})
+    t0 = time.time()
+    while time.time() - t0 < 5 and dlg.get_by_text('Order saved from this call.').count() == 0: pg.wait_for_timeout(200)
+    check('live: an order saved during the call appears in the conversation right away', dlg.get_by_text('Order saved from this call.').count() == 1 and dlg.get_by_test_id('assistant-order').count() == 2, f'after {time.time() - t0:.1f}s')
     state = dlg.get_by_test_id('call-state').inner_text()
-    check('call: live state and timer shown', re.search(r'(Listening|Speaking) · 00:0\d', state) is not None, state)
+    check('call: live state and timer shown', re.search(r'(Listening|Speaking) · 00:[01]\d', state) is not None, state)
     pg.screenshot(path=os.path.join(SHOTS, 'business-assistant-call.png'))
     dlg.get_by_role('button', name='End call').click(); pg.wait_for_timeout(2000)
     check('end call: the call and its transcript are saved on the customer', len(saved) == 1 and saved[0].get('phone') == PHONE and len(saved[0].get('lines', [])) >= 3)

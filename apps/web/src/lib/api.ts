@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { onChange } from './live';
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
@@ -88,7 +89,9 @@ export function useApi<T>(path: string | null, refreshMs = 10_000) {
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void load();
     }, refreshMs);
-    return () => clearInterval(timer);
+    // Something changed elsewhere (e.g. the AI assistant placed an order): reload now, not at the next poll.
+    const off = onChange(() => void load());
+    return () => { clearInterval(timer); off(); };
   }, [path, refreshMs, load]);
 
   return { data, error, loading, reload: load };

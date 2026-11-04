@@ -5,7 +5,12 @@ import { log } from '../common/logger.js';
 import type { Product } from './chicken-parse.js';
 import { stockStatus, type StockStatus } from './inventory.js';
 
-const CACHE_MS = 30_000;
+/**
+ * Menu, prices, stock and shops are re-read at most every 5 s (CATALOG_CACHE_MS): a price or stock change in the
+ * dashboard reaches every channel (WhatsApp, chat, the assistant) almost at once, including in the OTHER API process
+ * (webhooks / jobs), whose cache the dashboard cannot clear. Orders are always priced from the database itself.
+ */
+const CACHE_MS = Math.max(0, Number(process.env.CATALOG_CACHE_MS ?? 5_000));
 const MAX_PRICE = 100_000;
 
 export type MenuItemView = {
