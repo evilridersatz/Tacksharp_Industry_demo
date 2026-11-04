@@ -171,7 +171,14 @@ export class TelephonyService {
     const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId: actor.org } });
     const customer = await this.prisma.customer.findFirst({ where: { id: input.customerId, organizationId: actor.org } });
     if (!agent || !customer) return { started: false, reason: !agent ? 'no_sarvam_agent' : 'customer_not_found' };
-    const r = await this.dial(actor, key, agent, customer, customer.phone ?? '', { ignoreCallWindow: input.ignoreCallWindow === true, requestedBy: actor.sub, variables: { ...(input.variables ?? {}), call_purpose: input.purpose }, overrides: input.overrides });
+    const r = await this.dial(actor, key, agent, customer, customer.phone ?? '', { ignoreCallWindow: input.ignoreCallWindow === true, requestedBy: actor.sub, variables: {
+      ...(input.variables ?? {}),
+      call_purpose: input.purpose,
+      // Same first sentence as app_overrides.initial_bot_message, also as a variable: an agent whose console first message
+      // is set to the @call_opening variable opens with it even if Sarvam does not apply the override. Dropped
+      // automatically when the agent does not declare it.
+      ...(input.overrides?.initialBotMessage ? { call_opening: input.overrides.initialBotMessage.slice(0, 600) } : {}),
+    }, overrides: input.overrides });
     return systemResult(r);
   }
 
@@ -270,7 +277,7 @@ export class TelephonyService {
       where: { id: row.id },
       data: result.ok ? { status: 'dialing', providerCallId: result.providerCallId, callId: result.callId ?? null } : { status: 'failed', failureReason: result.reason.slice(0, 190) },
     });
-    log.info('telephony.outbound', { requestId: row.id, provider, ok: result.ok, ms: result.latencyMs, to: mask(toNumber) });
+    log.info('telephony.outbound', { requestId: row.id, provider, ok: result.ok, ms: result.latencyMs, to: mask(toNumber), purpose: opts.variables?.call_purpose ?? 'manual', opening: Boolean(opts.overrides?.initialBotMessage), ...(result.ok ? {} : { reason: result.reason.slice(0, 160) }) });
     await this.audit(actor, row.id, 'telephony.call_requested', { provider, ok: result.ok, agentId: agent.id });
     return { ...view(updated), acceptMs: result.latencyMs };
   }
