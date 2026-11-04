@@ -5,7 +5,7 @@ import { ConversationsService } from '../conversations/conversations.service.js'
 import { CatalogService, type Catalog } from '../restaurant/catalog.service.js';
 import { OrdersService, type CartLine } from '../restaurant/orders.service.js';
 import { OrderFollowUpService } from '../restaurant/order-followup.service.js';
-import { formatQty, parseItems, parsePickup, pickOutlet } from '../restaurant/chicken-parse.js';
+import { formatQty, parseItems, parsePickup, pickOutlet, orderableOutlets } from '../restaurant/chicken-parse.js';
 import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
 import { webhookSecret } from './webhook-token.js';
@@ -380,7 +380,7 @@ export class SarvamToolsService {
   }
 
   private shopsText(c: Catalog) {
-    const open = c.outlets.filter((o) => o.active);
+    const open = orderableOutlets(c.outlets);
     return open.length ? open.map((o, i) => `${i + 1}. ${o.name}${o.area ? ` (${o.area})` : ''}: open ${o.opensAt} to ${o.closesAt}, ${o.prepMinutes} minutes to prepare`).join('; ') : 'No shop is taking orders right now.';
   }
 
@@ -482,7 +482,7 @@ export class SarvamToolsService {
       if (p.cutOptions.length && !cut) questions.push(`Which cut for ${p.name}: ${p.cutOptions.join(', ')}?`);
       lines.push({ itemId: p.id, quantity: quantity ?? 0, ...(cut ? { cut } : {}) });
     }
-    const open = c.outlets.filter((o) => o.active);
+    const open = orderableOutlets(c.outlets);
     const outlet = open.length === 1 ? open[0] : pickOutlet(str(body.shop ?? body.outlet, 120) || heard.join(' '), open);
     if (!outlet) questions.push(open.length ? `Which shop: ${open.map((o) => o.name).join(' or ')}?` : 'No shop is taking orders right now.');
     let pickupAt: Date | undefined;

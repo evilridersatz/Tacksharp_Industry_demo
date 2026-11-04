@@ -681,6 +681,16 @@ export function findOrderNumber(text: string): string | undefined {
 }
 
 /** Choose an outlet by number ("2") or by name / area words. */
+/**
+ * The shops customers can order from: the active ones, and in a live business never a demo shop while a real one is
+ * open (a demo shop left active next to the real "GR Chicken" made every phone order stop at "Which shop?").
+ */
+export function orderableOutlets<T extends { active: boolean; isDemo?: boolean }>(outlets: T[]): T[] {
+  const open = outlets.filter((o) => o.active);
+  const real = open.filter((o) => !o.isDemo);
+  return real.length ? real : open;
+}
+
 export function pickOutlet<T extends { id: string; name: string; area: string | null }>(text: string, outlets: T[]): T | undefined {
   const t = clean(text);
   const n = t.match(/^(\d{1,2})$/);

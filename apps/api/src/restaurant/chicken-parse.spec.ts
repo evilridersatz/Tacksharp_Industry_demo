@@ -425,3 +425,12 @@ describe('specific products, egg kinds, edit words and slot answers (round 6)', 
     expect(['என்னங்க bro, kg-ல.', 'kilo la', 'pieces ah', '2 kg', 'leg piece'].map(unitOnly)).toEqual(['kg', 'kg', 'piece', undefined, undefined]);
   });
 });
+
+describe('orderable shops', () => {
+  it('a live business never offers a demo shop next to a real one; a demo business keeps its demo shops', async () => {
+    const { orderableOutlets } = await import('./chicken-parse.js');
+    const real = { id: 'r', active: true, isDemo: false }, demo = { id: 'd', active: true, isDemo: true }, closed = { id: 'c', active: false, isDemo: false };
+    expect(orderableOutlets([demo, real, closed]).map((o) => o.id)).toEqual(['r']);
+    expect(orderableOutlets([demo]).map((o) => o.id)).toEqual(['d']);
+  });
+});

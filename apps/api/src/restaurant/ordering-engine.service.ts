@@ -19,7 +19,7 @@ import { FeedbackService } from './feedback.service.js';
 import { OrderFollowUpService } from './order-followup.service.js';
 import { OrderSessionStore, type OrderSession } from './order-session.store.js';
 import { isOpen } from './orders.service.js';
-import { bareNumber, findMentions, mentionPolarities, unitOnly, asksAvailability, asksTotal, asksWhenToCome, excludesChicken, isAdditive, isDoneWords, mentionsComing, onlyThese, refersToIt, questionKind, classify, clean, filterAvailabilityClaims, findCut, findOrderNumber, formatQty, mentionsCut, parseItems, parsePayment, parsePickup, pickOutlet, CUT_SYNONYMS, type Intent } from './chicken-parse.js';
+import { bareNumber, findMentions, mentionPolarities, unitOnly, asksAvailability, asksTotal, asksWhenToCome, excludesChicken, isAdditive, isDoneWords, mentionsComing, onlyThese, refersToIt, questionKind, classify, clean, filterAvailabilityClaims, findCut, findOrderNumber, formatQty, mentionsCut, parseItems, parsePayment, parsePickup, pickOutlet, CUT_SYNONYMS, type Intent, orderableOutlets } from './chicken-parse.js';
 import { menuBlock, orderHint, say, spoken, toSpeech, type StockLine, type Style, type VoiceStyle } from './replies.js';
 import { stockText } from './inventory.js';
 import { mask } from '../whatsapp/whatsapp-sender.service.js';
@@ -98,7 +98,7 @@ const CUSTOMER_CHANNELS = ['whatsapp', 'voice'] as const;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 /** The shop this session collects from (the chosen one, else the first active one). */
 const shopFor = (catalog: Catalog, s: Pick<OrderSession, 'outletId'>) => {
-  const outlets = catalog.outlets.filter((o) => o.active);
+  const outlets = orderableOutlets(catalog.outlets);
   return outlets.find((o) => o.id === s.outletId) ?? outlets[0];
 };
 /** Something besides the removal itself (a product, an amount, payment or a time) — then it is not a bare "remove that". */
@@ -424,7 +424,7 @@ export class OrderingEngine {
       }
     }
     const payment = parsePayment(text);
-    const outlets = catalog.outlets.filter((o) => o.active);
+    const outlets = orderableOutlets(catalog.outlets);
     const shop = outlets.find((o) => o.id === s.outletId) ?? outlets[0];
     let pickup: ReturnType<typeof parsePickup> = shop ? parsePickup(text, now, shop, s.pickupDraft) : { kind: 'none' };
     const outletPick = outlets.length > 1 && !s.outletId ? pickOutlet(text, outlets) : undefined;
@@ -996,7 +996,7 @@ export class OrderingEngine {
       if (item.cutOptions.length && !l.cut) return 'cut';
     }
     if (!s.payment) return 'payment';
-    const outlets = catalog.outlets.filter((o) => o.active);
+    const outlets = orderableOutlets(catalog.outlets);
     if (outlets.length > 1 && !s.outletId) return 'outlet';
     return s.pickupAt ? 'review' : 'pickup';
   }
@@ -1147,7 +1147,7 @@ export class OrderingEngine {
     const st = stFor(s);
     s.pending = undefined;
     s.step = 'collecting';
-    const outlets = catalog.outlets.filter((o) => o.active);
+    const outlets = orderableOutlets(catalog.outlets);
 
     if (!s.lines.length) return say.askProduct(st);
     // The product in focus (just selected) is asked about first: "how many eggs?" → "curry cut" → "how many kg of
@@ -1318,7 +1318,7 @@ export class OrderingEngine {
       'VERIFIED PRODUCTS from the shop\'s catalogue (prices per kg unless "per piece"). Availability is decided by the shop, not by you: never say any product is unavailable, out of stock or not sold; if asked about something not listed, say the shop staff will confirm.',
       ...catalog.items.map((i) => `${i.name} ₹${i.price} per ${i.unit === 'piece' ? 'piece' : 'kg'}${i.cutOptions.length ? `, cuts: ${i.cutOptions.join(', ')}` : ''}${i.description ? ` - ${i.description}` : ''} [${!i.available ? 'marked not available today by the shop' : i.stockQty === null ? 'stock not confirmed - the shop confirms with the order' : 'in stock today'}]`),
       'SHOPS (pickup only, no delivery):',
-      ...catalog.outlets.filter((o) => o.active).map((o) => `${o.name}, ${o.address}, open ${o.opensAt}-${o.closesAt}`),
+      ...orderableOutlets(catalog.outlets).map((o) => `${o.name}, ${o.address}, open ${o.opensAt}-${o.closesAt}`),
       s.offerAmount ? `OFFER: ₹${s.offerAmount} off this order.` : 'OFFER: none for this customer.',
       `CUSTOMER'S ORDER SO FAR: ${s.lines.length ? s.lines.map((l) => `${l.quantity ?? '?'} ${catalog.items.find((i) => i.id === l.itemId)?.name} ${l.cut ?? ''}`).join(', ') : 'nothing yet'}`,
     ].join('\n');
