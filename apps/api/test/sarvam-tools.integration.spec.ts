@@ -85,8 +85,8 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     const ctx = await tools.context(ORG, { caller_phone: PHONE });
     expect(ctx.ok).toBe(true);
     expect(ctx.business_name).toBe('GR Chicken Test');
-    expect(ctx.menu_text).toContain('Broiler Chicken: ₹220 per kg');
-    expect(ctx.menu_text).toContain('Country Eggs: ₹12 per piece');
+    expect(ctx.menu_text).toContain('Broiler Chicken: 220 rupees per kilo');
+    expect(ctx.menu_text).toContain('Country Eggs: 12 rupees per piece');
     expect(ctx.menu_text).not.toContain('Chicken Liver');
     expect(ctx.unavailable_today).toBe('Chicken Liver');
     expect(ctx.language_rule).toMatch(/Never Hindi/);
@@ -96,7 +96,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
   });
 
   it('item lookup: real price in English, Tanglish and Tamil; unknown product is never invented; unavailable is said', async () => {
-    expect((await tools.item(ORG, { item_name: 'broiler' })).price_text).toBe('Broiler Chicken is ₹220 per kg.');
+    expect((await tools.item(ORG, { item_name: 'broiler' })).price_text).toBe('Broiler Chicken is 220 rupees per kilo.');
     const naatu = await tools.item(ORG, { item_name: 'naatu kozhi evvalavu' });
     expect(naatu.found).toBe(true);
     expect(naatu.name).toBe('Country Chicken');
@@ -127,7 +127,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(q.ok).toBe(true);
     expect(q.total).toBe(440);
     expect(q.summary_text).toContain('Broiler Chicken');
-    expect(q.summary_text).toContain('Total ₹440');
+    expect(q.summary_text).toContain('Total 440 rupees');
 
     // While the call goes on, the priced cart is on the dashboard's live view (a real phone call).
     const live = await mod.readLiveCallCarts(tools.carts, ORG);

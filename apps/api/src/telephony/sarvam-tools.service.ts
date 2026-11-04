@@ -145,8 +145,13 @@ function readCart(token: string, secret: string): CartPayload | null {
   }
 }
 
-const rupees = (n: number) => `₹${Number.isInteger(n) ? n : n.toFixed(2)}`;
-const per = (unit: string) => (unit === 'piece' ? 'per piece' : 'per kg');
+/** Prices as the voice should SAY them ("220 rupees", "180 rupees 50 paise"): a "₹" sign is read out oddly by TTS. */
+const rupees = (n: number) => {
+  const r = Math.floor(n + 1e-9);
+  const p = Math.round((n - r) * 100);
+  return p ? `${r} rupees ${p} paise` : `${r} rupees`;
+};
+const per = (unit: string) => (unit === 'piece' ? 'per piece' : 'per kilo');
 /**
  * A body value as text. A value the Sarvam console did not fill in arrives as its placeholder ("@confirmed",
  * "{{cart_token}}", "<the caller phone ...>": seen live 2026-11-04): that is treated as missing, never as data.
