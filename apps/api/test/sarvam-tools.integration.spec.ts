@@ -70,6 +70,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     await cleanup();
     followUps = { onOrderCreated: vi.fn(async () => undefined) };
     tools = new mod.SarvamToolsService(prisma, new CatalogService(prisma), new OrdersService(prisma), new ConversationsService(prisma), followUps);
+    tools.carts = mod.memoryCartStore();
     controller = new SarvamToolsController(tools, prisma);
   });
 
@@ -158,21 +159,46 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
   it('a tampered, expired or other-tenant cart is refused; a price change is not charged silently', async () => {
     const q = await tools.quote(ORG, { items_text: '1 kg country chicken whole', pickup_time: '30 minutes' });
     expect(q.ok).toBe(true);
-    const [body, mac] = q.cart_token.split('.');
+    expect(q.cart_token).toMatch(/^[A-Z2-9]{6}$/);
+    const signed = await tools.carts.get(`sarvam:cart:${ORG}:${q.cart_token}`);
+    const [body, mac] = signed.split('.');
     const forged = JSON.parse(Buffer.from(body, 'base64url').toString());
     forged.t = 1;
     const tampered = `${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${mac}`;
-    expect((await tools.order(ORG, { cart_token: tampered, caller_phone: PHONE, confirmed: 'yes' })).error).toBe('cart_invalid');
-    expect((await tools.order(ORG_B, { cart_token: q.cart_token, caller_phone: PHONE, confirmed: 'yes' })).error).toBe('cart_invalid');
+    expect((await tools.order(ORG, { cart_token: tampered, caller_phone: '919000000001', confirmed: 'yes' })).error).toBe('cart_invalid');
+    expect((await tools.order(ORG, { cart_token: 'ZZZZZZ', caller_phone: '919000000001', confirmed: 'yes' })).error).toBe('cart_invalid');
+    expect((await tools.order(ORG_B, { cart_token: q.cart_token, caller_phone: '919000000001', confirmed: 'yes' })).error).toBe('cart_invalid');
+    expect((await tools.order(ORG_B, { cart_token: signed, caller_phone: '919000000001', confirmed: 'yes' })).error).toBe('cart_invalid');
 
     await prisma.menuItem.update({ where: { id: `${ORG}_Country_Chicken` }, data: { price: 480 } });
     try {
-      const r = await tools.order(ORG, { cart_token: q.cart_token, caller_phone: PHONE, confirmed: 'yes', call_id: 'call-test-2' });
+      const r = await tools.order(ORG, { cart_token: signed, caller_phone: PHONE, confirmed: 'yes', call_id: 'call-test-2' });
       expect(r.ok).toBe(false);
       expect(r.error).toBe('rejected');
     } finally {
       await prisma.menuItem.update({ where: { id: `${ORG}_Country_Chicken` }, data: { price: 450 } });
     }
+  });
+
+  it('live robustness: a lost or mangled cart code falls back to the caller\'s own last quote; spoken yes forms', async () => {
+    const caller = '919876511111';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    const q = await tools.quote(ORG, { items_text: '1 kg broiler curry cut', pickup_time: '2 hours', caller_phone: `+${caller}` });
+    expect(q.ok).toBe(true);
+    // The model passed a mangled reference (as seen live): the caller's latest quote is used, not a guess.
+    const r = await tools.order(ORG, { cart_token: `${q.cart_token}xx`, caller_phone: `+${caller}`, confirmed: 'Yes, please place it', call_id: 'call-robust-1' });
+    expect(r).toMatchObject({ ok: true });
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: r.order_number } });
+    expect(Number(row.total)).toBe(q.total);
+    expect(row.channel).toBe('voice');
+    // Short code with a "CART-" prefix and lower case works too; spoken Tamil / Tanglish yes; a no is refused.
+    const q2 = await tools.quote(ORG, { items_text: '1 kg country chicken whole', pickup_time: '2 hours' });
+    expect((await tools.order(ORG, { cart_token: `cart-${q2.cart_token.toLowerCase()}`, caller_phone: `+${caller}`, confirmed: 'illa, vendam' })).error).toBe('not_confirmed');
+    expect((await tools.order(ORG, { cart_token: `cart-${q2.cart_token.toLowerCase()}`, caller_phone: `+${caller}`, confirmed: 'சரி போடுங்க', call_id: 'call-robust-2' })).ok).toBe(true);
+    expect(mod.saidYes(true)).toBe(true);
+    expect(mod.saidYes('aama sari')).toBe(true);
+    expect(mod.saidYes('')).toBe(false);
+    expect(mod.saidYes('no thanks')).toBe(false);
   });
 
   it('tenant isolation: each organization sees only its own menu and prices', async () => {

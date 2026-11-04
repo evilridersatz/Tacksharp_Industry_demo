@@ -1,3 +1,4 @@
+import { log } from '../common/logger.js';
 import { Body, Controller, ForbiddenException, Get, HttpCode, Param, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
 import type { Request } from 'express';
 import { CurrentUser, Org, Public } from '../auth/decorators.js';
@@ -65,7 +66,15 @@ export class SarvamToolsController {
     const org = this.auth(req, query);
     const b = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
     if (!TOOLS.includes(tool as Tool)) return { ok: false, error: 'unknown_tool' };
-    switch (tool as Tool) {
+    const started = Date.now();
+    const r = await this.dispatch(tool as Tool, org, b);
+    // One line per tool call (no customer data): shows in the logs what the agent asked and whether it worked.
+    log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started });
+    return r;
+  }
+
+  private dispatch(tool: Tool, org: string, b: Record<string, unknown>) {
+    switch (tool) {
       case 'context': return this.tools.context(org, b);
       case 'menu': return this.tools.menu(org);
       case 'item': return this.tools.item(org, b);

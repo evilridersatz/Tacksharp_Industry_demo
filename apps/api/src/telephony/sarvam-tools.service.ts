@@ -42,6 +42,43 @@ export function verifyToolKey(organizationId: string, key: unknown, secret = web
 }
 
 type CartPayload = { o: string; l: CartLine[]; out: string; p: string; t: number; x: number };
+
+/**
+ * Where quoted carts are kept for `order`. The voice agent's language model has to copy the cart reference from
+ * quote_order into place_order; a long signed token is easily mangled on the way (live 2026-11-04: place_order
+ * answered, nothing was saved). So quote_order returns a SHORT code, the signed cart stays here (Redis, with a
+ * memory fallback), and the caller's last quote is kept by phone number as a further fallback.
+ */
+export type CartStore = { set(key: string, value: string, ttlMs: number): Promise<void>; get(key: string): Promise<string | null> };
+export function memoryCartStore(): CartStore {
+  const m = new Map<string, { v: string; exp: number }>();
+  return {
+    async set(k, v, ttl) { m.set(k, { v, exp: Date.now() + ttl }); if (m.size > 5000) m.delete(m.keys().next().value!); },
+    async get(k) { const e = m.get(k); return e && e.exp > Date.now() ? e.v : null; },
+  };
+}
+/** Redis first (shared by every API process), memory as a fallback; a Redis hiccup never blocks a live call. */
+export function redisCartStore(): CartStore {
+  const mem = memoryCartStore();
+  const redis = async () => (await import('../queues/queues.js')).queueRedis;
+  const quick = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error('redis timeout')), 800))]);
+  return {
+    async set(k, v, ttl) { await mem.set(k, v, ttl); try { await quick((await redis()).set(k, v, 'PX', ttl)); } catch { /* memory copy kept */ } },
+    async get(k) { try { const v = await quick((await redis()).get(k)); if (v) return v; } catch { /* fall back */ } return mem.get(k); },
+  };
+}
+const CART_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const cartCode = () => Array.from({ length: 6 }, () => CART_CODE_CHARS[Math.floor(Math.random() * CART_CODE_CHARS.length)]).join('');
+const cartKey = (org: string, code: string) => `sarvam:cart:${org}:${code}`;
+const lastCartKey = (org: string, phone: string) => `sarvam:lastcart:${org}:${phone}`;
+
+/** A clear yes from the caller, as the agent passes it (English, Tanglish, Tamil, or a boolean). */
+export function saidYes(v: unknown): boolean {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (!s) return false;
+  if (/\b(no|nope|not|don'?t|cancel|illa|illai|vendam|vendaam|venam)\b|இல்ல|வேண்டாம்|வேணாம்/.test(s)) return false;
+  return /^(true|1)$/.test(s) || /\b(yes|yeah|yep|y|ok|okay|confirm|confirmed|sure|done|correct|place|aam|aama|aamaa|ama|amaa|sari|seri|sariya|seriya|haan|ha|podunga|podu)\b|ஆம்|ஆமா|சரி|போடுங்க/.test(s);
+}
 const CART_TTL_MS = 30 * 60_000;
 const b64 = (s: string) => Buffer.from(s).toString('base64url');
 
@@ -69,6 +106,9 @@ const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.trim().slice(0
 
 @Injectable()
 export class SarvamToolsService {
+  /** Quoted carts (see CartStore). Tests use the memory store. */
+  carts: CartStore = redisCartStore();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: CatalogService,
@@ -196,7 +236,11 @@ export class SarvamToolsService {
     if (!q.ok) return { ok: false, needs: 'changes', problems_text: q.problems.join(' ') };
     const summary = q.lines.map((l) => `${formatQty(l.quantity, l.unit)} ${l.name}${l.cut ? ` ${l.cut}` : ''} = ${rupees(l.lineTotal)}`).join('; ');
     const pickupText = pickupAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    const cart = signCart({ o: organizationId, l: lines, out: outlet!.id, p: pickupAt!.toISOString(), t: q.total, x: Date.now() + CART_TTL_MS }, secret);
+    const signed = signCart({ o: organizationId, l: lines, out: outlet!.id, p: pickupAt!.toISOString(), t: q.total, x: Date.now() + CART_TTL_MS }, secret);
+    const cart = cartCode();
+    await this.carts.set(cartKey(organizationId, cart), signed, CART_TTL_MS);
+    const quotePhone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
+    if (quotePhone) await this.carts.set(lastCartKey(organizationId, quotePhone), signed, CART_TTL_MS);
     return {
       ok: true,
       summary_text: `${summary}. Total ${rupees(q.total)}. Pickup at ${outlet!.name}, ${pickupText}. Payment at the shop.`,
@@ -210,11 +254,30 @@ export class SarvamToolsService {
   async order(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
     const secret = webhookSecret();
     if (!secret) return { ok: false, error: 'not_configured' };
-    const cart = readCart(str(body.cart_token, 4000), secret);
-    if (!cart || cart.o !== organizationId) return { ok: false, error: 'cart_invalid', message: 'The order summary expired or is not valid. Price the order again before placing it.' };
-    if (!/^(yes|y|true|confirmed|ok|aam|aama|sari|seri|ஆம்|சரி)$/i.test(str(body.confirmed, 20))) return { ok: false, error: 'not_confirmed', message: 'Ask the caller to confirm the order first.' };
     const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
-    if (!phone) return { ok: false, error: 'no_phone', message: 'The caller phone number is needed to place the order.' };
+    const raw = str(body.cart_token, 4000).trim();
+    const refuse = (error: string, message: string) => {
+      log.warn('sarvam_tools.order_refused', { organizationId, error, tokenLength: raw.length, confirmed: str(body.confirmed, 30), hasPhone: Boolean(phone) });
+      return { ok: false, error, message };
+    };
+    // The cart the caller confirmed: the short code from quote_order, a full signed token, or (when the model lost the
+    // code) the caller's own latest quote. Always one this server priced and signed for this organization.
+    let cart = readCart(raw, secret);
+    let via = cart ? 'token' : '';
+    if (!cart && /^[A-Za-z0-9-]{4,16}$/.test(raw)) {
+      const code = raw.toUpperCase().replace(/^CART-?/, '');
+      const signed = await this.carts.get(cartKey(organizationId, code));
+      cart = signed ? readCart(signed, secret) : null;
+      via = cart ? 'code' : '';
+    }
+    if (!cart && phone) {
+      const signed = await this.carts.get(lastCartKey(organizationId, phone));
+      cart = signed ? readCart(signed, secret) : null;
+      via = cart ? 'last_quote' : '';
+    }
+    if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'The order summary expired or is not valid. Call quote_order again, read the total, then place the order.');
+    if (!saidYes(body.confirmed)) return refuse('not_confirmed', 'Ask the caller to confirm the order first, then call place_order with confirmed=yes.');
+    if (!phone) return refuse('no_phone', 'The caller phone number is needed to place the order.');
     const callRef = str(body.call_id ?? body.attempt_id ?? body.interaction_id, 120) || cart.p;
     const idempotencyKey = `sarvam:${createHmac('sha256', secret).update(`${callRef}|${body.cart_token}`).digest('hex').slice(0, 40)}`;
     try {
@@ -223,14 +286,14 @@ export class SarvamToolsService {
         organizationId, idempotencyKey, customerId: customer.id, channel: 'voice', lines: cart.l, outletId: cart.out, pickupAt: new Date(cart.p),
         paymentMethod: 'cash_at_shop', customerPhone: phone, customerName: str(body.customer_name, 80) || undefined, language: str(body.language, 20) || undefined, expectedTotal: cart.t,
       });
-      if (r.status === 'rejected') return { ok: false, error: 'rejected', message: `The order could not be placed: ${r.problems.join(' ')}` };
+      if (r.status === 'rejected') return refuse('rejected', `The order could not be placed: ${r.problems.join(' ')}`);
       // The caller agreed on the call to receive the confirmation on WhatsApp: recorded as messaging consent.
-      const wantsWhatsApp = /^(yes|y|true|aam|aama|sari|seri|ஆம்|சரி)$/i.test(str(body.send_whatsapp, 20));
+      const wantsWhatsApp = saidYes(body.send_whatsapp);
       if (wantsWhatsApp && r.status === 'created') {
         await this.prisma.customer.updateMany({ where: { id: customer.id, organizationId, optedOutAt: null }, data: { messagingConsent: true } });
         await this.followUps?.onOrderCreated(organizationId, r.order.id, 'voice').catch((e) => log.warn('sarvam_tools.followup_failed', { error: errorMessage(e) }));
       }
-      log.info('sarvam_tools.order', { organizationId, orderId: r.order.id, status: r.status });
+      log.info('sarvam_tools.order', { organizationId, orderId: r.order.id, status: r.status, cartVia: via });
       return {
         ok: true,
         order_number: r.order.orderNumber,
@@ -320,7 +383,7 @@ export function sarvamConfigPack(input: { organizationId: string; businessName: 
     tools: [
       tool('get_menu', 'Current menu with prices and what is not available today.', 'menu', {}, ['menu_text', 'unavailable_today', 'shops_text']),
       tool('get_item', 'Price and availability of one product the caller named.', 'item', { item_name: '@item_name' }, ['found', 'price_text', 'availability_text', 'cuts', 'message']),
-      tool('quote_order', 'Price the order. Nothing is saved.', 'quote', { items_text: '@items_text', shop: '@shop', pickup_time: '@pickup_time' }, ['ok', 'summary_text', 'total', 'cart_token', 'questions_text', 'problems_text', 'message']),
+      tool('quote_order', 'Price the order. Nothing is saved.', 'quote', { items_text: '@items_text', shop: '@shop', pickup_time: '@pickup_time', caller_phone: `@${PHONE}` }, ['ok', 'summary_text', 'total', 'cart_token', 'questions_text', 'problems_text', 'message']),
       tool('place_order', 'Place the confirmed order (only after the caller said yes).', 'order', { cart_token: '@cart_token', confirmed: '@confirmed', send_whatsapp: '@send_whatsapp', caller_phone: `@${PHONE}`, customer_name: '@customer_name' }, ['ok', 'order_number', 'message']),
       tool('order_status', 'Status of the caller’s latest order.', 'status', { caller_phone: `@${PHONE}`, order_number: '@order_number' }, ['found', 'message']),
       tool('request_callback', 'Ask staff to call the customer back.', 'handoff', { caller_phone: `@${PHONE}`, reason: '@reason' }, ['message']),
