@@ -201,6 +201,33 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(mod.saidYes('no thanks')).toBe(false);
   });
 
+  it('live console with placeholders only: the order is read from the Call Transcript, the caller from the bound interaction', async () => {
+    // Exactly what Sarvam sent live (2026-11-04): unfilled "@..." placeholders, no caller number.
+    const caller = '919876522222';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    await tools.carts.set(mod.callPhoneKey(ORG, 'int-live-1'), caller, 60_000);
+    const said = (...lines: string[]) => lines.join('\n');
+    const t1 = said('agent: Vanakkam! GR Chicken.', 'user: country chicken price evlo?', 'agent: 450 rupees per kilo.', 'user: illa, rendu kilo broiler curry cut venum', 'agent: Eppo varuveenga?', 'user: 2 hours la varen');
+    const q = await tools.quote(ORG, { items_text: '@items_text', shop: '@shop', pickup_time: '@pickup_time', caller_phone: '@User Identifier', interaction_id: 'int-live-1', transcript: t1 });
+    expect(q).toMatchObject({ ok: true, total: 440 });
+    expect(q.summary_text).toContain('Broiler Chicken');
+    expect(q.summary_text).not.toContain('Country');
+    const base = { cart_token: '@cart_token', confirmed: '@confirmed', send_whatsapp: '@send_whatsapp', caller_phone: '@User Identifier', interaction_id: 'int-live-1' };
+    expect((await tools.order(ORG, { ...base, transcript: `${t1}\nagent: Total 440 rupees. Confirm pannalama?\nuser: venam, wait` })).error).toBe('not_confirmed');
+    const r = await tools.order(ORG, { ...base, transcript: `${t1}\nagent: Total 440 rupees. Confirm pannalama?\nuser: sari, podunga` });
+    expect(r).toMatchObject({ ok: true });
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: r.order_number }, include: { customer: true } });
+    expect(row.customer.phone).toBe(caller);
+    expect(Number(row.total)).toBe(440);
+    // The same call asking again is the same order (idempotent per interaction).
+    const again = await tools.order(ORG, { ...base, transcript: `${t1}\nuser: sari` });
+    expect(again.order_number).toBe(r.order_number);
+    // A transcript as a list of turns works too; placeholders are never data.
+    expect(mod.callerLines({ transcript: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yes' }, { role: 'User', text: 'sari' }] })).toEqual(['hi', 'sari']);
+    expect(mod.isPlaceholder('@confirmed')).toBe(true);
+    expect(mod.isPlaceholder('{{cart_token}}')).toBe(true);
+  });
+
   it('tenant isolation: each organization sees only its own menu and prices', async () => {
     expect((await tools.item(ORG_B, { item_name: 'broiler' })).price).toBe(999);
     expect((await tools.item(ORG, { item_name: 'broiler' })).price).toBe(220);

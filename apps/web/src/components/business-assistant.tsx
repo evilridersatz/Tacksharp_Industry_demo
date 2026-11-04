@@ -265,6 +265,9 @@ export function BusinessAssistant() {
       agent.current = a;
       await a.start();
       if (!(await a.waitForConnect(15))) throw new Error('Sarvam did not answer in time.');
+      // Tie this Sarvam interaction to the customer number, so the agent's order tools know who is calling.
+      const iid = a.getInteractionId();
+      if (iid) void api.post('/business-assistant/live/bind', { interactionId: iid, phone }).catch(() => undefined);
       setCall((c) => (c === 'connecting' ? 'listening' : c));
     } catch (e) {
       const name = (e as DOMException)?.name;

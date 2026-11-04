@@ -67,6 +67,11 @@ export function redisCartStore(): CartStore {
     async get(k) { try { const v = await quick((await redis()).get(k)); if (v) return v; } catch { /* fall back */ } return mem.get(k); },
   };
 }
+/** One store for the whole process: the dashboard binds a live call to its customer number here too. */
+let shared: CartStore | null = null;
+export const sharedCartStore = () => (shared ??= redisCartStore());
+export const callPhoneKey = (org: string, interactionId: string) => `sarvam:callphone:${org}:${interactionId}`;
+const callCartKey = (org: string, interactionId: string) => `sarvam:callcart:${org}:${interactionId}`;
 const CART_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const cartCode = () => Array.from({ length: 6 }, () => CART_CODE_CHARS[Math.floor(Math.random() * CART_CODE_CHARS.length)]).join('');
 const cartKey = (org: string, code: string) => `sarvam:cart:${org}:${code}`;
@@ -102,12 +107,47 @@ function readCart(token: string, secret: string): CartPayload | null {
 
 const rupees = (n: number) => `₹${Number.isInteger(n) ? n : n.toFixed(2)}`;
 const per = (unit: string) => (unit === 'piece' ? 'per piece' : 'per kg');
-const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.trim().slice(0, max) : typeof v === 'number' ? String(v) : '');
+/**
+ * A body value as text. A value the Sarvam console did not fill in arrives as its placeholder ("@confirmed",
+ * "{{cart_token}}", "<the caller phone ...>": seen live 2026-11-04): that is treated as missing, never as data.
+ */
+export const isPlaceholder = (s: string) => /^@\S/.test(s) || /^\{\{.*\}\}$/.test(s) || /^<.*>$/.test(s);
+const str = (v: unknown, max = 500) => {
+  const s = typeof v === 'string' ? v.trim() : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '';
+  return isPlaceholder(s) ? '' : s.slice(0, max);
+};
+
+/**
+ * What the CALLER said, newest last, from Sarvam's built-in "Call Transcript" variable (a string with "user:" /
+ * "agent:" style lines, or a list of { role, content }). The order is then read by OUR parser from the caller's own
+ * words, so the tools work even when the agent passes no arguments of its own.
+ */
+export function callerLines(body: Record<string, unknown>): string[] {
+  const t = body.transcript ?? body.call_transcript ?? body.conversation;
+  const out: string[] = [];
+  const isUser = (who: string) => /^(user|customer|caller|human|client)\b/i.test(who.trim());
+  if (Array.isArray(t)) {
+    for (const x of t) {
+      const o = (x ?? {}) as Record<string, unknown>;
+      const who = String(o.role ?? o.speaker ?? o.from ?? '');
+      const text = String(o.content ?? o.text ?? o.message ?? '').trim();
+      if (text && isUser(who)) out.push(text);
+    }
+    return out;
+  }
+  if (typeof t === 'string' && !isPlaceholder(t.trim())) {
+    for (const line of t.split(/\r?\n/)) {
+      const m = line.match(/^\s*\[?([A-Za-z ]{2,12})\]?\s*[:\-–]\s*(.+)$/);
+      if (m && isUser(m[1])) out.push(m[2].trim());
+    }
+  }
+  return out;
+}
 
 @Injectable()
 export class SarvamToolsService {
   /** Quoted carts (see CartStore). Tests use the memory store. */
-  carts: CartStore = redisCartStore();
+  carts: CartStore = sharedCartStore();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -116,6 +156,14 @@ export class SarvamToolsService {
     private readonly conversations: ConversationsService,
     @Optional() private readonly followUps?: OrderFollowUpService,
   ) {}
+
+  /** The caller's number: the "User Identifier" Sarvam fills in, else the number the dashboard bound to this call. */
+  private async callerPhone(organizationId: string, body: Record<string, unknown>): Promise<string | undefined> {
+    const direct = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.user_identifier ?? body.phone, 30));
+    if (direct) return direct;
+    const id = str(body.interaction_id ?? body.call_id, 120);
+    return id ? normalizePhone((await this.carts.get(callPhoneKey(organizationId, id))) ?? '') : undefined;
+  }
 
   private async org(organizationId: string) {
     return this.prisma.organization.findUnique({ where: { id: organizationId }, select: { id: true, name: true, vertical: true, status: true } });
@@ -143,7 +191,7 @@ export class SarvamToolsService {
   async context(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
     const org = await this.org(organizationId);
     if (!org) return { ok: false, error: 'unknown_organization' };
-    const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone));
+    const phone = await this.callerPhone(organizationId, body);
     const customer = phone ? await this.prisma.customer.findFirst({ where: { organizationId, phone }, select: { name: true, language: true } }) : null;
     const c = await this.catalog.get(organizationId, true);
     const m = this.menuLines(c);
@@ -174,7 +222,7 @@ export class SarvamToolsService {
 
   /** One product, by what the caller said ("broiler", "naatu kozhi", "நாட்டுக்கோழி"). Unknown -> not on the menu. */
   async item(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
-    const said = str(body.item_name ?? body.item ?? body.query, 200);
+    const said = str(body.item_name ?? body.item ?? body.query, 200) || (callerLines(body).slice(-1)[0] ?? '').slice(0, 200);
     if (!said) return { ok: false, found: false, message: 'Ask which product the caller wants.' };
     const c = await this.catalog.get(organizationId, true);
     const { items } = parseItems(said, this.catalog.products(c));
@@ -202,9 +250,15 @@ export class SarvamToolsService {
   async quote(organizationId: string, body: Record<string, unknown>, now = new Date()): Promise<ToolResult> {
     const secret = webhookSecret();
     if (!secret) return { ok: false, error: 'not_configured' };
-    const said = str(body.items_text ?? body.items ?? body.order_text, 600);
-    if (!said) return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
+    // The order in the caller's words: what the agent passed, else the caller's own latest turns from the transcript.
     const c = await this.catalog.get(organizationId, true);
+    // From the newest caller turn that names a product, plus the turns after it (quantity, cut, time answers).
+    const all = callerLines(body).slice(-12);
+    let from = -1;
+    for (let i = all.length - 1; i >= 0 && from < 0; i--) if (parseItems(all[i], this.catalog.products(c)).items.length) from = i;
+    const heard = from >= 0 ? all.slice(from) : all.slice(-3);
+    const said = str(body.items_text ?? body.items ?? body.order_text, 600) || (from >= 0 ? heard.join('. ').slice(0, 600) : '');
+    if (!said) return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
     const { items, loose } = parseItems(said, this.catalog.products(c));
     if (!items.length) return { ok: false, needs: 'items', message: `I could not find those products on our menu. Available: ${this.menuLines(c).text}` };
     const lines: CartLine[] = [];
@@ -218,17 +272,18 @@ export class SarvamToolsService {
       lines.push({ itemId: p.id, quantity: quantity ?? 0, ...(cut ? { cut } : {}) });
     }
     const open = c.outlets.filter((o) => o.active);
-    const outlet = open.length === 1 ? open[0] : pickOutlet(str(body.shop ?? body.outlet, 120), open);
+    const outlet = open.length === 1 ? open[0] : pickOutlet(str(body.shop ?? body.outlet, 120) || heard.join(' '), open);
     if (!outlet) questions.push(open.length ? `Which shop: ${open.map((o) => o.name).join(' or ')}?` : 'No shop is taking orders right now.');
     let pickupAt: Date | undefined;
     const when = str(body.pickup_time ?? body.pickup, 120);
     if (outlet) {
-      if (!when) questions.push('When will the caller pick it up?');
-      else {
-        const r = parsePickup(when, now, outlet);
-        if (r.kind === 'at') pickupAt = r.at;
-        else questions.push('Please confirm the pickup time (for example "6 PM today" or "in 1 hour").');
+      // The time the agent passed, else the newest caller turn that names a time.
+      const candidates = when ? [when] : [...heard].reverse();
+      for (const c of candidates) {
+        const r = parsePickup(c, now, outlet);
+        if (r.kind === 'at') { pickupAt = r.at; break; }
       }
+      if (!pickupAt) questions.push(when ? 'Please confirm the pickup time (for example "6 PM today" or "in 1 hour").' : 'When will the caller pick it up?');
     }
     if (questions.length) return { ok: false, needs: 'details', questions_text: questions.join(' ') };
 
@@ -239,8 +294,10 @@ export class SarvamToolsService {
     const signed = signCart({ o: organizationId, l: lines, out: outlet!.id, p: pickupAt!.toISOString(), t: q.total, x: Date.now() + CART_TTL_MS }, secret);
     const cart = cartCode();
     await this.carts.set(cartKey(organizationId, cart), signed, CART_TTL_MS);
-    const quotePhone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
+    const quotePhone = await this.callerPhone(organizationId, body);
     if (quotePhone) await this.carts.set(lastCartKey(organizationId, quotePhone), signed, CART_TTL_MS);
+    const callId = str(body.interaction_id ?? body.call_id, 120);
+    if (callId) await this.carts.set(callCartKey(organizationId, callId), signed, CART_TTL_MS);
     return {
       ok: true,
       summary_text: `${summary}. Total ${rupees(q.total)}. Pickup at ${outlet!.name}, ${pickupText}. Payment at the shop.`,
@@ -254,8 +311,9 @@ export class SarvamToolsService {
   async order(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
     const secret = webhookSecret();
     if (!secret) return { ok: false, error: 'not_configured' };
-    const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
+    const phone = await this.callerPhone(organizationId, body);
     const raw = str(body.cart_token, 4000).trim();
+    const callId = str(body.interaction_id ?? body.call_id, 120);
     const refuse = (error: string, message: string) => {
       log.warn('sarvam_tools.order_refused', { organizationId, error, tokenLength: raw.length, confirmed: str(body.confirmed, 30), hasPhone: Boolean(phone) });
       return { ok: false, error, message };
@@ -270,15 +328,24 @@ export class SarvamToolsService {
       cart = signed ? readCart(signed, secret) : null;
       via = cart ? 'code' : '';
     }
+    if (!cart && callId) {
+      const signed = await this.carts.get(callCartKey(organizationId, callId));
+      cart = signed ? readCart(signed, secret) : null;
+      via = cart ? 'this_call' : '';
+    }
     if (!cart && phone) {
       const signed = await this.carts.get(lastCartKey(organizationId, phone));
       cart = signed ? readCart(signed, secret) : null;
       via = cart ? 'last_quote' : '';
     }
     if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'The order summary expired or is not valid. Call quote_order again, read the total, then place the order.');
-    if (!saidYes(body.confirmed)) return refuse('not_confirmed', 'Ask the caller to confirm the order first, then call place_order with confirmed=yes.');
+    // The yes: what the agent passed, else the caller's own last words on the call (a "no" there always wins).
+    const lastSaid = callerLines(body).slice(-2);
+    const explicit = str(body.confirmed, 60);
+    const yes = explicit ? saidYes(explicit) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
+    if (!yes) return refuse('not_confirmed', 'Read the total and ask the caller to confirm; call place_order after they say yes.');
     if (!phone) return refuse('no_phone', 'The caller phone number is needed to place the order.');
-    const callRef = str(body.call_id ?? body.attempt_id ?? body.interaction_id, 120) || cart.p;
+    const callRef = callId || str(body.attempt_id, 120) || cart.p;
     const idempotencyKey = `sarvam:${createHmac('sha256', secret).update(`${callRef}|${body.cart_token}`).digest('hex').slice(0, 40)}`;
     try {
       const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound', name: str(body.customer_name, 80) || undefined });
@@ -308,7 +375,7 @@ export class SarvamToolsService {
   }
 
   async status(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
-    const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
+    const phone = await this.callerPhone(organizationId, body);
     const num = str(body.order_number, 40).toUpperCase();
     const customer = phone ? await this.prisma.customer.findFirst({ where: { organizationId, phone }, select: { id: true } }) : null;
     // Only the caller's own orders: an order number alone (said by anyone) never reveals an order.
@@ -323,7 +390,7 @@ export class SarvamToolsService {
   }
 
   async handoff(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
-    const phone = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.phone, 30));
+    const phone = await this.callerPhone(organizationId, body);
     if (!phone) return { ok: false, error: 'no_phone' };
     const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound' });
     const reason = str(body.reason, 300) || 'Caller asked for a person.';
@@ -365,12 +432,14 @@ export function sarvamConfigPack(input: { organizationId: string; businessName: 
     'content-type': 'application/json',
   };
   const url = (t: string) => `${input.baseUrl}/telephony/sarvam/tools/${t}`;
-  const PHONE = '<the caller phone number variable of your Sarvam workspace>';
+  // Sarvam's built-in call-context variables, picked with "@" in the tool body (docs: HTTPS tool).
+  const PHONE = 'User Identifier';
+  const CALL = { interaction_id: '@Interaction ID', transcript: '@Call Transcript' };
   const instructions = [
     `You are the phone assistant of ${input.businessName}, a fresh chicken shop in Tamil Nadu. Customers call to ask prices, check what is available and order for pickup.`,
     VOICE_LANGUAGE_POLICY.rule,
     'Facts come ONLY from the tools. At the start you receive menu_text, unavailable_today and shops_text: use them. For any price or availability question call get_item. Never say a price, product, discount, offer, delivery or availability that a tool did not return. If a product is not on the menu, say so and offer what is available.',
-    'Orders: collect the products, quantity (kg or pieces), cut, shop (if more than one) and pickup time, then call quote_order. If it returns questions_text or problems_text, ask exactly that. If it returns summary_text, read it with the total and ask the caller to confirm. Only after a clear yes, ask if they want the confirmation on WhatsApp, then call place_order with confirmed=yes. Say the order is placed ONLY when place_order returns an order_number; read the order number.',
+    'Orders: collect the products, quantity (kg or pieces), cut, shop (if more than one) and pickup time, then call quote_order (it reads the order from what the caller said). If it returns questions_text or problems_text, ask exactly that and call quote_order again after the answer. If it returns summary_text, read it with the total and ask the caller to confirm. Only after the caller clearly says yes, call place_order. Say the order is placed ONLY when place_order returns an order_number; read the order number. If place_order does not return one, do not say the order is placed: offer a staff call back.',
     'Pickup only, payment at the shop. No home delivery. Never take card or UPI details on the call.',
     'For order status call order_status. If the caller is upset, asks for a person, or wants something the tools cannot do (bulk, catering, complaints), call request_callback and tell them staff will call back.',
     'Keep answers short: one or two sentences, spoken naturally. Say prices as "220 rupees per kilo".',
@@ -379,14 +448,14 @@ export function sarvamConfigPack(input: { organizationId: string; businessName: 
   return {
     language: VOICE_LANGUAGE_POLICY,
     instructions,
-    onStartHook: { method: 'POST', url: url('context'), headers, body: { caller_phone: `@${PHONE}` }, saveReplyIntoVariables: ['business_name', 'customer_name', 'menu_text', 'unavailable_today', 'shops_text', 'delivery', 'language_rule'] },
+    onStartHook: { method: 'POST', url: url('context'), headers, body: { caller_phone: `@${PHONE}`, interaction_id: CALL.interaction_id }, saveReplyIntoVariables: ['business_name', 'customer_name', 'menu_text', 'unavailable_today', 'shops_text', 'delivery', 'language_rule'] },
     tools: [
       tool('get_menu', 'Current menu with prices and what is not available today.', 'menu', {}, ['menu_text', 'unavailable_today', 'shops_text']),
-      tool('get_item', 'Price and availability of one product the caller named.', 'item', { item_name: '@item_name' }, ['found', 'price_text', 'availability_text', 'cuts', 'message']),
-      tool('quote_order', 'Price the order. Nothing is saved.', 'quote', { items_text: '@items_text', shop: '@shop', pickup_time: '@pickup_time', caller_phone: `@${PHONE}` }, ['ok', 'summary_text', 'total', 'cart_token', 'questions_text', 'problems_text', 'message']),
-      tool('place_order', 'Place the confirmed order (only after the caller said yes).', 'order', { cart_token: '@cart_token', confirmed: '@confirmed', send_whatsapp: '@send_whatsapp', caller_phone: `@${PHONE}`, customer_name: '@customer_name' }, ['ok', 'order_number', 'message']),
-      tool('order_status', 'Status of the caller’s latest order.', 'status', { caller_phone: `@${PHONE}`, order_number: '@order_number' }, ['found', 'message']),
-      tool('request_callback', 'Ask staff to call the customer back.', 'handoff', { caller_phone: `@${PHONE}`, reason: '@reason' }, ['message']),
+      tool('get_item', 'Price and availability of one product the caller named.', 'item', { transcript: CALL.transcript }, ['found', 'price_text', 'availability_text', 'cuts', 'message']),
+      tool('quote_order', 'Price the order. Nothing is saved.', 'quote', { caller_phone: `@${PHONE}`, ...CALL }, ['ok', 'summary_text', 'total', 'cart_token', 'questions_text', 'problems_text', 'message']),
+      tool('place_order', 'Place the confirmed order (only after the caller said yes).', 'order', { caller_phone: `@${PHONE}`, ...CALL }, ['ok', 'order_number', 'message']),
+      tool('order_status', 'Status of the caller’s latest order.', 'status', { caller_phone: `@${PHONE}`, interaction_id: CALL.interaction_id }, ['found', 'message']),
+      tool('request_callback', 'Ask staff to call the customer back.', 'handoff', { caller_phone: `@${PHONE}`, ...CALL }, ['message']),
     ],
     postCallWebhook: input.webhookUrl,
     notes: [

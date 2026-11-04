@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { CurrentUser, Org, Public } from '../auth/decorators.js';
 import { webhookSecret } from '../telephony/webhook-token.js';
+import { callPhoneKey, sharedCartStore } from '../telephony/sarvam-tools.service.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
@@ -252,6 +253,22 @@ export class BusinessAssistantController {
     }
     log.info('business_assistant.live_url', { organizationId: p.tenant, ms: Date.now() - started });
     return { url: data.url, reference_id: data.reference_id };
+  }
+
+  /**
+   * The browser tells us which Sarvam interaction is this dashboard call (the SDK knows its id once connected): the
+   * agent's tools can then find the customer number from the Interaction ID even when Sarvam's "User Identifier" is
+   * empty for a web call. Kept 2 hours.
+   */
+  @Post('live/bind')
+  @HttpCode(200)
+  async liveBind(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown }) {
+    if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    const id = typeof body?.interactionId === 'string' && /^[\w-]{4,120}$/.test(body.interactionId) ? body.interactionId : '';
+    const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
+    if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
+    await sharedCartStore().set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
+    return { bound: true };
   }
 
   /**
