@@ -7,7 +7,7 @@ import { PERMISSIONS, requirePermission } from '../governance/permissions.js';
 import { config } from '../common/config.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SarvamTelephonyProvider } from './sarvam.provider.js';
-import { SarvamToolsService, sarvamConfigPack, verifyToolKey } from './sarvam-tools.service.js';
+import { SarvamToolsService, isPlaceholder, sarvamConfigPack, verifyToolKey } from './sarvam-tools.service.js';
 
 const TOOLS = ['context', 'menu', 'item', 'quote', 'order', 'status', 'handoff'] as const;
 type Tool = (typeof TOOLS)[number];
@@ -69,7 +69,10 @@ export class SarvamToolsController {
     const started = Date.now();
     const r = await this.dispatch(tool as Tool, org, b);
     // One line per tool call (no customer data): shows in the logs what the agent asked and whether it worked.
-    log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started });
+    // Field names only, and which of them carried a real value (not an empty / "@Variable" placeholder): shows what
+    // the Sarvam console actually sends for this tool, without logging what the caller said.
+    const filled = Object.entries(b).filter(([k, v]) => k !== 'key' && k !== 'tool_key' && (typeof v === 'number' || (typeof v === 'string' ? Boolean(v.trim()) && !isPlaceholder(v.trim()) : Array.isArray(v) ? v.length > 0 : Boolean(v)))).map(([k]) => k);
+    log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started, fields: Object.keys(b).filter((k) => k !== 'key' && k !== 'tool_key').slice(0, 15).join(','), filled: filled.slice(0, 15).join(',') });
     return r;
   }
 
