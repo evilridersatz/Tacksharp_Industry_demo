@@ -32,6 +32,24 @@ describe('Sarvam outbound request (mocked HTTP; no call is placed)', () => {
     const fTimeout = vi.fn(async () => { const e = new Error('t'); e.name = 'TimeoutError'; throw e; });
     expect(await sarvamOutboundCall(fTimeout, acct, { appId: 'a', appVersion: 1, to: '919876543210' })).toMatchObject({ ok: false, retryable: false, errorCode: 'timeout' });
   });
+  it('agent variables the Sarvam agent does not declare: asked once more without exactly those (the live 422)', async () => {
+    const live = JSON.stringify({ error: { message: '(422) Invalid Parameter', type: 'invalid_parameter', code: 422, data: { details: "Agent variables '{'customer_name'}' not found in agent variables of app 'GR-Chicken--187d6b05-c430'" } } });
+    const bodies: any[] = [];
+    const f = vi.fn(async (_u: string, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body));
+      bodies.push(b);
+      return b.app_config.agent_variables?.customer_name ? new Response(live, { status: 422 }) : new Response(JSON.stringify({ attempt_id: 'att-2' }), { status: 200 });
+    });
+    const r = await sarvamOutboundCall(f, acct, { appId: 'GR-Chicken--187d6b05-c430', appVersion: 3, to: '919876543210', variables: { customer_name: 'Arun', order_number: 'GR-1' } });
+    expect(r).toMatchObject({ ok: true, attemptId: 'att-2' });
+    expect(r.message).toContain('customer_name');
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(bodies[1].app_config.agent_variables).toEqual({ order_number: 'GR-1' });
+    // Any other 422 is final (one request).
+    const other = vi.fn(async () => new Response(JSON.stringify({ detail: 'bad version' }), { status: 422 }));
+    expect(await sarvamOutboundCall(other, acct, { appId: 'a', appVersion: 9, to: '919876543210', variables: { customer_name: 'A' } })).toMatchObject({ ok: false, errorCode: 'rejected' });
+    expect(other).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('telephony webhook token (Sarvam does not sign webhooks)', () => {

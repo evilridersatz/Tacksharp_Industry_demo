@@ -155,6 +155,31 @@ export async function sarvamOutboundCall(
   p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string> },
 ): Promise<ProviderResult & { attemptId?: string; retryable?: boolean }> {
   const url = `${SARVAM_APPS_API}/api/outbounds/v1/orgs/${encodeURIComponent(s.orgId)}/workspaces/${encodeURIComponent(s.workspaceId)}/outbounds`;
+  const first = await sarvamOutboundOnce(fetchImpl, s, url, p);
+  // Sarvam refuses (422, call NOT placed) agent variables the agent does not declare, e.g.
+  // "Agent variables '{'customer_name'}' not found in agent variables of app '...'". Those variables are optional
+  // context, so the call is requested once more without them (safe: the first request placed nothing).
+  const unknown = !first.ok && first.errorCode === 'rejected' ? unknownAgentVariables(first.message) : [];
+  if (unknown.length && p.variables) {
+    const kept = Object.fromEntries(Object.entries(p.variables).filter(([k]) => !unknown.includes(k)));
+    const second = await sarvamOutboundOnce(fetchImpl, s, url, { ...p, variables: kept });
+    return { ...second, latencyMs: first.latencyMs + second.latencyMs, ...(second.ok ? { message: `${second.message} (Sent without the variables the Sarvam agent does not declare: ${unknown.join(', ')}.)` } : {}) };
+  }
+  return first;
+}
+
+/** Variable names from Sarvam's "Agent variables '{...}' not found" refusal ([] for any other refusal). */
+export function unknownAgentVariables(message: string): string[] {
+  const m = message.match(/Agent variables '\{(.*?)\}' not found/);
+  return m ? [...m[1].matchAll(/'([A-Za-z_][\w]*)'/g)].map((x) => x[1]) : [];
+}
+
+async function sarvamOutboundOnce(
+  fetchImpl: FetchLike,
+  s: SarvamTelephony,
+  url: string,
+  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string> },
+): Promise<ProviderResult & { attemptId?: string; retryable?: boolean }> {
   const body = {
     app_config: {
       app_id: p.appId,
