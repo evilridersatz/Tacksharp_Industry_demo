@@ -35,6 +35,8 @@ export type OutboundRequest = {
   to: string;
   agent: { id: string; name: string; sarvamAppId: string | null; sarvamAppVersion: number | null };
   variables?: Record<string, string>;
+  /** Sarvam app_overrides (documented: Instant Outbound): the agent's first sentence and language for this call. */
+  overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' };
 };
 
 export type OutboundResult =

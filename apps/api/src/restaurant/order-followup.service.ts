@@ -14,6 +14,7 @@ import { dependencyOf, describeError } from '../common/errors.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
 import { firstName } from '../whatsapp/message-templates.js';
 import { normalizePhone } from '../common/phone.js';
+import { feedbackCallOpening } from './call-openings.js';
 import { describeWhen } from '../conversation/when.js';
 import { FeedbackService } from './feedback.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
@@ -460,7 +461,7 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
     const live = await this.prisma.call.findFirst({ where: { customerId: order.customerId, status: { in: ['queued', 'ringing', 'in_progress'] }, createdAt: { gt: new Date(now.getTime() - 10 * 60_000) } } });
     if (live && !simulated) return { status: 'scheduled', retryAt: new Date(now.getTime() + 10 * 60_000), error: 'Another call to this customer is in progress' };
 
-    const request = { organizationId: row.organizationId, customerId: order.customerId, to: order.customer.phone!, idempotencyKey: `${row.id}:${attempt}`, purpose: 'order_feedback', variables: { order_number: order.orderNumber, customer_name: order.customer.name ?? '' } };
+    const request = { organizationId: row.organizationId, customerId: order.customerId, to: order.customer.phone!, idempotencyKey: `${row.id}:${attempt}`, purpose: 'order_feedback', variables: { order_number: order.orderNumber, customer_name: order.customer.name ?? '' }, overrides: (({ message, language }) => ({ initialBotMessage: message, initialLanguage: language }))(feedbackCallOpening({ orderNumber: order.orderNumber, customerName: order.customer.name, language: order.language })) };
     await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { payload: { request: { ...request, provider: simulated ? 'dry_run' : 'sarvam' }, ...((row.payload as object | null) ?? {}) } as never } });
 
     if (!simulated) {

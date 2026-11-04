@@ -16,6 +16,7 @@ import { TenancyService } from '../tenancy/tenancy.service.js';
 import { InventoryService } from './inventory.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
+import { orderCallOpening, readyCallOpening } from './call-openings.js';
 
 const IST_OFFSET_MS = 330 * 60_000;
 const istDay = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -153,6 +154,8 @@ export class RestaurantController {
       idempotencyKey: `${id}:${Math.floor(Date.now() / 60_000)}`,
       ignoreCallWindow: true,
       variables: { order_number: order.orderNumber, customer_name: order.customerName ?? '', order_status: order.status },
+      // The agent opens with why we call: the order is ready, or this order.
+      overrides: (({ message, language }) => ({ initialBotMessage: message, initialLanguage: language }))(purpose === 'order_ready' ? readyCallOpening(order) : orderCallOpening(order)),
     });
     const note = r.started ? `${purpose === 'order_ready' ? 'Ready' : 'Order'} call placed by the phone agent` : r.dryRun ? 'Call checked in test mode (DRY_RUN): nobody was called' : `Call not placed: ${r.reason ?? 'unknown reason'}`;
     await this.prisma.orderEvent.create({ data: { organizationId, orderId: id, type: 'call', actor: `user:${user.sub}`, note: note.slice(0, 500) } });

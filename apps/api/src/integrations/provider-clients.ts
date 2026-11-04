@@ -152,7 +152,7 @@ export type SarvamTelephony = { apiKey: string; orgId: string; workspaceId: stri
 export async function sarvamOutboundCall(
   fetchImpl: FetchLike,
   s: SarvamTelephony,
-  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string> },
+  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string>; overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' } },
 ): Promise<ProviderResult & { attemptId?: string; retryable?: boolean }> {
   const url = `${SARVAM_APPS_API}/api/outbounds/v1/orgs/${encodeURIComponent(s.orgId)}/workspaces/${encodeURIComponent(s.workspaceId)}/outbounds`;
   const first = await sarvamOutboundOnce(fetchImpl, s, url, p);
@@ -178,7 +178,7 @@ async function sarvamOutboundOnce(
   fetchImpl: FetchLike,
   s: SarvamTelephony,
   url: string,
-  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string> },
+  p: { appId: string; appVersion: number; to: string; webhookUrl?: string; variables?: Record<string, string>; overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' } },
 ): Promise<ProviderResult & { attemptId?: string; retryable?: boolean }> {
   const body = {
     app_config: {
@@ -186,6 +186,8 @@ async function sarvamOutboundOnce(
       app_version: p.appVersion,
       connection_config: { connection_id: s.connectionId, agent_phone_number: plus(s.agentPhoneNumber) },
       ...(p.variables && Object.keys(p.variables).length ? { agent_variables: p.variables } : {}),
+      // The agent's first sentence for THIS call (e.g. "your order GR-.. is ready"), instead of its general greeting.
+      ...(p.overrides?.initialBotMessage || p.overrides?.initialLanguage ? { app_overrides: { ...(p.overrides.initialBotMessage ? { initial_bot_message: p.overrides.initialBotMessage.slice(0, 600) } : {}), ...(p.overrides.initialLanguage ? { initial_language_name: p.overrides.initialLanguage } : {}) } } : {}),
     },
     user_config: { user_phone_number: plus(p.to) },
     ...(p.webhookUrl ? { webhook_config: { url: p.webhookUrl } } : {}),

@@ -41,7 +41,7 @@ export interface WhatsAppTransport {
 }
 
 /** What the follow-up processor needs from the voice provider. */
-export type VoiceDialRequest = { organizationId: string; customerId: string; to: string; idempotencyKey: string; purpose: string; variables?: Record<string, string> };
+export type VoiceDialRequest = { organizationId: string; customerId: string; to: string; idempotencyKey: string; purpose: string; variables?: Record<string, string>; overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' } };
 export interface VoiceTransport {
   dial(input: VoiceDialRequest): Promise<{ requestId?: string; simulated: boolean; reason?: string }>;
 }

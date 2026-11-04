@@ -32,6 +32,14 @@ describe('Sarvam outbound request (mocked HTTP; no call is placed)', () => {
     const fTimeout = vi.fn(async () => { const e = new Error('t'); e.name = 'TimeoutError'; throw e; });
     expect(await sarvamOutboundCall(fTimeout, acct, { appId: 'a', appVersion: 1, to: '919876543210' })).toMatchObject({ ok: false, retryable: false, errorCode: 'timeout' });
   });
+  it('the agent\'s first sentence for this call goes in app_overrides (documented Instant Outbound fields)', async () => {
+    let body: any;
+    const f = vi.fn(async (_u: string, init?: RequestInit) => { body = JSON.parse(String(init?.body)); return new Response(JSON.stringify({ attempt_id: 'a' }), { status: 200 }); });
+    await sarvamOutboundCall(f, acct, { appId: 'app', appVersion: 5, to: '919876543210', overrides: { initialBotMessage: 'உங்க order ready', initialLanguage: 'Tamil' } });
+    expect(body.app_config.app_overrides).toEqual({ initial_bot_message: 'உங்க order ready', initial_language_name: 'Tamil' });
+    await sarvamOutboundCall(f, acct, { appId: 'app', appVersion: 5, to: '919876543210' });
+    expect(body.app_config.app_overrides).toBeUndefined();
+  });
   it('agent variables the Sarvam agent does not declare: asked once more without exactly those (the live 422)', async () => {
     const live = JSON.stringify({ error: { message: '(422) Invalid Parameter', type: 'invalid_parameter', code: 422, data: { details: "Agent variables '{'customer_name'}' not found in agent variables of app 'GR-Chicken--187d6b05-c430'" } } });
     const bodies: any[] = [];

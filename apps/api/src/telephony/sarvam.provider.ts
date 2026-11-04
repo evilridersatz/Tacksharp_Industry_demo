@@ -75,7 +75,7 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     if (!req.agent.sarvamAppId) return { ok: false, reason: 'agent_has_no_sarvam_app_id', retryable: false, latencyMs: 0 };
     const webhookUrl = SarvamTelephonyProvider.webhookUrl(req.organizationId, req.requestId);
     if (!webhookUrl) return { ok: false, reason: 'TELEPHONY_WEBHOOK_SECRET missing (needed to verify call results)', retryable: false, latencyMs: 0 };
-    const r = await sarvamOutboundCall(this.fetchImpl, acct, { appId: req.agent.sarvamAppId, appVersion: req.agent.sarvamAppVersion ?? 1, to: req.to, webhookUrl, variables: req.variables });
+    const r = await sarvamOutboundCall(this.fetchImpl, acct, { appId: req.agent.sarvamAppId, appVersion: req.agent.sarvamAppVersion ?? 1, to: req.to, webhookUrl, variables: req.variables, overrides: req.overrides });
     await this.prisma.integrationEvent.create({ data: { organizationId: req.organizationId, provider: 'sarvam_telephony', kind: 'call', ok: r.ok, latencyMs: r.latencyMs, errorCode: r.errorCode ?? null, message: r.message.slice(0, 500), units: r.ok ? 1 : null, unitType: 'calls', source: 'organization' } }).catch(() => undefined);
     if (r.ok) return { ok: true, providerCallId: r.attemptId ?? null, latencyMs: Date.now() - started };
     // The stored reason keeps what Sarvam itself said (the full message is in the integration event): it is what staff

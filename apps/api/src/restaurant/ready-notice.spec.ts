@@ -84,7 +84,7 @@ describe('ReadyNoticeService duplicate protection', () => {
     const prev = { dry: process.env.DRY_RUN, all: process.env.LIVE_ALLOW_ALL_CUSTOMERS };
     process.env.DRY_RUN = 'false'; process.env.LIVE_ALLOW_ALL_CUSTOMERS = 'true';
     try {
-      const order: any = { id: 'o-2', orderNumber: 'GR-1', status: 'ready', readyNotice: null, customerId: 'c-2', customerName: 'Kumar', customerPhone: '919000000002', channel: 'voice', conversationId: null };
+      const order: any = { id: 'o-2', orderNumber: 'GR-1', status: 'ready', readyNotice: null, customerId: 'c-2', customerName: 'Kumar', customerPhone: '919000000002', channel: 'voice', conversationId: null, total: 440, language: null, outlet: { name: 'GR Chicken Shop' }, items: [{ name: 'Broiler Chicken', quantity: 2, unit: 'kg', cut: 'Curry cut' }] };
       const recorded: any[] = [];
       const orders = { getOrder: vi.fn(async () => ({ ...order })), recordReadyNotice: vi.fn(async (_o: string, _id: string, u: any) => { recorded.push(u); }) };
       const prisma = { customer: { findFirst: vi.fn(async () => ({ phone: order.customerPhone, isDemo: false, optedOutAt: null })) } };
@@ -95,6 +95,11 @@ describe('ReadyNoticeService duplicate protection', () => {
       await service.notify('org-2', order.id);
       expect(telephony.placeSystemCall).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'order_ready', customerId: 'c-2', variables: expect.objectContaining({ order_number: 'GR-1' }) }));
       expect(recorded[0]).toMatchObject({ readyNotice: 'calling' });
+      // The agent opens with the ready message for THIS order, in the customer's language (Tamil by default).
+      const call = (telephony.placeSystemCall.mock.calls[0] as any[])[0];
+      expect(call.overrides.initialLanguage).toBe('Tamil');
+      expect(call.overrides.initialBotMessage).toContain('ready');
+      expect(call.overrides.initialBotMessage).toContain('G R 1');
       expect(wa).not.toHaveBeenCalled();
       // The call is refused (e.g. no calling consent): the ready message goes on WhatsApp, with the reason.
       telephony.placeSystemCall.mockResolvedValueOnce({ started: false, reason: 'no_calling_consent' } as any);

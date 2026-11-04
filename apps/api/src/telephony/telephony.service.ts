@@ -161,7 +161,7 @@ export class TelephonyService {
    * same Sarvam path as placeCall, with the organization's system agent (settings.telephony.systemAgentId, or the
    * only active outbound Sarvam agent). Never throws for a business reason: returns { started:false, reason }.
    */
-  async placeSystemCall(input: { organizationId: string; customerId: string; purpose: string; idempotencyKey: string; ignoreCallWindow?: boolean; variables?: Record<string, string> }): Promise<{ started: boolean; requestId?: string; reason?: string; retryAt?: Date; dryRun?: boolean }> {
+  async placeSystemCall(input: { organizationId: string; customerId: string; purpose: string; idempotencyKey: string; ignoreCallWindow?: boolean; variables?: Record<string, string>; overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' } }): Promise<{ started: boolean; requestId?: string; reason?: string; retryAt?: Date; dryRun?: boolean }> {
     const actor = { sub: `system:${input.purpose}`, org: input.organizationId };
     const key = `${input.purpose}:${input.idempotencyKey}`.replace(/[^\w.:-]/g, '_').slice(0, 100);
     const prior = await this.prisma.telephonyCallRequest.findUnique({ where: { organizationId_idempotencyKey: { organizationId: actor.org, idempotencyKey: key } } });
@@ -171,7 +171,7 @@ export class TelephonyService {
     const agent = await this.prisma.voiceAgent.findFirst({ where: { id: agentId, organizationId: actor.org } });
     const customer = await this.prisma.customer.findFirst({ where: { id: input.customerId, organizationId: actor.org } });
     if (!agent || !customer) return { started: false, reason: !agent ? 'no_sarvam_agent' : 'customer_not_found' };
-    const r = await this.dial(actor, key, agent, customer, customer.phone ?? '', { ignoreCallWindow: input.ignoreCallWindow === true, requestedBy: actor.sub, variables: { ...(input.variables ?? {}), call_purpose: input.purpose } });
+    const r = await this.dial(actor, key, agent, customer, customer.phone ?? '', { ignoreCallWindow: input.ignoreCallWindow === true, requestedBy: actor.sub, variables: { ...(input.variables ?? {}), call_purpose: input.purpose }, overrides: input.overrides });
     return systemResult(r);
   }
 
@@ -203,7 +203,7 @@ export class TelephonyService {
     agent: { id: string; name: string; status: string; outbound: unknown; callLimits: unknown; sarvamAppId: string | null; sarvamAppVersion: number | null },
     customer: { id: string; name: string | null; phone: string | null; callingConsent: boolean; doNotContact: boolean; optedOutAt: Date | null; isDemo: boolean } | null,
     toNumber: string,
-    opts: { ignoreCallWindow: boolean; requestedBy: string; variables?: Record<string, string> },
+    opts: { ignoreCallWindow: boolean; requestedBy: string; variables?: Record<string, string>; overrides?: { initialBotMessage?: string; initialLanguage?: 'Tamil' | 'English' } },
   ) {
     const provider: ProviderId = 'sarvam';
 
@@ -257,7 +257,7 @@ export class TelephonyService {
       }
       throw e;
     }
-    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: { caller_phone: `+${toNumber.replace(/^\+/, '')}`, ...(customer.name ? { customer_name: customer.name } : {}), ...(opts.variables ?? {}) } };
+    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: { caller_phone: `+${toNumber.replace(/^\+/, '')}`, ...(customer.name ? { customer_name: customer.name } : {}), ...(opts.variables ?? {}) }, overrides: opts.overrides };
     // caller_phone: for an OUTBOUND call Sarvam's "User Identifier" is empty (docs), so the number is passed as an agent
     // variable the tools can use (@caller_phone); dropped automatically if the agent does not declare it.
     let result = await this.providers[provider].initiateOutboundCall(req);

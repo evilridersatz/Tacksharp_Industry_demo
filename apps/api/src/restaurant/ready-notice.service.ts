@@ -8,6 +8,7 @@ import { errorMessage, log } from '../common/logger.js';
 import { OrdersService, type OrderView } from './orders.service.js';
 import { itemsPhrase, say, type Style } from './replies.js';
 import { followUpConfig, liveGate } from './followup-config.js';
+import { readyCallOpening } from './call-openings.js';
 import { withLock } from '../common/redis-lock.js';
 import { queueRedis } from '../queues/queues.js';
 
@@ -86,6 +87,8 @@ export class ReadyNoticeService {
           idempotencyKey: `${order.id}${opts.force ? `:${Math.floor(Date.now() / 60_000)}` : ''}`,
           ignoreCallWindow: Boolean(opts.force),
           variables: { order_number: order.orderNumber, customer_name: order.customerName ?? '', order_status: 'ready' },
+          // The agent opens with the ready message (not a general "how can I help?").
+          overrides: (({ message, language }) => ({ initialBotMessage: message, initialLanguage: language }))(readyCallOpening(order)),
         }).catch((e) => ({ started: false, reason: errorMessage(e) } as { started: boolean; reason?: string }));
         if (r.started) {
           return this.orders.recordReadyNotice(organizationId, order.id, { readyNotice: 'calling', note: 'Ready call placed by the phone agent.' });
