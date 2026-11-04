@@ -341,7 +341,7 @@ export const CLAIM_STATUS: Record<string, { label: string; tone: Tone }> = {
 
 export const SOURCE_LABEL: Record<string, string> = { whatsapp_link: 'WhatsApp link', website: 'Website', dashboard: 'Added by staff' };
 
-export const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', voice: 'Phone call', test: 'Test chat', web: 'Website' };
+export const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', voice: 'Phone call', assistant: 'AI assistant', test: 'Test chat', web: 'Website' };
 
 export function paymentLabel(o: Pick<Order, 'paymentMethod' | 'paymentStatus'>) {
   const method = o.paymentMethod === 'cash_at_shop' ? 'Cash at shop' : o.paymentMethod === 'upi_at_shop' ? 'UPI at shop' : 'Paid online';

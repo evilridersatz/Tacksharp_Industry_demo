@@ -21,7 +21,7 @@ export function createRateLimiter(now: () => number = Date.now) {
   function rule(path: string): { name: string; limit: number; windowMs: number } {
     // Website assistant (public): each reply may call OpenAI and Sarvam on the platform's account.
     // Video presenter sessions are billed per minute: a few per visitor per 10 minutes.
-    if (path === '/assistant/video/session') return { name: 'assistant_video', limit: config.rateLimit.assistantVideoPer10Min, windowMs: 10 * 60_000 };
+    if (path === '/assistant/video/session' || path === '/business-assistant/video/session') return { name: 'assistant_video', limit: config.rateLimit.assistantVideoPer10Min, windowMs: 10 * 60_000 };
     // Public template demos: each reply may call the platform's model.
     if (path.startsWith('/demos/agents/')) return { name: 'assistant', limit: config.rateLimit.assistantPerMinute, windowMs: 60_000 };
     if (path === '/telephony/sarvam/webhook' || (path.startsWith('/telephony/sarvam/tools/') && path !== '/telephony/sarvam/tools/config')) return { name: 'webhook', limit: config.rateLimit.webhookPerMinute, windowMs: 60_000 };

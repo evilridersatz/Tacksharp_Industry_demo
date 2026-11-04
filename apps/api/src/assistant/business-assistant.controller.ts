@@ -163,7 +163,8 @@ export class BusinessAssistantController {
         phone,
         message,
         customerName: typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 60) : undefined,
-        metadata: { assistant: 'dashboard', by: `user:${user.sub}`, spoken, ...(typeof body?.sttLanguage === 'string' ? { sttLanguage: body.sttLanguage.slice(0, 10) } : {}) },
+        // Orders confirmed here are real orders of this customer (channel "assistant"), not test-chat orders.
+        metadata: { assistant: 'dashboard', by: `user:${user.sub}`, spoken, orderChannel: 'assistant', ...(typeof body?.sttLanguage === 'string' ? { sttLanguage: body.sttLanguage.slice(0, 10) } : {}) },
       });
       const order = (r as { order?: { status: string; orderNumber: string; total: number } }).order ?? null;
       log.info('business_assistant.reply', { organizationId, spoken, ms: Date.now() - started, path: r.path ?? null, order: order?.orderNumber ?? null });
@@ -276,6 +277,15 @@ export class BusinessAssistantController {
   }
 
   fetchImpl: (url: string, init?: RequestInit) => Promise<Response> = (url, init) => fetch(url, init);
+
+  /** The video presenter for a live call: signed-in staff, the business limits (300 s idle / 3600 s in all). */
+  @Post('video/session')
+  @HttpCode(200)
+  async videoSession(@Org() organizationId: string, @CurrentUser() user: SessionClaims) {
+    if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    if (!(await this.workspace(organizationId)).enabled) throw new ForbiddenException('Your business assistant can be tried here in a demo workspace.');
+    return this.assistant.videoSession({ business: true });
+  }
 
   // Speech for the business assistant (signed-in staff; not the public per-visitor allowance).
   @Post('stt')

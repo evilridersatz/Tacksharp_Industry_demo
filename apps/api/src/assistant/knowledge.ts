@@ -48,6 +48,24 @@ PRICING
   (groups and multi-site operators). Prices are quoted when the organization is activated; no list price is
   published. WhatsApp, Sarvam and OpenAI bill the customer directly for usage; no markup.
 
+USING THE DASHBOARD (left menu; names as shown on screen)
+- Prices, stock and what is available today: Menu & stock. Change a price or mark an item unavailable there; WhatsApp,
+  phone calls and the AI assistant use the new value within seconds. Orders are always priced from the menu.
+- Orders: Orders & tracking (new orders appear live; open one to confirm, mark preparing / ready / collected or cancel).
+  "Ready" can notify the customer. Live operations shows what is happening right now.
+- Customers: Customers (history, consent, do-not-contact). Leads & CRM: stages, follow-up dates, tags, CSV export.
+- Conversations: WhatsApp conversations and Team inbox (take over from the AI, reply, notes, assign). Human handoff
+  lists customers who asked for a person.
+- Phone calls: Voice agents (the Sarvam agent id and App version are in the Channels step; Place test call is in
+  Launch). AI voice calls lists every call with its transcript and summary.
+- Campaigns: Offers & campaigns (WhatsApp offers to customers who agreed to receive them), Drip sequences (timed
+  WhatsApp messages and calls), Workflow studio (when X happens, do Y). Sending to many customers needs approval.
+- AI assistant button (bottom right): the business's own assistant by chat, voice call and video call, for a customer
+  number you enter; orders confirmed there are real orders. The Tacksharp help tab answers questions like this one.
+- Knowledge studio: documents and answers the AI uses; questions it could not answer are listed to fill in.
+- Settings: Integrations (WhatsApp, Sarvam, OpenAI, Instagram & Messenger, Meta Conversions API, MCP server),
+  Team & access, Plan & billing (plan, usage, invoices), System health.
+
 GETTING STARTED
 1. Create the organization at /signup (organization name, your name, business email, password of 12+ characters,
    industry). You become the admin; the dashboard opens at once.

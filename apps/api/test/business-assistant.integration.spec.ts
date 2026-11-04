@@ -157,7 +157,9 @@ describe.skipIf(!enabled)('Dashboard business assistant (integration)', () => {
     // 2 kg × ₹220 from the menu, less the business's active ₹50 welcome offer: the backend's total, not the model's.
     expect(Number(row.subtotal)).toBe(440);
     expect(placed.order.total).toBe(Number(row.total));
-    expect(row.channel).toBe('test');
+    expect(row.channel).toBe('assistant');
+    // Staff took this order: messaging consent is not assumed (no WhatsApp unless the customer agreed).
+    expect((await prisma.customer.findFirst({ where: { organizationId: ORG, phone: `91${p.slice(-10)}` } })).messagingConsent).toBe(false);
     expect(sender.sendText).not.toHaveBeenCalled();
     expect(sender.sendNamedTemplate).not.toHaveBeenCalled();
     // Memory: the customer's history is what the assistant (and WhatsApp / phone) know about them.

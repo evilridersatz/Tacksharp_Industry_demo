@@ -92,28 +92,32 @@ describe('video presenter session (Simli mocked)', () => {
     if (env.key === undefined) delete process.env.SIMLI_API_KEY; else process.env.SIMLI_API_KEY = env.key;
     if (env.face === undefined) delete process.env.SIMLI_FACE_ID; else process.env.SIMLI_FACE_ID = env.face;
   });
-  it('creates a capped session with the server-side key and returns only the token', async () => {
-    process.env.SIMLI_API_KEY = 'simli-secret-key'; process.env.SIMLI_FACE_ID = 'face-123';
+  it('creates a capped session with the server-side key (simli-client token call) and returns only the token', async () => {
+    process.env.SIMLI_API_KEY = 'simli-secret-key'; process.env.SIMLI_FACE_ID = 'face-123/trinity';
+    process.env.SIMLI_BACKGROUND_ID = 'bg-1';
     const s = new AssistantService();
-    let call: { url: string; headers: Record<string, string>; body: any } | undefined;
-    s.fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      call = { url, headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) };
-      return new Response(JSON.stringify({ session_token: 'tok-abc', warnings: [] }), { status: 200 });
-    });
+    const calls: any[] = [];
+    s.simliToken = vi.fn(async (req: any) => { calls.push(req); return { session_token: 'tok-abc', warnings: [] }; }) as any;
     const r = await s.videoSession();
     expect(r).toEqual({ sessionToken: 'tok-abc' });
     expect(JSON.stringify(r)).not.toContain('simli-secret-key');
-    expect(call!.url).toBe('https://api.simli.ai/compose/token');
-    expect(call!.headers['x-simli-api-key']).toBe('simli-secret-key');
-    expect(call!.body).toMatchObject({ faceId: 'face-123', handleSilence: true, maxSessionLength: 600, maxIdleTime: 90 });
+    expect(calls[0]).toEqual({ apiKey: 'simli-secret-key', config: { faceId: 'face-123/trinity', handleSilence: true, maxSessionLength: 600, maxIdleTime: 90, background_id: 'bg-1' } });
+    // Signed-in business assistant: the longer limits (300 s idle, 3600 s in all).
+    await s.videoSession({ business: true });
+    expect(calls[1].config).toMatchObject({ maxSessionLength: 3600, maxIdleTime: 300, background_id: 'bg-1' });
+    delete process.env.SIMLI_BACKGROUND_ID;
+    await s.videoSession();
+    expect(calls[2].config.background_id).toBeUndefined();
   });
-  it('is unavailable (503) without a key or face, and when Simli refuses', async () => {
+  it('is unavailable (503) without a key or face, and when Simli refuses (its reason kept, key removed)', async () => {
     delete process.env.SIMLI_API_KEY;
     await expect(new AssistantService().videoSession()).rejects.toMatchObject({ status: 503 });
-    process.env.SIMLI_API_KEY = 'k'; process.env.SIMLI_FACE_ID = 'f';
+    process.env.SIMLI_API_KEY = 'k-secret-123'; process.env.SIMLI_FACE_ID = 'f';
     const s = new AssistantService();
-    s.fetchImpl = vi.fn(async () => new Response(JSON.stringify({ detail: 'bad face' }), { status: 400 }));
+    s.simliToken = vi.fn(async () => { throw '{"detail":"bad face"}'; }) as any;
     await expect(s.videoSession()).rejects.toMatchObject({ status: 503 });
+    s.simliToken = vi.fn(async () => { throw '{"detail":"No minutes left"}'; }) as any;
+    await expect(s.videoSession()).rejects.toThrow(/no minutes left/i);
   });
   it('voice for the presenter is synthesised at 16 kHz', async () => {
     config.sarvam.apiKey = 'sv-test';

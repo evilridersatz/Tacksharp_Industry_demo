@@ -34,6 +34,7 @@ const inr = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigi
 const errText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 const QUICK_ORDERING = ["Today's menu and prices?", 'Broiler price evlo?', '2 kg broiler curry cut venum', 'Staff kitta pesanum'];
 const QUICK_OTHER = ['What are your timings?', 'Price evlo?', 'I want to talk to a person'];
+const QUICK_HELP = ['How do I change a price?', 'How do I send a campaign?', 'How do voice calls work?', 'What does it cost?'];
 /** WhatsApp-style *bold* in the engine's replies, shown as bold (never raw asterisks). */
 const rich = (text: string) => text.split(/(\*[^*\n]+\*)/g).map((part, i) => (/^\*[^*\n]+\*$/.test(part) ? <strong key={i} className="font-semibold">{part.slice(1, -1)}</strong> : part));
 const STATE_LABEL: Record<CallState, string> = { off: 'Ready', connecting: 'Connecting…', listening: 'Listening', speaking: 'Speaking', ended: 'Call ended' };
@@ -69,6 +70,10 @@ export function BusinessAssistant() {
   const [name, setName] = useState('');
   const [memory, setMemory] = useState<Memory | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  /** Right pane: the shop's assistant (default) or Tacksharp help (Tara: how to use the product). */
+  const [pane, setPane] = useState<'shop' | 'help'>('shop');
+  const [helpMsgs, setHelpMsgs] = useState<Msg[]>([]);
+  const [helpGreeting, setHelpGreeting] = useState('');
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -87,6 +92,8 @@ export function BusinessAssistant() {
   const starting = useRef(false);
   /** Orders of this customer already shown (an order placed during a live call is shown the moment it is saved). */
   const seenOrders = useRef<Set<string>>(new Set());
+  /** The speaker whose call bubble may still grow (null after an order card or when a call starts). */
+  const mergeRole = useRef<'user' | 'assistant' | null>(null);
   const phoneOk = phone.replace(/\D/g, '').length >= 10;
   const onCall = call === 'connecting' || call === 'listening' || call === 'speaking';
   const shop = status?.organizationName ?? 'Your business';
@@ -139,6 +146,7 @@ export function BusinessAssistant() {
       const fresh = (m.recentOrders ?? []).filter((o) => !seenOrders.current.has(o.orderNumber));
       for (const o of fresh.reverse()) {
         seenOrders.current.add(o.orderNumber);
+        mergeRole.current = null;
         setMsgs((list) => [...list, { role: 'assistant', content: 'Order saved from this call.', via: 'call', order: { orderNumber: o.orderNumber, total: o.total } }]);
       }
       if (fresh.length) announceChange();
@@ -153,13 +161,13 @@ export function BusinessAssistant() {
     if (!text) return;
     const lines = callLines.current;
     const last = lines[lines.length - 1];
-    if (last && last.role === role) last.content = text.startsWith(last.content) ? text : last.content.endsWith(text) ? last.content : `${last.content} ${text}`;
+    // Same speaker, same turn, nothing shown in between (an order card, a new call): grow the bubble.
+    const merge = mergeRole.current === role && last?.role === role;
+    if (merge) last.content = text.startsWith(last.content) ? text : last.content.endsWith(text) ? last.content : `${last.content} ${text}`;
     else lines.push({ role, content: text });
-    setMsgs((m) => {
-      const prev = m[m.length - 1];
-      if (prev && prev.via === 'call' && prev.role === role) return [...m.slice(0, -1), { ...prev, content: lines[lines.length - 1].content }];
-      return [...m, { role, content: text, via: 'call' }];
-    });
+    mergeRole.current = role;
+    const shown = lines[lines.length - 1].content;
+    setMsgs((m) => (merge && m.length ? [...m.slice(0, -1), { ...m[m.length - 1], content: shown }] : [...m, { role, content: shown, via: 'call' }]));
   }, []);
 
   const stopVideo = useCallback(() => {
@@ -188,7 +196,8 @@ export function BusinessAssistant() {
 
   /** Start the talking presenter; its lips follow the phone agent's own audio (16 kHz PCM). */
   const startPresenter = async (): Promise<SimliLike> => {
-    const { sessionToken } = await api.post<{ sessionToken: string }>('/assistant/video/session');
+    // Minted on our server for this business's avatar (simli-client generateSimliSessionToken; the key stays there).
+    const { sessionToken } = await api.post<{ sessionToken: string }>('/business-assistant/video/session');
     const testFactory = (window as unknown as { __TARA_SIMLI__?: (t: string, v: HTMLVideoElement, a: HTMLAudioElement) => SimliLike }).__TARA_SIMLI__;
     let client: SimliLike;
     if (testFactory) client = testFactory(sessionToken, videoEl.current!, videoAudioEl.current!);
@@ -199,7 +208,11 @@ export function BusinessAssistant() {
     client.on('stop', () => { if (simli.current === client) void endCall('The video call ended.'); });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([client.start(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer from the video service')), 15_000); })]);
+      // start() rejects at once with Simli's own reason when it refuses the session (expired token, no minutes left).
+      await Promise.race([client.start(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer from the video service')), 20_000); })]);
+    } catch (e) {
+      void client.stop().catch(() => undefined);
+      throw new Error(`the video avatar did not start (${errText(e).slice(0, 160)})`);
     } finally { clearTimeout(timer); }
     simli.current = client;
     void videoAudioEl.current?.play().catch(() => undefined);
@@ -215,6 +228,7 @@ export function BusinessAssistant() {
     setWithVideo(video);
     setCall('connecting');
     callLines.current = [];
+    mergeRole.current = null;
     startedAt.current = Date.now();
     setSeconds(0);
     try {
@@ -269,9 +283,27 @@ export function BusinessAssistant() {
     setMuted(!muted);
   };
 
+  /** Tacksharp help (Tara): answers about using the dashboard and the product; nothing about customers. */
+  const askHelp = async (message: string) => {
+    setNotice(null);
+    setInput('');
+    const history = helpMsgs.slice(-8).map(({ role, content }) => ({ role, content }));
+    setHelpMsgs((m) => [...m, { role: 'user', content: message }]);
+    setThinking(true);
+    try {
+      const r = await api.post<{ reply: string }>('/assistant/chat', { message, history });
+      setHelpMsgs((m) => [...m, { role: 'assistant', content: r.reply }]);
+    } catch (e) {
+      setNotice(errText(e));
+    } finally {
+      setThinking(false);
+    }
+  };
+
   const send = async (text: string) => {
     const message = text.trim();
     if (!message || thinking) return;
+    if (pane === 'help') { await askHelp(message); return; }
     if (!phoneOk) { setNotice('Enter the customer’s mobile number first: answers and orders use that customer’s records.'); return; }
     setNotice(null);
     setInput('');
@@ -290,6 +322,10 @@ export function BusinessAssistant() {
     }
   };
 
+  useEffect(() => {
+    if (pane !== 'help' || helpGreeting) return;
+    api.get<{ greeting: string }>('/assistant/status?lang=en').then((s) => setHelpGreeting(s.greeting)).catch(() => setHelpGreeting('Hi! Ask me how to use Tacksharp.'));
+  }, [pane, helpGreeting]);
   const close = () => { if (onCall) void endCall(); setOpen(false); };
   useEffect(() => {
     if (!open) return;
@@ -343,8 +379,8 @@ export function BusinessAssistant() {
 
               <div className="flex flex-1 flex-col items-center justify-center gap-2 py-3 lg:gap-4 lg:py-0">
                 {status.video && (
-                  <div className={cx('relative w-full overflow-hidden rounded-[18px] bg-black/40 ring-1 ring-white/10', withVideo && onCall ? 'block' : 'hidden')}>
-                    <video ref={videoEl} autoPlay playsInline className="aspect-video w-full object-cover" aria-label={`${shop} video assistant`} />
+                  <div className={cx('relative mx-auto w-full max-w-[min(100%,46vh)] overflow-hidden rounded-[18px] bg-black/40 ring-1 ring-white/10 lg:max-w-[min(100%,52vh)]', withVideo && onCall ? 'block' : 'hidden')}>
+                    <video ref={videoEl} autoPlay playsInline className="aspect-square w-full object-cover" aria-label={`${shop} video assistant`} />
                     <audio ref={videoAudioEl} autoPlay />
                     {call === 'connecting' && <p className="absolute inset-0 grid place-items-center text-[13px] text-white/80"><span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Connecting video…</span></p>}
                   </div>
@@ -377,7 +413,15 @@ export function BusinessAssistant() {
 
             {/* Conversation */}
             <div className="flex min-h-0 flex-1 flex-col bg-[#f7f8fc]">
-              <div className="border-b border-black/5 bg-white px-5 pt-4 pb-3 lg:pt-6 lg:pr-16">
+              <div className="border-b border-black/5 bg-white px-5 pt-3 pb-3 lg:pt-5 lg:pr-16">
+                <div className="mb-3 inline-grid grid-cols-2 gap-1 rounded-[12px] bg-[#f1f2f8] p-1" role="tablist" aria-label="Assistant">
+                  {([['shop', `${shop.length > 22 ? 'Shop' : shop} assistant`], ['help', 'Tacksharp help']] as Array<['shop' | 'help', string]>).map(([k, label]) => (
+                    <button key={k} role="tab" aria-selected={pane === k} onClick={() => { setPane(k); setNotice(null); }} className={cx('rounded-[9px] px-3 py-1.5 text-[12.5px] font-semibold', pane === k ? 'bg-white text-[#16183d] shadow-sm ring-1 ring-black/5' : 'text-[#16183d]/60 hover:text-[#16183d]')}>{label}</button>
+                  ))}
+                </div>
+                {pane === 'help' ? (
+                  <p className="text-[12.5px] text-[#16183d]/60" data-testid="help-intro">Ask how to use Tacksharp: menus, orders, campaigns, voice agents, billing. Nothing here reaches your customers.</p>
+                ) : (<>
                 <p className="text-[12px] font-semibold tracking-wide text-[#16183d]/50 uppercase">Customer</p>
                 <div className="mt-1.5 flex items-center gap-2" data-testid="assistant-customer">
                   <div className="relative min-w-0 flex-1">
@@ -401,11 +445,12 @@ export function BusinessAssistant() {
                       </>
                     )}
                 </div>
+                </>)}
               </div>
 
               <ol ref={listRef} className="flex-1 space-y-3 overflow-y-auto px-5 py-5" aria-live="polite" aria-label="Conversation">
-                <li className="flex items-start gap-2.5"><Orb size={28} /><p className="max-w-[82%] rounded-[16px] rounded-tl-[4px] bg-white px-3.5 py-2.5 text-[14px] leading-relaxed text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5">{status.greeting}</p></li>
-                {msgs.map((m, i) => (
+                <li className="flex items-start gap-2.5"><Orb size={28} /><p className="max-w-[82%] rounded-[16px] rounded-tl-[4px] bg-white px-3.5 py-2.5 text-[14px] leading-relaxed text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5">{pane === 'help' ? (helpGreeting || '…') : status.greeting}</p></li>
+                {(pane === 'help' ? helpMsgs : msgs).map((m, i) => (
                   <li key={i} className={cx('flex items-start gap-2.5', m.role === 'user' && 'justify-end')}>
                     {m.role === 'assistant' && <Orb size={28} />}
                     <div className={cx('max-w-[82%] rounded-[16px] px-3.5 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap', m.role === 'user' ? 'rounded-tr-[4px] bg-[#16183d] text-white' : 'rounded-tl-[4px] bg-white text-[#16183d] shadow-[0_1px_2px_rgba(22,24,61,0.06)] ring-1 ring-black/5')}>
@@ -421,19 +466,19 @@ export function BusinessAssistant() {
                 {thinking && <li className="flex items-center gap-2.5"><Orb size={28} /><span className="inline-flex items-center gap-1 rounded-[16px] bg-white px-3.5 py-3 ring-1 ring-black/5" aria-label="Typing">{[0, 1, 2].map((d) => <span key={d} className="size-1.5 rounded-full bg-[#16183d]/40 motion-safe:animate-bounce" style={{ animationDelay: `${d * 140}ms` }} />)}</span></li>}
               </ol>
 
-              {msgs.length === 0 && !onCall && (
+              {(pane === 'help' ? helpMsgs.length === 0 : msgs.length === 0 && !onCall) && (
                 <div className="flex flex-wrap gap-1.5 px-5 pb-2">
-                  {quick.map((q) => <button key={q} onClick={() => void send(q)} className="rounded-full border border-[#16183d]/12 bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:border-[#16183d]/30">{q}</button>)}
+                  {(pane === 'help' ? QUICK_HELP : quick).map((q) => <button key={q} onClick={() => void send(q)} className="rounded-full border border-[#16183d]/12 bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#16183d] hover:border-[#16183d]/30">{q}</button>)}
                 </div>
               )}
               {notice && <p role="status" className="mx-5 mb-2 rounded-[12px] bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 ring-1 ring-amber-200">{notice}</p>}
               <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="border-t border-black/5 bg-white px-5 pt-3 pb-4">
                 <div className="flex items-end gap-2 rounded-[16px] border border-black/10 bg-white p-1.5 focus-within:border-[#16183d]/40 focus-within:ring-4 focus-within:ring-[#16183d]/5">
                   <label htmlFor="ba-input" className="sr-only">Message the assistant</label>
-                  <textarea id="ba-input" rows={1} disabled={onCall} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={onCall ? 'On a call: just speak' : 'Type as the customer…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
-                  <button type="submit" aria-label="Send" disabled={!input.trim() || thinking || onCall} className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-[#16183d] text-white transition-opacity disabled:opacity-30"><ArrowUp className="size-[18px]" /></button>
+                  <textarea id="ba-input" rows={1} disabled={onCall && pane === 'shop'} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }} placeholder={pane === 'help' ? 'Ask about Tacksharp…' : onCall ? 'On a call: just speak' : 'Type as the customer…'} className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-[#16183d] outline-none placeholder:text-[#16183d]/40" />
+                  <button type="submit" aria-label="Send" disabled={!input.trim() || thinking || (onCall && pane === 'shop')} className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-[#16183d] text-white transition-opacity disabled:opacity-30"><ArrowUp className="size-[18px]" /></button>
                 </div>
-                <p className="mt-2 text-center text-[11px] text-[#16183d]/45">Chat is a test: nothing is sent to the customer. Live calls work exactly like a phone call, including orders and confirmations.</p>
+                <p className="mt-2 text-center text-[11px] text-[#16183d]/45">{pane === 'help' ? 'Tacksharp help · answers about the product, not your customers' : 'Real orders: what the customer confirms here or on a call is saved in Orders. WhatsApp confirmations only with their consent.'}</p>
               </form>
             </div>
           </section>

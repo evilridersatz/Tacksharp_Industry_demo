@@ -148,6 +148,7 @@ export class OrderingEngine {
     const s = existing ?? this.newSession(input, key);
     // The dashboard assistant talks to the same test session by text or by voice: each turn says which.
     s.spoken = s.channel === 'test' && input.metadata?.spoken === true ? true : undefined;
+    s.orderChannel = s.channel === 'test' && input.metadata?.orderChannel === 'assistant' ? 'assistant' : undefined;
     await this.ensureThread(s, input);
     if (!existing) await this.carryOver(s);
     // A chat picked up hours later is a new conversation: its old unplaced draft is held and offered, not reused.
@@ -1229,7 +1230,7 @@ export class OrderingEngine {
       idempotencyKey: `${s.key}:${pending.nonce}`,
       customerId: s.customerId,
       conversationId: s.conversationId,
-      channel: s.channel,
+      channel: s.orderChannel ?? s.channel,
       lines: s.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity!, cut: l.cut })),
       outletId: s.outletId,
       pickupAt: new Date(s.pickupAt),
@@ -1250,8 +1251,9 @@ export class OrderingEngine {
     const order = result.order;
     // The customer ordered on WhatsApp: order messages (confirmation, ready, feedback) are expected. Calls still
     // need calling consent, recorded separately by staff.
-    await this.prisma.customer.updateMany({ where: { id: s.customerId, organizationId: s.organizationId, optedOutAt: null }, data: { messagingConsent: true } });
-    if (result.status === 'created') await this.followUps.onOrderCreated(s.organizationId, order.id, s.channel).catch((e) => log.warn('followup.schedule_failed', { error: errorMessage(e) }));
+    // An order taken by staff in the dashboard assistant is not the customer writing to us: consent is not assumed.
+    if (!s.orderChannel) await this.prisma.customer.updateMany({ where: { id: s.customerId, organizationId: s.organizationId, optedOutAt: null }, data: { messagingConsent: true } });
+    if (result.status === 'created') await this.followUps.onOrderCreated(s.organizationId, order.id, s.orderChannel ?? s.channel).catch((e) => log.warn('followup.schedule_failed', { error: errorMessage(e) }));
     s.lastOrderNumber = order.orderNumber;
     if (s.channel === 'voice') s.orderedOnCall = order.orderNumber;
     if (order.offer) {

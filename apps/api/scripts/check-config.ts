@@ -118,6 +118,7 @@ row('Multimodal', 'ffmpeg', (() => { try { execFileSync(process.env.FFMPEG_PATH 
 
 // Website assistant video (Simli)
 row('Assistant video', 'SIMLI_API_KEY + SIMLI_FACE_ID', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'OK' : 'INFO', set('SIMLI_API_KEY') && set('SIMLI_FACE_ID') ? 'set' : 'not set — the Video call button is hidden');
+row('Assistant video background', 'SIMLI_BACKGROUND_ID', 'INFO', set('SIMLI_BACKGROUND_ID') ? 'set (Trinity-2 background)' : 'not set — the avatar\'s own background');
 
 // Instagram & Messenger (per-organization credentials are saved in the dashboard; these are deployment settings)
 row('Instagram & Messenger', 'META_SOCIAL_VERIFY_TOKEN', set('META_SOCIAL_VERIFY_TOKEN') ? 'OK' : set('WHATSAPP_VERIFY_TOKEN') ? 'INFO' : 'WARN', set('META_SOCIAL_VERIFY_TOKEN') ? 'set' : set('WHATSAPP_VERIFY_TOKEN') ? 'not set — the WhatsApp verify token is used for /webhooks/meta-social' : 'missing — Meta cannot verify /webhooks/meta-social');

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { generateSimliSessionToken } from 'simli-client';
 import { config } from '../common/config.js';
 import { errorMessage, log } from '../common/logger.js';
 import { FALLBACK, FAQ, GREETING, KNOWLEDGE, type Style } from './knowledge.js';
@@ -150,39 +151,48 @@ export class AssistantService {
     return { transcript, language: j.language_code ?? null, style: transcript ? detectStyle(transcript) : null };
   }
 
+  /** Simli's own token call (simli-client >= 3.2.0, server side: the key stays here). Tests replace it. */
+  simliToken: typeof generateSimliSessionToken = generateSimliSessionToken;
+
   /**
-   * A short-lived Simli session token for the talking video presenter. The Simli API key never leaves the server;
-   * sessions are capped (length and idle time) because video is billed per minute.
+   * A short-lived Simli session token for the talking video presenter (a Trinity-2 face, 768 x 768). The Simli API key
+   * never leaves the server. Video is billed per minute, so sessions end on their own: the public website presenter
+   * after SIMLI_MAX_IDLE_SECONDS (90) idle / SIMLI_MAX_SESSION_SECONDS (600) in all; the signed-in business assistant
+   * (`business`) after SIMLI_BUSINESS_MAX_IDLE_SECONDS (300) / SIMLI_BUSINESS_MAX_SESSION_SECONDS (3600).
+   * SIMLI_BACKGROUND_ID: one of the account's uploaded backgrounds (optional).
    */
-  async videoSession() {
+  async videoSession(opts: { business?: boolean } = {}) {
     const apiKey = process.env.SIMLI_API_KEY ?? '';
     const faceId = process.env.SIMLI_FACE_ID ?? '';
     if (!apiKey || !faceId) throw new ServiceUnavailableException('The video presenter is not set up. Chat and voice still work.');
+    const num = (name: string, fallback: number) => Number(process.env[name]) || fallback;
+    const backgroundId = (process.env.SIMLI_BACKGROUND_ID ?? '').trim();
     const started = Date.now();
-    let res: Response;
     try {
-      res = await this.fetchImpl('https://api.simli.ai/compose/token', {
-        method: 'POST',
-        headers: { 'x-simli-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          faceId,
-          handleSilence: true,
-          maxSessionLength: Number(process.env.SIMLI_MAX_SESSION_SECONDS) || 600,
-          maxIdleTime: Number(process.env.SIMLI_MAX_IDLE_SECONDS) || 90,
+      const r = await Promise.race([
+        this.simliToken({
+          apiKey,
+          config: {
+            faceId,
+            handleSilence: true,
+            maxSessionLength: opts.business ? num('SIMLI_BUSINESS_MAX_SESSION_SECONDS', 3600) : num('SIMLI_MAX_SESSION_SECONDS', 600),
+            maxIdleTime: opts.business ? num('SIMLI_BUSINESS_MAX_IDLE_SECONDS', 300) : num('SIMLI_MAX_IDLE_SECONDS', 90),
+            ...(backgroundId ? { background_id: backgroundId } : {}),
+          },
         }),
-        signal: AbortSignal.timeout(10_000),
-      });
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
+      ]);
+      if (!r?.session_token) throw new Error('no session token');
+      // e.g. a background id that is not this account's (the avatar's own is used): the session still starts.
+      if (r.warnings?.length) log.warn('assistant.video_warnings', { warnings: r.warnings.slice(0, 5).map((w) => String(w).slice(0, 200)) });
+      log.info('assistant.video_session', { ms: Date.now() - started, business: Boolean(opts.business) });
+      return { sessionToken: r.session_token };
     } catch (e) {
-      log.warn('assistant.video_unreachable', { error: errorMessage(e) });
-      throw new ServiceUnavailableException('The video presenter is not reachable right now. Chat and voice still work.');
+      // Simli's own reason (e.g. no minutes left, invalid face) is logged; the key is never part of it.
+      const reason = (typeof e === 'string' ? e : errorMessage(e)).replaceAll(apiKey, '***').slice(0, 300);
+      log.warn('assistant.video_refused', { reason, ms: Date.now() - started });
+      throw new ServiceUnavailableException(/minute|credit|quota|balance/i.test(reason) ? 'The video presenter has no minutes left on the Simli account. Chat and voice still work.' : 'The video presenter could not start. Chat and voice still work.');
     }
-    const j = (await res.json().catch(() => ({}))) as { session_token?: string; detail?: unknown };
-    if (!res.ok || !j.session_token) {
-      log.warn('assistant.video_refused', { status: res.status, ms: Date.now() - started });
-      throw new ServiceUnavailableException('The video presenter could not start. Chat and voice still work.');
-    }
-    log.info('assistant.video_session', { ms: Date.now() - started });
-    return { sessionToken: j.session_token };
   }
 
   /**

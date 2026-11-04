@@ -91,6 +91,28 @@ with sync_playwright() as p:
     def transcript(route):
         saved.append(json.loads(route.request.post_data or '{}')); route.continue_()
     pg.route('**/business-assistant/live/transcript', transcript)
+    # Video: this test API has no Simli key, so the presenter is switched on in the status answer and the session
+    # token is mocked; the avatar is a stand-in that records the audio it is given (the real one lip-syncs it).
+    def status_video(route):
+        r = route.fetch(); body = r.json(); body['video'] = True
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(body))
+    pg.route('**/business-assistant/status*', status_video)
+    video_tokens = []
+    def video_session(route):
+        video_tokens.append(1); route.fulfill(status=200, content_type='application/json', body=json.dumps({'sessionToken': 'tok-video'}))
+    pg.route('**/business-assistant/video/session', video_session)
+    pg.add_init_script('''
+      window.__V__ = { starts: 0, bytes: 0, cleared: 0 };
+      window.__TARA_SIMLI__ = (token, video, audio) => {
+        const h = {};
+        return {
+          on: (ev, cb) => { h[ev] = cb; },
+          start: async () => { window.__V__.starts++; window.__V__.token = token; const c = document.createElement('canvas'); c.width = 64; c.height = 64; c.getContext('2d').fillRect(0, 0, 64, 64); video.srcObject = c.captureStream(5); },
+          stop: async () => {},
+          sendAudioData: (d) => { window.__V__.bytes += d.length; },
+          ClearBuffer: () => { window.__V__.cleared++; },
+        };
+      };''')
 
     pg.goto(WEB + '/'); pg.wait_for_timeout(2500)
     pg.get_by_role('button', name='Open the AI assistant').click(); pg.wait_for_timeout(1500)
@@ -157,6 +179,27 @@ with sync_playwright() as p:
     row = sql(f"SELECT COUNT(*) FROM `Call` WHERE organizationId='{ORG}' AND fromNumber='91{PHONE[-10:]}' AND provider='sarvam'")
     check('end call: it is in AI voice calls', row == '1', row)
     check('end call: memory now lists the voice channel', 'voice' in dlg.get_by_test_id('assistant-memory').inner_text())
+    # Video call: the same live phone agent; its voice drives the avatar.
+    dlg.get_by_role('button', name='Video call').click(); pg.wait_for_timeout(5000)
+    v = pg.evaluate('window.__V__')
+    check('video: our server minted the avatar session for this business', len(video_tokens) == 1 and v.get('token') == 'tok-video', json.dumps(v))
+    check('video: the phone agent\'s audio drives the avatar (PCM 16 kHz)', v.get('bytes', 0) > 1000 and 'output_sample_rate=16000' in (ws_urls[-1] if ws_urls else ''), f"{v.get('bytes')} bytes; {(ws_urls[-1] if ws_urls else '')[-60:]}")
+    vb = dlg.get_by_label(re.compile('video assistant')).bounding_box()
+    check('video: the avatar is shown square (768 x 768 stream, not squashed)', vb and abs(vb['width'] - vb['height']) <= 2, str(vb))
+    pg.screenshot(path=os.path.join(SHOTS, 'business-assistant-video.png'))
+    bubbles = dlg.locator('ol li').all_inner_texts()
+    check('video: the order card stays its own message (the next call\'s words never join it)', not any('Order GR-' in b and 'Enna venum' in b for b in bubbles), ' | '.join(b[:40] for b in bubbles[-4:]))
+    dlg.get_by_role('button', name='End call').click(); pg.wait_for_timeout(1500)
+
+    # Tacksharp help: product questions, separate from the customer conversation.
+    n_shop = len(dlg.locator('ol li').all())
+    dlg.get_by_role('tab', name='Tacksharp help').click(); pg.wait_for_timeout(1200)
+    dlg.get_by_label('Message the assistant').fill('What does it cost?'); dlg.get_by_role('button', name='Send', exact=True).click(); pg.wait_for_timeout(2500)
+    items = dlg.locator('ol li').all_inner_texts()
+    check('help tab: answers product questions in its own conversation', len(items) >= 3 and 'What does it cost?' in items[-2] and len(items[-1]) > 20 and dlg.get_by_test_id('assistant-customer').count() == 0, (items[-1] if items else '')[:120])
+    dlg.get_by_role('tab', name=re.compile('assistant')).click(); pg.wait_for_timeout(500)
+    check('back on the shop tab: the customer conversation is still there', len(dlg.locator('ol li').all()) == n_shop and dlg.get_by_test_id('assistant-order').count() >= 2, f"{len(dlg.locator('ol li').all())} vs {n_shop}")
+
     check('no page errors', not errs, '; '.join(errs)[:200])
     pg.get_by_role('button', name='Close assistant').click(); pg.wait_for_timeout(400)
     check('closing restores the dashboard', pg.get_by_role('dialog').count() == 0 and pg.evaluate('getComputedStyle(document.body).overflow') != 'hidden')

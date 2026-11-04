@@ -15,6 +15,11 @@ export type OrderSession = {
   channel: 'whatsapp' | 'test' | 'voice';
   /** Test session in the dashboard assistant's voice / video mode: replies are worded for speech (set per turn). */
   spoken?: boolean;
+  /**
+   * Test session used by the dashboard AI assistant for a REAL order (set per turn): the order is saved with channel
+   * "assistant" and gets the normal order follow-ups (WhatsApp confirmation only with the customer's consent).
+   */
+  orderChannel?: 'assistant';
   phone: string;
   name?: string;
   customerId?: string;
