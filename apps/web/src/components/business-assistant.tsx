@@ -94,7 +94,12 @@ export function BusinessAssistant() {
   const seenOrders = useRef<Set<string>>(new Set());
   /** The speaker whose call bubble may still grow (null after an order card or when a call starts). */
   const mergeRole = useRef<'user' | 'assistant' | null>(null);
+  /** This call's Sarvam interaction id, and the pending push of the caller's words to our server. */
+  const iidRef = useRef<string | null>(null);
+  const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const phoneOk = phone.replace(/\D/g, '').length >= 10;
+  const phoneRef = useRef(phone);
+  phoneRef.current = phone;
   const onCall = call === 'connecting' || call === 'listening' || call === 'speaking';
   const shop = status?.organizationName ?? 'Your business';
 
@@ -167,6 +172,14 @@ export function BusinessAssistant() {
     else lines.push({ role, content: text });
     mergeRole.current = role;
     const shown = lines[lines.length - 1].content;
+    // The agent's order tools read the order from these words (pushed at most every 300 ms while the call runs).
+    if (iidRef.current && !pushTimer.current) {
+      pushTimer.current = setTimeout(() => {
+        pushTimer.current = null;
+        const iid = iidRef.current;
+        if (iid) void api.post('/business-assistant/live/lines', { interactionId: iid, phone: phoneRef.current, lines: callLines.current.map((l) => ({ role: l.role, content: l.content })) }).catch(() => undefined);
+      }, 300);
+    }
     setMsgs((m) => (merge && m.length ? [...m.slice(0, -1), { ...m[m.length - 1], content: shown }] : [...m, { role, content: shown, via: 'call' }]));
   }, []);
 
@@ -188,7 +201,8 @@ export function BusinessAssistant() {
     // The call goes on the customer's record (AI voice calls) with its transcript; memory refreshes.
     const lines = callLines.current;
     callLines.current = [];
-    if (a && lines.length) {
+    iidRef.current = null;
+    if (a) {
       await api.post('/business-assistant/live/transcript', { phone, interactionId: a.getInteractionId() ?? null, durationSec: Math.round((Date.now() - startedAt.current) / 1000), lines }).catch(() => undefined);
     }
     loadMemory(phone);
@@ -265,9 +279,22 @@ export function BusinessAssistant() {
       agent.current = a;
       await a.start();
       if (!(await a.waitForConnect(15))) throw new Error('Sarvam did not answer in time.');
-      // Tie this Sarvam interaction to the customer number, so the agent's order tools know who is calling.
-      const iid = a.getInteractionId();
-      if (iid) void api.post('/business-assistant/live/bind', { interactionId: iid, phone }).catch(() => undefined);
+      // Tie this Sarvam interaction to the customer number, so the agent's order tools know who is calling. The SDK
+      // reports "connected" when the socket opens; the interaction id arrives a moment later with Sarvam's
+      // acknowledgement, so it is polled for (up to 15 s).
+      void (async () => {
+        for (let i = 0; i < 60 && agent.current === a; i++) {
+          const iid = a.getInteractionId();
+          if (iid) {
+            iidRef.current = iid;
+            await api.post('/business-assistant/live/bind', { interactionId: iid, phone }).catch(() => undefined);
+            // Words said before the id was known (the greeting) are pushed now.
+            await api.post('/business-assistant/live/lines', { interactionId: iid, phone, lines: callLines.current }).catch(() => undefined);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      })();
       setCall((c) => (c === 'connecting' ? 'listening' : c));
     } catch (e) {
       const name = (e as DOMException)?.name;

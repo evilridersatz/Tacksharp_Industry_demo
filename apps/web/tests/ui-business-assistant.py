@@ -91,6 +91,8 @@ with sync_playwright() as p:
     def transcript(route):
         saved.append(json.loads(route.request.post_data or '{}')); route.continue_()
     pg.route('**/business-assistant/live/transcript', transcript)
+    pushes = []
+    pg.on('request', lambda r: pushes.append(json.loads(r.post_data or '{}')) if '/business-assistant/live/lines' in r.url else None)
     # Video: this test API has no Simli key, so the presenter is switched on in the status answer and the session
     # token is mocked; the avatar is a stand-in that records the audio it is given (the real one lip-syncs it).
     def status_video(route):
@@ -183,6 +185,7 @@ with sync_playwright() as p:
     while time.time() - t0 < 5 and dlg.get_by_text('Order saved from this call.').count() == 0: pg.wait_for_timeout(200)
     check('live: an order saved during the call appears in the conversation right away', dlg.get_by_text('Order saved from this call.').count() == 1 and dlg.get_by_test_id('assistant-order').count() == 2, f'after {time.time() - t0:.1f}s')
     state = dlg.get_by_test_id('call-state').inner_text()
+    check('call: the caller\'s words reach our server during the call (the order tools read them)', any(any('broiler price evlo?' in (l.get('content') or '') for l in p.get('lines', [])) for p in pushes) and all(p.get('interactionId') for p in pushes), f'{len(pushes)} pushes')
     check('call: live state and timer shown', re.search(r'(Listening|Speaking) · 00:[01]\d', state) is not None, state)
     pg.screenshot(path=os.path.join(SHOTS, 'business-assistant-call.png'))
     dlg.get_by_role('button', name='End call').click(); pg.wait_for_timeout(2000)

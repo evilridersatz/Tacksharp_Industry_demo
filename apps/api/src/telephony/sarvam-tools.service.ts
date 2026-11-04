@@ -72,6 +72,18 @@ let shared: CartStore | null = null;
 export const sharedCartStore = () => (shared ??= redisCartStore());
 export const callPhoneKey = (org: string, interactionId: string) => `sarvam:callphone:${org}:${interactionId}`;
 const callCartKey = (org: string, interactionId: string) => `sarvam:callcart:${org}:${interactionId}`;
+/** Live dashboard calls of an organization ([{ iid, phone, at }]) and each call's caller turns, pushed by the browser. */
+export const activeCallsKey = (org: string) => `sarvam:active:${org}`;
+export const callLinesKey = (org: string, interactionId: string) => `sarvam:calllines:${org}:${interactionId}`;
+export type ActiveCall = { iid: string; phone: string; at: number };
+/** A dashboard call counts as live while the browser keeps pushing its words (each push refreshes it). */
+export const ACTIVE_CALL_MS = 3 * 60_000;
+export async function readActiveCalls(store: CartStore, org: string): Promise<ActiveCall[]> {
+  try {
+    const list = JSON.parse((await store.get(activeCallsKey(org))) ?? '[]') as ActiveCall[];
+    return Array.isArray(list) ? list.filter((c) => c && c.iid && Date.now() - c.at < ACTIVE_CALL_MS) : [];
+  } catch { return []; }
+}
 const CART_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const cartCode = () => Array.from({ length: 6 }, () => CART_CODE_CHARS[Math.floor(Math.random() * CART_CODE_CHARS.length)]).join('');
 const cartKey = (org: string, code: string) => `sarvam:cart:${org}:${code}`;
@@ -158,11 +170,42 @@ export class SarvamToolsService {
   ) {}
 
   /** The caller's number: the "User Identifier" Sarvam fills in, else the number the dashboard bound to this call. */
+  /**
+   * Which dashboard live call this request belongs to: the Interaction ID Sarvam passed, else the ONLY live dashboard
+   * call of this organization right now (the browser registers it and pushes the caller's words). With two calls at
+   * once nothing is guessed.
+   */
+  private async liveCall(organizationId: string, body: Record<string, unknown>): Promise<ActiveCall | undefined> {
+    const active = await readActiveCalls(this.carts, organizationId);
+    const id = str(body.interaction_id ?? body.call_id, 120);
+    if (id) return active.find((c) => c.iid === id) ?? { iid: id, phone: '', at: Date.now() };
+    return active.length === 1 ? active[0] : undefined;
+  }
+
+  /** The caller's number: Sarvam's "User Identifier", else the number bound to this call by the dashboard. */
   private async callerPhone(organizationId: string, body: Record<string, unknown>): Promise<string | undefined> {
     const direct = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.user_identifier ?? body.phone, 30));
     if (direct) return direct;
-    const id = str(body.interaction_id ?? body.call_id, 120);
-    return id ? normalizePhone((await this.carts.get(callPhoneKey(organizationId, id))) ?? '') : undefined;
+    const call = await this.liveCall(organizationId, body);
+    if (!call) return undefined;
+    return normalizePhone(call.phone || ((await this.carts.get(callPhoneKey(organizationId, call.iid))) ?? '')) || undefined;
+  }
+
+  /** What the caller said: Sarvam's "Call Transcript" when it is passed, else the words the dashboard pushed. */
+  private async heard(organizationId: string, body: Record<string, unknown>): Promise<string[]> {
+    const fromBody = callerLines(body);
+    if (fromBody.length) return fromBody;
+    const call = await this.liveCall(organizationId, body);
+    if (!call) return [];
+    try {
+      const lines = JSON.parse((await this.carts.get(callLinesKey(organizationId, call.iid))) ?? '[]') as Array<{ role: string; content: string }>;
+      return callerLines({ transcript: lines });
+    } catch { return []; }
+  }
+
+  /** The call reference for carts: Sarvam's Interaction ID, else the live dashboard call's. */
+  private async callRef(organizationId: string, body: Record<string, unknown>): Promise<string> {
+    return str(body.interaction_id ?? body.call_id, 120) || (await this.liveCall(organizationId, body))?.iid || '';
   }
 
   private async org(organizationId: string) {
@@ -222,7 +265,7 @@ export class SarvamToolsService {
 
   /** One product, by what the caller said ("broiler", "naatu kozhi", "நாட்டுக்கோழி"). Unknown -> not on the menu. */
   async item(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
-    const said = str(body.item_name ?? body.item ?? body.query, 200) || (callerLines(body).slice(-1)[0] ?? '').slice(0, 200);
+    const said = str(body.item_name ?? body.item ?? body.query, 200) || ((await this.heard(organizationId, body)).slice(-1)[0] ?? '').slice(0, 200);
     if (!said) return { ok: false, found: false, message: 'Ask which product the caller wants.' };
     const c = await this.catalog.get(organizationId, true);
     const { items } = parseItems(said, this.catalog.products(c));
@@ -253,7 +296,7 @@ export class SarvamToolsService {
     // The order in the caller's words: what the agent passed, else the caller's own latest turns from the transcript.
     const c = await this.catalog.get(organizationId, true);
     // From the newest caller turn that names a product, plus the turns after it (quantity, cut, time answers).
-    const all = callerLines(body).slice(-12);
+    const all = (await this.heard(organizationId, body)).slice(-12);
     let from = -1;
     for (let i = all.length - 1; i >= 0 && from < 0; i--) if (parseItems(all[i], this.catalog.products(c)).items.length) from = i;
     const heard = from >= 0 ? all.slice(from) : all.slice(-3);
@@ -296,7 +339,7 @@ export class SarvamToolsService {
     await this.carts.set(cartKey(organizationId, cart), signed, CART_TTL_MS);
     const quotePhone = await this.callerPhone(organizationId, body);
     if (quotePhone) await this.carts.set(lastCartKey(organizationId, quotePhone), signed, CART_TTL_MS);
-    const callId = str(body.interaction_id ?? body.call_id, 120);
+    const callId = await this.callRef(organizationId, body);
     if (callId) await this.carts.set(callCartKey(organizationId, callId), signed, CART_TTL_MS);
     return {
       ok: true,
@@ -313,7 +356,7 @@ export class SarvamToolsService {
     if (!secret) return { ok: false, error: 'not_configured' };
     const phone = await this.callerPhone(organizationId, body);
     const raw = str(body.cart_token, 4000).trim();
-    const callId = str(body.interaction_id ?? body.call_id, 120);
+    const callId = await this.callRef(organizationId, body);
     const refuse = (error: string, message: string) => {
       log.warn('sarvam_tools.order_refused', { organizationId, error, tokenLength: raw.length, confirmed: str(body.confirmed, 30), hasPhone: Boolean(phone) });
       return { ok: false, error, message };
@@ -340,7 +383,7 @@ export class SarvamToolsService {
     }
     if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'The order summary expired or is not valid. Call quote_order again, read the total, then place the order.');
     // The yes: what the agent passed, else the caller's own last words on the call (a "no" there always wins).
-    const lastSaid = callerLines(body).slice(-2);
+    const lastSaid = (await this.heard(organizationId, body)).slice(-2);
     const explicit = str(body.confirmed, 60);
     const yes = explicit ? saidYes(explicit) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
     if (!yes) return refuse('not_confirmed', 'Read the total and ask the caller to confirm; call place_order after they say yes.');

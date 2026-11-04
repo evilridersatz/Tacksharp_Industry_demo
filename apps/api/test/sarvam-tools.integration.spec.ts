@@ -228,6 +228,27 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(mod.isPlaceholder('{{cart_token}}')).toBe(true);
   });
 
+  it('no ids at all from Sarvam: the only live dashboard call supplies the caller and their words; two calls -> no guess', async () => {
+    const caller = '919876533333';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    const iid = 'int-dash-1';
+    await tools.carts.set(mod.activeCallsKey(ORG), JSON.stringify([{ iid, phone: caller, at: Date.now() }]), 60_000);
+    const words = [{ role: 'agent', content: 'Vanakkam' }, { role: 'user', content: 'rendu kilo broiler curry cut venum' }, { role: 'user', content: '2 hours la varen' }];
+    await tools.carts.set(mod.callLinesKey(ORG, iid), JSON.stringify(words), 60_000);
+    const empty = { caller_phone: '@User Identifier', interaction_id: '@Interaction ID', transcript: '@Call Transcript' };
+    const q = await tools.quote(ORG, empty);
+    expect(q).toMatchObject({ ok: true, total: 440 });
+    await tools.carts.set(mod.callLinesKey(ORG, iid), JSON.stringify([...words, { role: 'agent', content: 'Total 440. Confirm?' }, { role: 'user', content: 'aama sari' }]), 60_000);
+    const r = await tools.order(ORG, empty);
+    expect(r).toMatchObject({ ok: true });
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: r.order_number }, include: { customer: true } });
+    expect(row.customer.phone).toBe(caller);
+    // Two live dashboard calls at once: nothing is guessed.
+    await tools.carts.set(mod.activeCallsKey(ORG), JSON.stringify([{ iid, phone: caller, at: Date.now() }, { iid: 'int-dash-2', phone: '919876544444', at: Date.now() }]), 60_000);
+    expect((await tools.quote(ORG, empty)).needs).toBe('items');
+    await tools.carts.set(mod.activeCallsKey(ORG), '[]', 60_000);
+  });
+
   it('tenant isolation: each organization sees only its own menu and prices', async () => {
     expect((await tools.item(ORG_B, { item_name: 'broiler' })).price).toBe(999);
     expect((await tools.item(ORG, { item_name: 'broiler' })).price).toBe(220);

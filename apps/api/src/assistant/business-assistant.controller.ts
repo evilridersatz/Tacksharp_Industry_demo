@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { CurrentUser, Org, Public } from '../auth/decorators.js';
 import { webhookSecret } from '../telephony/webhook-token.js';
-import { callPhoneKey, sharedCartStore } from '../telephony/sarvam-tools.service.js';
+import { ACTIVE_CALL_MS, activeCallsKey, callLinesKey, callPhoneKey, readActiveCalls, sharedCartStore } from '../telephony/sarvam-tools.service.js';
 import type { SessionClaims } from '../auth/token.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
@@ -267,8 +267,39 @@ export class BusinessAssistantController {
     const id = typeof body?.interactionId === 'string' && /^[\w-]{4,120}$/.test(body.interactionId) ? body.interactionId : '';
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
-    await sharedCartStore().set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
+    const store = sharedCartStore();
+    await store.set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
+    await this.markActive(organizationId, id, phone);
     return { bound: true };
+  }
+
+  /** This organization's live dashboard calls (the agent's tools use the only one when Sarvam passes no ids). */
+  private async markActive(organizationId: string, iid: string, phone: string | null) {
+    const store = sharedCartStore();
+    const list = (await readActiveCalls(store, organizationId)).filter((c) => c.iid !== iid);
+    if (phone) list.push({ iid, phone, at: Date.now() });
+    await store.set(activeCallsKey(organizationId), JSON.stringify(list.slice(-20)), ACTIVE_CALL_MS);
+  }
+
+  /**
+   * The caller's words as the call goes (the browser gets them from Sarvam's SDK): the agent's order tools read the
+   * order from them, so ordering works even when the Sarvam tool bodies pass no transcript.
+   */
+  @Post('live/lines')
+  @HttpCode(200)
+  async liveLines(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown; lines?: unknown }) {
+    if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    const id = typeof body?.interactionId === 'string' && /^[\w-]{4,120}$/.test(body.interactionId) ? body.interactionId : '';
+    const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
+    if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
+    const lines = (Array.isArray(body?.lines) ? body.lines : [])
+      .filter((l): l is { role: string; content: string } => Boolean(l) && typeof (l as { content?: unknown }).content === 'string')
+      .slice(-60)
+      .map((l) => ({ role: l.role === 'user' ? 'user' : 'agent', content: l.content.slice(0, 600) }));
+    await sharedCartStore().set(callLinesKey(organizationId, id), JSON.stringify(lines), 30 * 60_000);
+    await sharedCartStore().set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
+    await this.markActive(organizationId, id, phone);
+    return { ok: true, lines: lines.length };
   }
 
   /**
@@ -281,6 +312,8 @@ export class BusinessAssistantController {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!phone) throw new BadRequestException('Mobile number required.');
+    // The call is over: it is no longer a live dashboard call for the agent's tools.
+    if (typeof body?.interactionId === 'string' && body.interactionId) await this.markActive(organizationId, body.interactionId.slice(0, 120), null);
     const lines = (Array.isArray(body?.lines) ? body.lines : [])
       .filter((l): l is { role: string; content: string } => Boolean(l) && typeof (l as { content?: unknown }).content === 'string')
       .slice(0, 200)
