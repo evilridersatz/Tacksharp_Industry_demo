@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { normalizePhone } from '../common/phone.js';
+import { publishLive } from '../common/live-events.js';
 import {
   normalizeLocation,
   normalizePropertyType,
@@ -231,6 +232,7 @@ export class ConversationsService {
         },
       }),
     ]);
+    publishLive(input.organizationId, { type: 'message' });
     return message;
   }
 

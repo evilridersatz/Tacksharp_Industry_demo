@@ -16,6 +16,7 @@ import { TenancyService } from '../tenancy/tenancy.service.js';
 import { InventoryService } from './inventory.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
 import { TelephonyService } from '../telephony/telephony.service.js';
+import { readLiveCallCarts, sharedCartStore } from '../telephony/sarvam-tools.service.js';
 import { orderCallOpening, readyCallOpening } from './call-openings.js';
 
 const IST_OFFSET_MS = 330 * 60_000;
@@ -240,8 +241,27 @@ export class RestaurantController {
 
   /** Carts customers are building now (WhatsApp, phone, test chat), priced from the catalogue. */
   @Get('carts')
-  carts(@Org() organizationId: string) {
-    return this.engine.activeCarts(organizationId);
+  async carts(@Org() organizationId: string) {
+    // Chat carts (WhatsApp, the dashboard assistant's chat) from the ordering engine, plus the priced cart of every
+    // Sarvam call in progress (phone calls and the assistant's voice / video calls), newest first.
+    const [chat, calls] = await Promise.all([this.engine.activeCarts(organizationId), readLiveCallCarts(sharedCartStore(), organizationId)]);
+    const fromCalls = calls.map((c) => ({
+      key: `call:${c.key.slice(-8)}`,
+      channel: c.channel,
+      customerName: c.customerName,
+      phone: c.phone ? `${'*'.repeat(Math.max(0, c.phone.length - 4))}${c.phone.slice(-4)}` : '',
+      conversationId: null,
+      step: 'awaiting_confirmation',
+      awaitingConfirmation: true,
+      lines: c.lines.map((l) => ({ ...l, stockKnown: true })),
+      total: c.total,
+      payment: 'cash_at_shop',
+      pickupAt: c.pickupAt,
+      language: null,
+      updatedAt: c.updatedAt,
+      onCall: true,
+    }));
+    return [...chat, ...fromCalls].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
   /** Inbound WhatsApp messages with processing / reply status (received, queued, replied, unknown, failed). */

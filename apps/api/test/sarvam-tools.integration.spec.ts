@@ -129,6 +129,11 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(q.summary_text).toContain('Broiler Chicken');
     expect(q.summary_text).toContain('Total ₹440');
 
+    // While the call goes on, the priced cart is on the dashboard's live view (a real phone call).
+    const live = await mod.readLiveCallCarts(tools.carts, ORG);
+    expect(live[0]).toMatchObject({ channel: 'voice', total: 440 });
+    expect(live[0].lines[0]).toMatchObject({ name: 'Broiler Chicken', quantity: 2 });
+
     const notYet = await tools.order(ORG, { cart_token: q.cart_token, caller_phone: PHONE, confirmed: 'no' });
     expect(notYet.ok).toBe(false);
     expect(await prisma.order.count({ where: { organizationId: ORG } })).toBe(0);
@@ -244,6 +249,9 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(r).toMatchObject({ ok: true });
     const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: r.order_number }, include: { customer: true } });
     expect(row.customer.phone).toBe(caller);
+    // A call run by the dashboard assistant: its order is an "AI assistant" order, and its live cart is gone once placed.
+    expect(row.channel).toBe('assistant');
+    expect((await mod.readLiveCallCarts(tools.carts, ORG)).filter((c) => c.phone === caller)).toEqual([]);
     // Two live dashboard calls at once: nothing is guessed.
     await tools.carts.set(mod.activeCallsKey(ORG), JSON.stringify([{ iid, phone: caller, at: Date.now() }, { iid: 'int-dash-2', phone: '919876544444', at: Date.now() }]), 60_000);
     expect((await tools.quote(ORG, empty)).needs).toBe('items');

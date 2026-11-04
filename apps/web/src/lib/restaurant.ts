@@ -375,7 +375,7 @@ export function plain(text: string) {
 /** GET /restaurant/carts — carts customers are building now. */
 export type ActiveCart = {
   key: string;
-  channel: 'whatsapp' | 'voice' | 'test';
+  channel: 'whatsapp' | 'voice' | 'test' | 'assistant';
   customerName: string | null;
   phone: string;
   conversationId: string | null;
@@ -385,8 +385,10 @@ export type ActiveCart = {
   total: number;
   payment: string | null;
   pickupAt: string | null;
-  language: string;
+  language: string | null;
   updatedAt: string;
+  /** Priced on a Sarvam call that is still going on (phone call or the assistant's voice / video call). */
+  onCall?: boolean;
 };
 
 /** GET /restaurant/inventory-movements */

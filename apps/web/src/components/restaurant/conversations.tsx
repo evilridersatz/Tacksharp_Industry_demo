@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/shell';
 import { Avatar, Badge, Button, Card, Empty, ErrorBanner, Segmented, Skeleton, cx } from '@/components/ui';
 import { Thread } from '@/components/conversation';
 
-type Channel = 'all' | 'whatsapp' | 'voice' | 'test';
+type Channel = 'all' | 'whatsapp' | 'voice' | 'assistant' | 'test';
 
 export function RestaurantConversations() {
   const params = useSearchParams();
@@ -83,6 +83,7 @@ export function RestaurantConversations() {
                 { value: 'all', label: 'All' },
                 { value: 'whatsapp', label: 'WhatsApp' },
                 { value: 'voice', label: 'Calls' },
+                { value: 'assistant', label: 'AI assistant' },
                 { value: 'test', label: 'Test' },
               ]}
             />

@@ -15,6 +15,7 @@ import { providerCredentials } from '../integrations/provider-scope.js';
 import { SARVAM_SPEAKERS } from '../integrations/providers.js';
 import { AssistantService, detectStyle, type AssistantVoice } from './assistant.service.js';
 import type { Style } from './knowledge.js';
+import { publishLive } from '../common/live-events.js';
 
 /** The business's own greeting in the dashboard assistant (Tamil, Tanglish, English). */
 const greeting = (name: string, ordering: boolean): Record<Style, string> => ordering
@@ -271,6 +272,7 @@ export class BusinessAssistantController {
     await store.set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
     await this.markActive(organizationId, id, phone);
     log.info('business_assistant.live_bind', { organizationId });
+    publishLive(organizationId, { type: 'call.started', channel: 'assistant' });
     return { bound: true };
   }
 
@@ -335,6 +337,7 @@ export class BusinessAssistantController {
     const conv = (await this.prisma.conversation.findFirst({ where: { organizationId, channel: 'voice', externalId: phone } })) ?? (await this.prisma.conversation.create({ data: { id: randomUUID(), organizationId, channel: 'voice', externalId: phone, customerId: customer.id, updatedAt: new Date() } }));
     await this.prisma.message.createMany({ data: lines.map((l, i) => ({ id: `${call.id}-${i}`.slice(0, 191), organizationId, conversationId: conv.id, role: l.role, content: l.content, metadata: { callId: call.id, provider: 'sarvam', via: 'dashboard' } })) });
     log.info('business_assistant.live_saved', { organizationId, callId: call.id, lines: lines.length, durationSec });
+    publishLive(organizationId, { type: 'call.ended', channel: 'assistant', customer: customer.name ?? undefined });
     return { saved: true, callId: call.id };
   }
 

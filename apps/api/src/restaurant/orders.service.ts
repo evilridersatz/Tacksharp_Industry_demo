@@ -7,6 +7,7 @@ import { formatQty } from './chicken-parse.js';
 import { outletView, type OutletView } from './catalog.service.js';
 import { InsufficientStockError, releaseStockForOrder, reserveStockForOrder, stockStatus, stockText } from './inventory.js';
 import { StockAlertService } from './stock-alerts.service.js';
+import { publishLive } from '../common/live-events.js';
 
 export const MAX_LINES = 10;
 /** Furthest ahead a pickup can be booked. */
@@ -276,7 +277,9 @@ export class OrdersService {
         if (result.status === 'rejected') return result;
         log.info('order.created', { organizationId: input.organizationId, orderId: result.orderId, channel: input.channel, stockReserved: result.reserved.length });
         this.stockAlerts?.checkInBackground(input.organizationId, result.reserved);
-        return { status: 'created', order: await this.getOrder(input.organizationId, result.orderId) };
+        const created = await this.getOrder(input.organizationId, result.orderId);
+        publishLive(input.organizationId, { type: 'order.created', orderId: created.id, orderNumber: created.orderNumber, channel: input.channel, status: created.status, total: created.total, customer: created.customerName ?? undefined });
+        return { status: 'created', order: created };
       } catch (error) {
         if (error instanceof InsufficientStockError) {
           // Another order took the stock between the summary and this "yes": nothing was created or taken.
@@ -384,7 +387,9 @@ export class OrdersService {
         log.info('order.status_changed', { organizationId, orderId: order.id, from, to, actor });
       }
     }
-    return { order: await this.getOrder(organizationId, order.id), changedTo };
+    const updated = await this.getOrder(organizationId, order.id);
+    publishLive(organizationId, { type: 'order.updated', orderId: updated.id, orderNumber: updated.orderNumber, channel: updated.channel, status: updated.status });
+    return { order: updated, changedTo };
   }
 
   /** Ready-notice bookkeeping (call / WhatsApp result), always audited. */
@@ -394,6 +399,7 @@ export class OrdersService {
       data: { readyNotice: update.readyNotice, readyNoticeAt: new Date(), ...(update.readyCallId ? { readyCallId: update.readyCallId } : {}), ...(update.note ? { readyNoticeNote: update.note.slice(0, 1000) } : {}) },
     });
     await this.prisma.orderEvent.create({ data: { organizationId, orderId, type: 'ready_notice', actor: 'system', note: `${update.readyNotice}${update.note ? `: ${update.note}` : ''}`.slice(0, 1000) } });
+    publishLive(organizationId, { type: 'order.updated', orderId });
   }
 }
 

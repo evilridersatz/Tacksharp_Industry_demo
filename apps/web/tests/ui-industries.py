@@ -106,7 +106,7 @@ with sync_playwright() as p:
         pg.wait_for_url(WEB + '/', timeout=15000); pg.wait_for_timeout(2500)
 
     # Product families: one login, two groups in the switcher; VisionOps workspaces only under VisionOps.
-    pg.goto(WEB + '/'); pg.wait_for_load_state('networkidle')
+    pg.goto(WEB + '/'); pg.wait_for_load_state('load'); pg.wait_for_timeout(2500)  # the live connection stays open: never 'networkidle'
     for _ in range(3):  # a click before hydration is a no-op: retry until the list opens
         pg.get_by_role('button', name='Switch workspace').first.click()
         try: pg.get_by_role('listbox').first.wait_for(timeout=3000); break

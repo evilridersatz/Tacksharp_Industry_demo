@@ -9,6 +9,7 @@ import { formatQty, parseItems, parsePickup, pickOutlet } from '../restaurant/ch
 import { normalizePhone } from '../common/phone.js';
 import { errorMessage, log } from '../common/logger.js';
 import { webhookSecret } from './webhook-token.js';
+import { publishLive } from '../common/live-events.js';
 
 /**
  * Tools the Sarvam-hosted voice agent calls DURING a call (Sarvam "API tool": agent variables in the request body,
@@ -88,6 +89,31 @@ const CART_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const cartCode = () => Array.from({ length: 6 }, () => CART_CODE_CHARS[Math.floor(Math.random() * CART_CODE_CHARS.length)]).join('');
 const cartKey = (org: string, code: string) => `sarvam:cart:${org}:${code}`;
 const lastCartKey = (org: string, phone: string) => `sarvam:lastcart:${org}:${phone}`;
+/**
+ * Carts being built on a Sarvam call right now (phone call or the dashboard assistant's voice / video call), for the
+ * dashboard's live view: the priced summary from quote_order, removed when the order is placed, gone after 30 min.
+ */
+const liveCartsKey = (org: string) => `sarvam:livecarts:${org}`;
+export type LiveCallCart = {
+  key: string;
+  channel: 'voice' | 'assistant';
+  phone: string;
+  customerName: string | null;
+  lines: Array<{ name: string; unit: string; quantity: number; cut: string | null; lineTotal: number }>;
+  total: number;
+  pickupAt: string | null;
+  updatedAt: string;
+};
+export async function readLiveCallCarts(store: CartStore, org: string): Promise<LiveCallCart[]> {
+  try {
+    const list = JSON.parse((await store.get(liveCartsKey(org))) ?? '[]') as LiveCallCart[];
+    return list.filter((c) => Date.now() - new Date(c.updatedAt).getTime() < CART_TTL_MS);
+  } catch { return []; }
+}
+async function writeLiveCallCart(store: CartStore, org: string, key: string, cart: LiveCallCart | null) {
+  const rest = (await readLiveCallCarts(store, org)).filter((c) => c.key !== key);
+  await store.set(liveCartsKey(org), JSON.stringify(cart ? [cart, ...rest].slice(0, 50) : rest), CART_TTL_MS);
+}
 
 /** A clear yes from the caller, as the agent passes it (English, Tanglish, Tamil, or a boolean). */
 export function saidYes(v: unknown): boolean {
@@ -182,6 +208,13 @@ export class SarvamToolsService {
     return active.length === 1 ? active[0] : undefined;
   }
 
+  /** True when this request comes from a call the dashboard assistant is running (not a real phone call). */
+  private async fromDashboard(organizationId: string, body: Record<string, unknown>): Promise<boolean> {
+    const active = await readActiveCalls(this.carts, organizationId);
+    const id = str(body.interaction_id ?? body.call_id, 120);
+    return id ? active.some((c) => c.iid === id) : active.length === 1;
+  }
+
   /** The caller's number: Sarvam's "User Identifier", else the number bound to this call by the dashboard. */
   private async callerPhone(organizationId: string, body: Record<string, unknown>): Promise<string | undefined> {
     const direct = normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.user_identifier ?? body.phone, 30));
@@ -250,6 +283,7 @@ export class SarvamToolsService {
     const customer = phone ? await this.prisma.customer.findFirst({ where: { organizationId, phone }, select: { name: true, language: true } }) : null;
     const c = await this.catalog.get(organizationId, true);
     const m = this.menuLines(c);
+    publishLive(organizationId, { type: 'call.started', channel: (await this.fromDashboard(organizationId, body)) ? 'assistant' : 'voice', customer: customer?.name ?? undefined });
     return {
       ok: true,
       business_name: org.name,
@@ -358,6 +392,15 @@ export class SarvamToolsService {
     if (quotePhone) await this.carts.set(lastCartKey(organizationId, quotePhone), signed, CART_TTL_MS);
     const callId = await this.callRef(organizationId, body);
     if (callId) await this.carts.set(callCartKey(organizationId, callId), signed, CART_TTL_MS);
+    const liveKey = callId || quotePhone || cart;
+    const channel = (await this.fromDashboard(organizationId, body)) ? 'assistant' : 'voice';
+    const known = quotePhone ? await this.prisma.customer.findFirst({ where: { organizationId, phone: quotePhone }, select: { name: true } }) : null;
+    await writeLiveCallCart(this.carts, organizationId, liveKey, {
+      key: liveKey, channel, phone: quotePhone ?? '', customerName: known?.name ?? null,
+      lines: q.lines.map((l) => ({ name: l.name, unit: l.unit, quantity: l.quantity, cut: l.cut ?? null, lineTotal: l.lineTotal })),
+      total: q.total, pickupAt: pickupAt!.toISOString(), updatedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    publishLive(organizationId, { type: 'cart.updated', channel, total: q.total, customer: known?.name ?? undefined });
     return {
       ok: true,
       summary_text: `${summary}. Total ${rupees(q.total)}. Pickup at ${outlet!.name}, ${pickupText}. Payment at the shop.`,
@@ -410,7 +453,7 @@ export class SarvamToolsService {
     try {
       const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound', name: str(body.customer_name, 80) || undefined });
       const r = await this.orders.createOrder({
-        organizationId, idempotencyKey, customerId: customer.id, channel: 'voice', lines: cart.l, outletId: cart.out, pickupAt: new Date(cart.p),
+        organizationId, idempotencyKey, customerId: customer.id, channel: (await this.fromDashboard(organizationId, body)) ? 'assistant' : 'voice', lines: cart.l, outletId: cart.out, pickupAt: new Date(cart.p),
         paymentMethod: 'cash_at_shop', customerPhone: phone, customerName: str(body.customer_name, 80) || undefined, language: str(body.language, 20) || undefined, expectedTotal: cart.t,
       });
       if (r.status === 'rejected') return refuse('rejected', `The order could not be placed: ${r.problems.join(' ')}`);
@@ -421,6 +464,7 @@ export class SarvamToolsService {
         await this.followUps?.onOrderCreated(organizationId, r.order.id, 'voice').catch((e) => log.warn('sarvam_tools.followup_failed', { error: errorMessage(e) }));
       }
       log.info('sarvam_tools.order', { organizationId, orderId: r.order.id, status: r.status, cartVia: via });
+      for (const k of new Set([callId, phone].filter(Boolean))) await writeLiveCallCart(this.carts, organizationId, k, null).catch(() => undefined);
       return {
         ok: true,
         order_number: r.order.orderNumber,

@@ -3,6 +3,7 @@
 import { Toaster } from './toast';
 import { LiveAgent } from './live-agent';
 import { BusinessAssistant } from './business-assistant';
+import { LiveUpdates } from './live-updates';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -284,7 +285,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   if (BARE_ROUTES.includes(pathname) || isPublicRoute(pathname)) return <>{children}<Toaster />{agent}</>;
   // Signed in: the business's own assistant (its phone agent, menu, orders and customers); Tara where it is not
   // available. The key gives it fresh state after signing in (the login page's assistant sits at the same place).
-  return <><Shell>{children}</Shell><Toaster /><BusinessAssistant key="business" /></>;
+  return <><Shell>{children}</Shell><Toaster /><LiveUpdates /><BusinessAssistant key="business" /></>;
 }
 
 /** Accessible mobile drawer: Escape closes, page scroll is locked, focus moves into the drawer and back. */

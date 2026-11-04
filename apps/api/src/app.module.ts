@@ -38,6 +38,7 @@ import { AssistantModule } from './assistant/assistant.module.js';
 import { KnowledgeModule } from './knowledge/knowledge.module.js';
 import { VoiceAgentsModule } from './voice-agents/voice-agents.module.js';
 import { TelephonyModule } from './telephony/telephony.module.js';
+import { LiveModule } from './live/live.module.js';
 import { SarvamToolsModule } from './telephony/sarvam-tools.module.js';
 import { InboxModule } from './inbox/inbox.module.js';
 import { DripModule } from './drip/drip.module.js';
@@ -86,6 +87,7 @@ import { HomeModule } from './home/home.module.js';
     KnowledgeModule,
     VoiceAgentsModule,
     TelephonyModule,
+    LiveModule,
     SarvamToolsModule,
     InboxModule,
     DripModule,

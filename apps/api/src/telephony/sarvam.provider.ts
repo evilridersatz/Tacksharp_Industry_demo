@@ -10,6 +10,7 @@ import { sarvamOutboundCall, type FetchLike } from '../integrations/provider-cli
 import { recordWebhookFailure } from '../common/webhook-failures.js';
 import { verifyWebhookToken, webhookSecret, webhookToken } from './webhook-token.js';
 import type { Capabilities, CallStatus, OutboundRequest, OutboundResult, TelephonyProvider, WebhookInput, WebhookResult } from './types.js';
+import { publishLive } from '../common/live-events.js';
 
 export const SARVAM_DOCS = [
   'https://docs.sarvam.ai/conversations/overview',
@@ -152,6 +153,7 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
       const call = await this.prisma.call.create({ data: { organizationId: org, customerId: customer.id, direction: 'inbound', status: mapped, outcome: status || 'failed', toNumber: '', fromNumber: phone, providerCallId: attemptId, durationSec, agentId: agent?.id ?? null, provider: 'sarvam', endedAt: new Date(), hangupCause: failure, summary: callSummary } });
       await this.saveTranscript(org, customer.id, phone, call.id, transcript);
       log.info('telephony.sarvam_inbound', { org, callId: call.id, status: mapped, durationSec, lines: transcript.length });
+      publishLive(org, { type: 'call.ended', channel: 'voice', status: mapped, customer: customer.name ?? undefined });
       return { accepted: true, organizationId: org };
     }
 
@@ -168,6 +170,7 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
     // The module that asked for the call acts on its outcome (e.g. the rating from a feedback call). Never fails the webhook.
     await emitOutboundResult({ organizationId: org, requestId: req.id, idempotencyKey: req.idempotencyKey, status: mapped, callId, transcript }).catch((e) => log.warn('telephony.outbound_listener_failed', { error: errorMessage(e) }));
     log.info('telephony.sarvam_result', { requestId: req.id, status: mapped, durationSec });
+    publishLive(org, { type: 'call.ended', channel: 'voice', status: mapped });
     return { accepted: true, organizationId: org };
   }
 

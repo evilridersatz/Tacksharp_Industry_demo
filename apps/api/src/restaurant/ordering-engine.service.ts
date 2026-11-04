@@ -1354,7 +1354,7 @@ export class OrderingEngine {
         });
         return {
           key: s.key.replace(/:[^:]+$/, ':' + mask(s.phone)),
-          channel: s.channel,
+          channel: s.orderChannel ?? s.channel,
           customerName: s.name ?? null,
           phone: mask(s.phone),
           conversationId: s.conversationId ?? null,
@@ -1538,7 +1538,8 @@ export class OrderingEngine {
       if (c.language === 'tamil' || c.language === 'english' || c.language === 'tanglish') s.lang = c.language;
     }
     if (!s.conversationId) {
-      const conv = await this.conversations.getOrCreateConversation({ organizationId: s.organizationId, channel: input.channel, externalId: s.phone, customerId: s.customerId });
+      // The dashboard assistant's chats are their own channel ("AI assistant" in the inbox), not test chats.
+      const conv = await this.conversations.getOrCreateConversation({ organizationId: s.organizationId, channel: s.orderChannel === 'assistant' ? 'assistant' : input.channel, externalId: s.phone, customerId: s.customerId });
       s.conversationId = conv.id;
     }
   }

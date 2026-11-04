@@ -37,7 +37,7 @@ const STATUS_LABEL = { open: 'Open', pending: 'Pending', resolved: 'Resolved' } 
 const MANAGE = ['admin', 'manager', 'team_lead'];
 const REPLY = [...MANAGE, 'sales', 'front_desk', 'reception', 'operator', 'support'];
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger', instagram_comment: 'Instagram comment', voice: 'Phone', web: 'Web chat' };
+const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger', instagram_comment: 'Instagram comment', voice: 'Phone', web: 'Web chat', assistant: 'AI assistant', test: 'Test chat' };
 const SOCIAL = ['instagram', 'messenger', 'instagram_comment'];
 /** Who the conversation is with: a phone number, or (Instagram / Messenger) the channel and a masked Meta id. */
 const contactLine = (channel: string, externalId: string | null) => (SOCIAL.includes(channel) ? `${CHANNEL_LABEL[channel]} id ••${(externalId ?? '').slice(-4)}` : formatPhone(externalId));
@@ -70,7 +70,7 @@ export default function InboxPage() {
         <Segmented label="Assignee" value={who} onChange={setWho} options={[{ value: 'all', label: 'Everyone' }, { value: 'me', label: `Mine (${data?.counts.mine ?? 0})` }, { value: 'unassigned', label: `Unassigned (${data?.counts.unassigned ?? 0})` }]} />
         <select aria-label="Channel" className={cx(inputCls.replace('w-full', ''), 'h-9 w-44')} value={channel} onChange={(e) => setChannel(e.target.value)}>
           <option value="all">All channels</option>
-          {['whatsapp', 'instagram', 'messenger', 'instagram_comment', 'voice'].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+          {['whatsapp', 'instagram', 'messenger', 'instagram_comment', 'voice', 'assistant'].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
         </select>
         {data && data.counts.needsHuman > 0 && <Badge tone="rose">{data.counts.needsHuman} need a person</Badge>}
         {data && data.counts.aiOff > 0 && <Badge tone="amber">{data.counts.aiOff} handled by the team (AI off)</Badge>}

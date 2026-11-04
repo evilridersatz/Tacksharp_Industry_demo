@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Boxes, MessageSquare, Phone, ShoppingCart } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { dateTime, rupees, timeAgo } from '@/lib/format';
-import type { ActiveCart, InboundStatus, StockMovement } from '@/lib/restaurant';
+import { CHANNEL_LABEL, type ActiveCart, type InboundStatus, type StockMovement } from '@/lib/restaurant';
 import type { Call, Message } from '@/lib/types';
 import { PageHeader } from '@/components/shell';
 import { Badge, Card, CardHeader, Empty, ErrorBanner, Skeleton } from '@/components/ui';
@@ -44,7 +44,7 @@ export default function ActivityPage() {
     <>
       <PageHeader title="Carts, stock & messages" />
       <p className="mb-4 text-[13px] text-muted">
-        Live view of carts being built on WhatsApp and calls, every stock movement, and how each incoming WhatsApp message was handled. A reply marked
+        Live view of carts being built on WhatsApp, phone calls and the AI assistant, every stock movement, and how each incoming WhatsApp message was handled. A reply marked
         &ldquo;accepted&rdquo; was taken by Meta; delivery and read receipts appear in the conversation when Meta sends them.
       </p>
 
@@ -60,7 +60,8 @@ export default function ActivityPage() {
                 <li key={c.key} className="rounded-[10px] border border-line p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-[14px] font-semibold text-ink">{c.customerName ?? c.phone}</p>
-                    <Badge tone={c.channel === 'voice' ? 'violet' : 'sky'}>{c.channel === 'voice' ? 'Phone call' : c.channel === 'whatsapp' ? 'WhatsApp' : 'Test chat'}</Badge>
+                    <Badge tone={c.channel === 'voice' ? 'violet' : c.channel === 'assistant' ? 'brand' : 'sky'}>{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
+                    {c.onCall && <Badge tone="rose">On the call now</Badge>}
                     {c.awaitingConfirmation ? <Badge tone="amber">Waiting for “yes”</Badge> : <Badge tone="slate">Collecting details</Badge>}
                     <span className="ml-auto text-[12px] text-faint" title={dateTime(c.updatedAt)}>
                       {timeAgo(c.updatedAt)}
