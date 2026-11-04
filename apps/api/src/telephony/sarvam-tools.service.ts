@@ -192,16 +192,28 @@ export class SarvamToolsService {
   }
 
   /** What the caller said: Sarvam's "Call Transcript" when it is passed, else the words the dashboard pushed. */
-  private async heard(organizationId: string, body: Record<string, unknown>): Promise<string[]> {
+  private async heard(organizationId: string, body: Record<string, unknown>, until?: (lines: string[]) => boolean): Promise<string[]> {
     const fromBody = callerLines(body);
     if (fromBody.length) return fromBody;
     const call = await this.liveCall(organizationId, body);
     if (!call) return [];
-    try {
-      const lines = JSON.parse((await this.carts.get(callLinesKey(organizationId, call.iid))) ?? '[]') as Array<{ role: string; content: string }>;
-      return callerLines({ transcript: lines });
-    } catch { return []; }
+    const read = async () => {
+      try {
+        const lines = JSON.parse((await this.carts.get(callLinesKey(organizationId, call.iid))) ?? '[]') as Array<{ role: string; content: string }>;
+        return callerLines({ transcript: lines });
+      } catch { return []; }
+    };
+    // The agent can ask a moment before the browser has pushed the caller's latest words: wait up to ~1.5 s for them.
+    let lines = await read();
+    for (let i = 0; until && !until(lines) && i < 3; i++) {
+      await new Promise((r) => setTimeout(r, this.waitMs));
+      lines = await read();
+    }
+    return lines;
   }
+
+  /** Pause between re-reads of a live call's words (tests set 0). */
+  waitMs = 500;
 
   /** The call reference for carts: Sarvam's Interaction ID, else the live dashboard call's. */
   private async callRef(organizationId: string, body: Record<string, unknown>): Promise<string> {
@@ -296,12 +308,17 @@ export class SarvamToolsService {
     // The order in the caller's words: what the agent passed, else the caller's own latest turns from the transcript.
     const c = await this.catalog.get(organizationId, true);
     // From the newest caller turn that names a product, plus the turns after it (quantity, cut, time answers).
-    const all = (await this.heard(organizationId, body)).slice(-12);
+    const products = this.catalog.products(c);
+    const all = (await this.heard(organizationId, body, (ls) => ls.some((l) => parseItems(l, products).items.length > 0))).slice(-12);
     let from = -1;
     for (let i = all.length - 1; i >= 0 && from < 0; i--) if (parseItems(all[i], this.catalog.products(c)).items.length) from = i;
     const heard = from >= 0 ? all.slice(from) : all.slice(-3);
     const said = str(body.items_text ?? body.items ?? body.order_text, 600) || (from >= 0 ? heard.join('. ').slice(0, 600) : '');
-    if (!said) return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
+    if (!said) {
+      // No customer words in the log line: only how many caller turns were available, to tell "no words" from "no product".
+      log.warn('sarvam_tools.quote_no_items', { organizationId, callerTurns: all.length, transcriptInBody: callerLines(body).length > 0, liveCall: Boolean(await this.liveCall(organizationId, body)) });
+      return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
+    }
     const { items, loose } = parseItems(said, this.catalog.products(c));
     if (!items.length) return { ok: false, needs: 'items', message: `I could not find those products on our menu. Available: ${this.menuLines(c).text}` };
     const lines: CartLine[] = [];
@@ -383,7 +400,7 @@ export class SarvamToolsService {
     }
     if (!cart || cart.o !== organizationId) return refuse('cart_invalid', 'The order summary expired or is not valid. Call quote_order again, read the total, then place the order.');
     // The yes: what the agent passed, else the caller's own last words on the call (a "no" there always wins).
-    const lastSaid = (await this.heard(organizationId, body)).slice(-2);
+    const lastSaid = (await this.heard(organizationId, body, (ls) => ls.length > 0 && saidYes(ls[ls.length - 1]))).slice(-2);
     const explicit = str(body.confirmed, 60);
     const yes = explicit ? saidYes(explicit) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
     if (!yes) return refuse('not_confirmed', 'Read the total and ask the caller to confirm; call place_order after they say yes.');

@@ -270,6 +270,7 @@ export class BusinessAssistantController {
     const store = sharedCartStore();
     await store.set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
     await this.markActive(organizationId, id, phone);
+    log.info('business_assistant.live_bind', { organizationId });
     return { bound: true };
   }
 
@@ -299,6 +300,8 @@ export class BusinessAssistantController {
     await sharedCartStore().set(callLinesKey(organizationId, id), JSON.stringify(lines), 30 * 60_000);
     await sharedCartStore().set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
     await this.markActive(organizationId, id, phone);
+    // Counts only (no customer words in the logs): shows the caller's words are arriving during the call.
+    log.info('business_assistant.live_lines', { organizationId, callerTurns: lines.filter((l) => l.role === 'user').length, agentTurns: lines.filter((l) => l.role !== 'user').length });
     return { ok: true, lines: lines.length };
   }
 

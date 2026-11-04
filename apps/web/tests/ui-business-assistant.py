@@ -168,6 +168,14 @@ with sync_playwright() as p:
     check('order page: confirmation to another number', 'another number' in sc.get_by_role('status').inner_text())
     pg3.screenshot(path=os.path.join(SHOTS, 'order-page.png')); pg3.close()
 
+    # Live order board: the open order in its stage column; one tap moves it on.
+    pg4 = ctx.new_page(); pg4.goto(f'{WEB}/orders/board'); pg4.wait_for_timeout(2500)
+    col_new = pg4.get_by_role('region', name='New')
+    check('board: the assistant\'s order is in the New column', col_new.locator(f'[data-order="{number}"]').count() == 1)
+    col_new.locator(f'[data-order="{number}"]').get_by_role('button', name='Confirm order').click(); pg4.wait_for_timeout(1500)
+    check('board: one tap moves it to Confirmed', pg4.get_by_role('region', name='Confirmed').locator(f'[data-order="{number}"]').count() == 1)
+    pg4.screenshot(path=os.path.join(SHOTS, 'order-board.png')); pg4.close()
+
     # Live voice call: the business's Sarvam phone agent through the official SDK.
     dlg.get_by_role('button', name='Voice call').click()
     pg.wait_for_timeout(6000)

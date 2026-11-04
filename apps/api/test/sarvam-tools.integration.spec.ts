@@ -71,6 +71,7 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     followUps = { onOrderCreated: vi.fn(async () => undefined) };
     tools = new mod.SarvamToolsService(prisma, new CatalogService(prisma), new OrdersService(prisma), new ConversationsService(prisma), followUps);
     tools.carts = mod.memoryCartStore();
+    tools.waitMs = 0;
     controller = new SarvamToolsController(tools, prisma);
   });
 

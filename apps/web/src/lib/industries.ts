@@ -88,6 +88,7 @@ export const INDUSTRIES: Record<IndustryId, IndustryDef> = {
       { section: 'Main', items: [
         { href: '/', label: 'Restaurant overview', icon: LayoutDashboard },
         { href: '/orders', label: 'Orders & tracking', icon: ShoppingBag, badge: 'orders' },
+        { href: '/orders/board', label: 'Live order board', icon: Columns3 },
         { href: '/activity', label: 'Live operations', icon: Activity },
         { href: '/conversations', label: 'WhatsApp conversations', icon: MessageSquare, badge: 'handoff' },
         { href: '/customers', label: 'Customers', icon: Users },

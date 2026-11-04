@@ -257,7 +257,9 @@ export class TelephonyService {
       }
       throw e;
     }
-    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: { ...(customer.name ? { customer_name: customer.name } : {}), ...(opts.variables ?? {}) } };
+    const req = { organizationId: actor.org, requestId: row.id, customerId: customer.id, to: toNumber, agent: { id: agent.id, name: agent.name, sarvamAppId: agent.sarvamAppId, sarvamAppVersion: agent.sarvamAppVersion }, variables: { caller_phone: `+${toNumber.replace(/^\+/, '')}`, ...(customer.name ? { customer_name: customer.name } : {}), ...(opts.variables ?? {}) } };
+    // caller_phone: for an OUTBOUND call Sarvam's "User Identifier" is empty (docs), so the number is passed as an agent
+    // variable the tools can use (@caller_phone); dropped automatically if the agent does not declare it.
     let result = await this.providers[provider].initiateOutboundCall(req);
     // One retry, only when the provider certainly did NOT place the call (rate-limited / connection never made).
     if (!result.ok && result.retryable) {
