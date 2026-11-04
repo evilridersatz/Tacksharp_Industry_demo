@@ -533,6 +533,9 @@ export class SarvamToolsService {
       total: q.total,
       cart_token: cart,
       confirm_question: 'Read the summary and the total to the caller and ask them to confirm before placing the order.',
+      // The same in "message" (the field every console template shows): the agent reads it and asks for the yes.
+      message: `Priced. Read this to the caller and ask them to confirm: ${q.lines.map((l) => `${formatQty(l.quantity, l.unit)} ${l.name}${l.cut ? ` ${l.cut}` : ''} = ${rupees(l.lineTotal)}`).join('; ')}. Total ${rupees(q.total)}. Pickup at ${outlet!.name}, ${pickupText}. Payment at the shop. After a clear yes, call place_order with cart_token ${cart}.`,
+      next_step: 'confirm_with_caller',
     };
   }
 
