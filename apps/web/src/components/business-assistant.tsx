@@ -201,9 +201,10 @@ export function BusinessAssistant() {
     // The call goes on the customer's record (AI voice calls) with its transcript; memory refreshes.
     const lines = callLines.current;
     callLines.current = [];
+    const usedId = iidRef.current;
     iidRef.current = null;
     if (a) {
-      await api.post('/business-assistant/live/transcript', { phone, interactionId: a.getInteractionId() ?? null, durationSec: Math.round((Date.now() - startedAt.current) / 1000), lines }).catch(() => undefined);
+      await api.post('/business-assistant/live/transcript', { phone, interactionId: a.getInteractionId() ?? usedId ?? null, durationSec: Math.round((Date.now() - startedAt.current) / 1000), lines }).catch(() => undefined);
     }
     loadMemory(phone);
   }, [phone, loadMemory, stopVideo]);
@@ -282,15 +283,22 @@ export function BusinessAssistant() {
       // Tie this Sarvam interaction to the customer number, so the agent's order tools know who is calling. The SDK
       // reports "connected" when the socket opens; the interaction id arrives a moment later with Sarvam's
       // acknowledgement, so it is polled for (up to 15 s).
+      // If Sarvam's id has not come after 3 s, the call is registered under a stand-in id so the order tools still
+      // hear the caller; the real id replaces it if it arrives later.
       void (async () => {
-        for (let i = 0; i < 60 && agent.current === a; i++) {
+        let standIn = '';
+        const bind = async (id: string, replaces?: string) => {
+          iidRef.current = id;
+          await api.post('/business-assistant/live/bind', { interactionId: id, phone, ...(replaces ? { replaces } : {}) }).catch(() => undefined);
+          // Words said before the id was known (the greeting) are pushed now.
+          await api.post('/business-assistant/live/lines', { interactionId: id, phone, lines: callLines.current }).catch(() => undefined);
+        };
+        for (let i = 0; i < 120 && agent.current === a; i++) {
           const iid = a.getInteractionId();
-          if (iid) {
-            iidRef.current = iid;
-            await api.post('/business-assistant/live/bind', { interactionId: iid, phone }).catch(() => undefined);
-            // Words said before the id was known (the greeting) are pushed now.
-            await api.post('/business-assistant/live/lines', { interactionId: iid, phone, lines: callLines.current }).catch(() => undefined);
-            return;
+          if (iid) return bind(iid, standIn || undefined);
+          if (i === 12 && !standIn) {
+            standIn = `web-${(crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^\w]/g, '').slice(0, 24)}`;
+            await bind(standIn);
           }
           await new Promise((r) => setTimeout(r, 250));
         }

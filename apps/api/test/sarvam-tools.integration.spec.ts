@@ -251,10 +251,38 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(row.customer.phone).toBe(caller);
     // A call run by the dashboard assistant: its order is an "AI assistant" order, and its live cart is gone once placed.
     expect(row.channel).toBe('assistant');
-    expect((await mod.readLiveCallCarts(tools.carts, ORG)).filter((c) => c.phone === caller)).toEqual([]);
+    expect((await mod.readLiveCallCarts(tools.carts, ORG)).filter((c: { phone: string }) => c.phone === caller)).toEqual([]);
     // Two live dashboard calls at once: nothing is guessed.
     await tools.carts.set(mod.activeCallsKey(ORG), JSON.stringify([{ iid, phone: caller, at: Date.now() }, { iid: 'int-dash-2', phone: '919876544444', at: Date.now() }]), 60_000);
     expect((await tools.quote(ORG, empty)).needs).toBe('items');
+    await tools.carts.set(mod.activeCallsKey(ORG), '[]', 60_000);
+  });
+
+  it('the product is read from whatever the console fields are called (product, items as a list)', async () => {
+    const it1 = await tools.item(ORG, { product: 'broiler', interaction_id: '@Interaction ID' });
+    expect(it1).toMatchObject({ ok: true, found: true, name: 'Broiler Chicken' });
+    const q = await tools.quote(ORG, { items: [{ name: 'broiler chicken', quantity: 2, cut: 'curry cut' }], pickup_time: 'in 1 hour' });
+    expect(q).toMatchObject({ ok: true, total: 440 });
+  });
+
+  it('dashboard call whose Sarvam id never reached the browser: its stand-in id supplies the caller and words; a phone caller is never mixed up', async () => {
+    const caller = '919876555555';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    const standIn = 'web-0123456789ab';
+    await tools.carts.set(mod.activeCallsKey(ORG), JSON.stringify([{ iid: standIn, phone: caller, at: Date.now() }]), 60_000);
+    const words = [{ role: 'agent', content: 'Vanakkam' }, { role: 'user', content: 'oru kilo broiler curry cut' }, { role: 'user', content: '1 hour la varen' }];
+    await tools.carts.set(mod.callLinesKey(ORG, standIn), JSON.stringify(words), 60_000);
+    const fromSarvam = { interaction_id: 'sarvam-real-interaction-1', transcript: '@Call Transcript' };
+    expect(await tools.quote(ORG, fromSarvam)).toMatchObject({ ok: true, total: 220 });
+    await tools.carts.set(mod.callLinesKey(ORG, standIn), JSON.stringify([...words, { role: 'user', content: 'aama' }]), 60_000);
+    const r = await tools.order(ORG, fromSarvam);
+    expect(r).toMatchObject({ ok: true });
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: r.order_number }, include: { customer: true } });
+    expect(row.customer.phone).toBe(caller);
+    expect(row.channel).toBe('assistant');
+    // A real phone call (its own caller number) at the same time never reads the dashboard call's words.
+    const phoneCall = await tools.quote(ORG, { interaction_id: 'phone-call-2', caller_phone: '919800000001', transcript: '@Call Transcript' });
+    expect(phoneCall.ok).toBe(false);
     await tools.carts.set(mod.activeCallsKey(ORG), '[]', 60_000);
   });
 

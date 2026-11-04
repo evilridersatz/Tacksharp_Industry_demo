@@ -263,15 +263,25 @@ export class BusinessAssistantController {
    */
   @Post('live/bind')
   @HttpCode(200)
-  async liveBind(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown }) {
+  async liveBind(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown; replaces?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
-    const id = typeof body?.interactionId === 'string' && /^[\w-]{4,120}$/.test(body.interactionId) ? body.interactionId : '';
+    const id = typeof body?.interactionId === 'string' && /^[\w.:@|+=-]{4,160}$/.test(body.interactionId) ? body.interactionId : '';
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
-    if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
+    if (!id || !phone) {
+      log.warn('business_assistant.live_bind_refused', { organizationId, idLength: typeof body?.interactionId === 'string' ? body.interactionId.length : null, hasPhone: Boolean(phone) });
+      throw new BadRequestException('interactionId and phone are required.');
+    }
     const store = sharedCartStore();
     await store.set(callPhoneKey(organizationId, id), phone, 2 * 60 * 60_000);
+    // Sarvam's id arrived after a stand-in ("web-...") was used: the stand-in's words move to the real id.
+    const replaces = typeof body?.replaces === 'string' && /^web-[\w-]{8,60}$/.test(body.replaces) ? body.replaces : '';
+    if (replaces) {
+      const words = await store.get(callLinesKey(organizationId, replaces));
+      if (words) await store.set(callLinesKey(organizationId, id), words, 30 * 60_000);
+      await this.markActive(organizationId, replaces, null);
+    }
     await this.markActive(organizationId, id, phone);
-    log.info('business_assistant.live_bind', { organizationId });
+    log.info('business_assistant.live_bind', { organizationId, standIn: id.startsWith('web-'), replaced: Boolean(replaces) });
     publishLive(organizationId, { type: 'call.started', channel: 'assistant' });
     return { bound: true };
   }
@@ -292,7 +302,7 @@ export class BusinessAssistantController {
   @HttpCode(200)
   async liveLines(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown; lines?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
-    const id = typeof body?.interactionId === 'string' && /^[\w-]{4,120}$/.test(body.interactionId) ? body.interactionId : '';
+    const id = typeof body?.interactionId === 'string' && /^[\w.:@|+=-]{4,160}$/.test(body.interactionId) ? body.interactionId : '';
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
     const lines = (Array.isArray(body?.lines) ? body.lines : [])

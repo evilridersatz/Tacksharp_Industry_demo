@@ -155,6 +155,28 @@ const str = (v: unknown, max = 500) => {
   return isPlaceholder(s) ? '' : s.slice(0, max);
 };
 
+/** Body fields that are never the caller's order words (ids, numbers, flags, transcript, other tools' answers). */
+const NOT_ORDER_WORDS = new Set(['interaction_id', 'call_id', 'attempt_id', 'caller_phone', 'user_phone_number', 'user_identifier', 'phone', 'transcript', 'call_transcript', 'cart_token', 'confirmed', 'send_whatsapp', 'customer_name', 'language', 'key', 'tool_key', 'call_length', 'pickup_time', 'pickup', 'shop', 'outlet', 'order_number', 'reason']);
+/**
+ * The order / product words the agent passed, whatever the tool's fields are called in the Sarvam console
+ * ("items", "product", "products": [{ "name": .., "quantity": .. }], ...): every other text or number in the body,
+ * in order, placeholders skipped.
+ */
+export function bodyWords(body: Record<string, unknown>, max = 600): string {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number) => {
+    if (depth > 4 || out.join(' ').length > max) return;
+    if (typeof v === 'string') { const t = v.trim(); if (t && !isPlaceholder(t)) out.push(t); }
+    else if (typeof v === 'number') out.push(String(v));
+    else if (Array.isArray(v)) v.forEach((x) => walk(x, depth + 1));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (depth > 0 || !NOT_ORDER_WORDS.has(k)) walk(x, depth + 1);
+  };
+  walk(body, 0);
+  return out.join(' ').slice(0, max);
+}
+/** Field names only (never values): shows in the log what shape the Sarvam console sends. */
+const bodyKeys = (body: Record<string, unknown>) => Object.keys(body).filter((k) => k !== 'key' && k !== 'tool_key').slice(0, 15).join(',');
+
 /**
  * What the CALLER said, newest last, from Sarvam's built-in "Call Transcript" variable (a string with "user:" /
  * "agent:" style lines, or a list of { role, content }). The order is then read by OUR parser from the caller's own
@@ -204,15 +226,26 @@ export class SarvamToolsService {
   private async liveCall(organizationId: string, body: Record<string, unknown>): Promise<ActiveCall | undefined> {
     const active = await readActiveCalls(this.carts, organizationId);
     const id = str(body.interaction_id ?? body.call_id, 120);
-    if (id) return active.find((c) => c.iid === id) ?? { iid: id, phone: '', at: Date.now() };
+    if (id) return active.find((c) => c.iid === id) ?? this.standIn(active, body) ?? { iid: id, phone: '', at: Date.now() };
     return active.length === 1 ? active[0] : undefined;
+  }
+
+  /**
+   * A dashboard call whose Sarvam id the browser never received registers under a stand-in id ("web-..."). A tool
+   * call with an unknown Sarvam id belongs to it only when it is the only such call and the request carries no caller
+   * number of its own (a real phone call always has one), so a phone caller is never mixed up with it.
+   */
+  private standIn(active: ActiveCall[], body: Record<string, unknown>): ActiveCall | undefined {
+    if (normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.user_identifier ?? body.phone, 30))) return undefined;
+    const waiting = active.filter((c) => c.iid.startsWith('web-'));
+    return waiting.length === 1 ? waiting[0] : undefined;
   }
 
   /** True when this request comes from a call the dashboard assistant is running (not a real phone call). */
   private async fromDashboard(organizationId: string, body: Record<string, unknown>): Promise<boolean> {
     const active = await readActiveCalls(this.carts, organizationId);
     const id = str(body.interaction_id ?? body.call_id, 120);
-    return id ? active.some((c) => c.iid === id) : active.length === 1;
+    return id ? active.some((c) => c.iid === id) || Boolean(this.standIn(active, body)) : active.length === 1;
   }
 
   /** The caller's number: Sarvam's "User Identifier", else the number bound to this call by the dashboard. */
@@ -311,12 +344,16 @@ export class SarvamToolsService {
 
   /** One product, by what the caller said ("broiler", "naatu kozhi", "நாட்டுக்கோழி"). Unknown -> not on the menu. */
   async item(organizationId: string, body: Record<string, unknown>): Promise<ToolResult> {
-    const said = str(body.item_name ?? body.item ?? body.query, 200) || ((await this.heard(organizationId, body)).slice(-1)[0] ?? '').slice(0, 200);
-    if (!said) return { ok: false, found: false, message: 'Ask which product the caller wants.' };
+    const said = str(body.item_name ?? body.item ?? body.query, 200) || bodyWords(body, 200) || ((await this.heard(organizationId, body)).slice(-1)[0] ?? '').slice(0, 200);
+    if (!said) {
+      log.warn('sarvam_tools.item_no_words', { organizationId, bodyKeys: bodyKeys(body) });
+      return { ok: false, found: false, message: 'Ask which product the caller wants.' };
+    }
     const c = await this.catalog.get(organizationId, true);
     const { items } = parseItems(said, this.catalog.products(c));
     const hit = items[0] ? c.items.find((i) => i.id === items[0].itemId) : undefined;
     if (!hit) {
+      log.warn('sarvam_tools.item_not_matched', { organizationId, asked: said.slice(0, 80), bodyKeys: bodyKeys(body) });
       return { ok: true, found: false, message: `"${said}" is not on our menu. Available: ${this.menuLines(c).text}` };
     }
     return {
@@ -347,14 +384,17 @@ export class SarvamToolsService {
     let from = -1;
     for (let i = all.length - 1; i >= 0 && from < 0; i--) if (parseItems(all[i], this.catalog.products(c)).items.length) from = i;
     const heard = from >= 0 ? all.slice(from) : all.slice(-3);
-    const said = str(body.items_text ?? body.items ?? body.order_text, 600) || (from >= 0 ? heard.join('. ').slice(0, 600) : '');
+    const said = str(body.items_text ?? body.items ?? body.order_text, 600) || (from >= 0 ? heard.join('. ').slice(0, 600) : '') || bodyWords(body);
     if (!said) {
       // No customer words in the log line: only how many caller turns were available, to tell "no words" from "no product".
-      log.warn('sarvam_tools.quote_no_items', { organizationId, callerTurns: all.length, transcriptInBody: callerLines(body).length > 0, liveCall: Boolean(await this.liveCall(organizationId, body)) });
+      log.warn('sarvam_tools.quote_no_items', { organizationId, callerTurns: all.length, transcriptInBody: callerLines(body).length > 0, liveCall: Boolean(await this.liveCall(organizationId, body)), bodyKeys: bodyKeys(body) });
       return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
     }
     const { items, loose } = parseItems(said, this.catalog.products(c));
-    if (!items.length) return { ok: false, needs: 'items', message: `I could not find those products on our menu. Available: ${this.menuLines(c).text}` };
+    if (!items.length) {
+      log.warn('sarvam_tools.quote_not_matched', { organizationId, asked: said.slice(0, 80), bodyKeys: bodyKeys(body) });
+      return { ok: false, needs: 'items', message: `I could not find those products on our menu. Available: ${this.menuLines(c).text}` };
+    }
     const lines: CartLine[] = [];
     const questions: string[] = [];
     for (const it of items) {
