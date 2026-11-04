@@ -304,6 +304,22 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(declined).toMatchObject({ ok: false, error: 'not_confirmed' });
   });
 
+  it('phone call in steps: the product, then the quantity, then the pickup time, each in its own account -> one order', async () => {
+    const base = { caller_phone: '+919876577777', interaction_id: 'sarvam-phone-steps-1' };
+    const q1 = await tools.quote(ORG, { ...base, transcript: 'User wants broiler chicken curry cut.' });
+    expect(q1).toMatchObject({ ok: false, needs: 'details' });
+    expect(String(q1.questions_text)).toMatch(/How much/);
+    const q2 = await tools.quote(ORG, { ...base, transcript: 'User said 2 kg.' });
+    expect(q2).toMatchObject({ ok: false, needs: 'details' });
+    expect(String(q2.questions_text)).not.toMatch(/How much/);
+    const q3 = await tools.quote(ORG, { ...base, transcript: 'Pickup in 1 hour.' });
+    expect(q3).toMatchObject({ ok: true, total: 440 });
+    const placed = await tools.order(ORG, { ...base, transcript: 'Caller confirmed the order.' });
+    expect(placed).toMatchObject({ ok: true });
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: placed.order_number }, include: { items: true } });
+    expect(Number(row.items[0].quantity)).toBe(2);
+  });
+
   it('tenant isolation: each organization sees only its own menu and prices', async () => {
     expect((await tools.item(ORG_B, { item_name: 'broiler' })).price).toBe(999);
     expect((await tools.item(ORG, { item_name: 'broiler' })).price).toBe(220);

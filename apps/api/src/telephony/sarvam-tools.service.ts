@@ -89,6 +89,8 @@ const CART_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const cartCode = () => Array.from({ length: 6 }, () => CART_CODE_CHARS[Math.floor(Math.random() * CART_CODE_CHARS.length)]).join('');
 const cartKey = (org: string, code: string) => `sarvam:cart:${org}:${code}`;
 const lastCartKey = (org: string, phone: string) => `sarvam:lastcart:${org}:${phone}`;
+/** The agent's accounts of one phone call, in order (see heard). */
+const accountsKey = (org: string, id: string) => `sarvam:accounts:${org}:${id}`;
 /**
  * Carts being built on a Sarvam call right now (phone call or the dashboard assistant's voice / video call), for the
  * dashboard's live view: the priced summary from quote_order, removed when the order is placed, gone after 30 min.
@@ -318,6 +320,21 @@ export class SarvamToolsService {
 
   /** What the caller said: Sarvam's "Call Transcript" when it is passed, else the words the dashboard pushed. */
   private async heard(organizationId: string, body: Record<string, unknown>, until?: (lines: string[]) => boolean): Promise<string[]> {
+    // Phone calls: each tool call carries the agent's own short account of what the caller just said ("broiler curry
+    // cut", then "2 kg", then "pickup at 7 pm"). The accounts of one call are kept in order, so a later answer joins
+    // the product it belongs to (the same way spoken turns do).
+    const summary = agentSummary(body);
+    if (summary) {
+      const id = str(body.interaction_id ?? body.call_id, 120) || normalizePhone(str(body.caller_phone ?? body.user_identifier, 30)) || '';
+      if (!id) return [summary];
+      const key = accountsKey(organizationId, id);
+      let list: string[] = [];
+      try { list = JSON.parse((await this.carts.get(key)) ?? '[]') as string[]; } catch { list = []; }
+      if (list[list.length - 1] !== summary) list.push(summary);
+      list = list.slice(-12);
+      await this.carts.set(key, JSON.stringify(list), CART_TTL_MS).catch(() => undefined);
+      return list;
+    }
     const fromBody = callerLines(body);
     if (fromBody.length) return fromBody;
     const call = await this.liveCall(organizationId, body);
