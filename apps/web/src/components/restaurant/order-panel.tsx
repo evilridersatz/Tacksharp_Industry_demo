@@ -7,6 +7,7 @@ import { api, useApi } from '@/lib/api';
 import { dateTime, displayName, formatPhone } from '@/lib/format';
 import { ACTION_LABEL, CHANNEL_LABEL, FOLLOWUP_KIND, FOLLOWUP_STATUS, ORDER_STATUS, READY_NOTICE, SOURCE_LABEL, actorLabel, inr, paymentLabel, pickupLabel, qty, type FollowUpRow, type Order, type OrderStatus } from '@/lib/restaurant';
 import { Badge, Button, Card, ErrorBanner, Field, Skeleton } from '@/components/ui';
+import { explainCallReason } from '@/lib/call-reasons';
 
 /** One pickup order: what to cut, when they come, payment, offer, ready call and the audit trail. */
 export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: string; onClose?: () => void; onChanged?: () => void; canEdit: boolean }) {
@@ -16,6 +17,7 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
   const [actionError, setActionError] = useState<string | null>(null);
   const [sendTo, setSendTo] = useState('');
   const [sentNote, setSentNote] = useState<string | null>(null);
+  const [callNote, setCallNote] = useState<string | null>(null);
 
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key);
@@ -89,17 +91,21 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
               <IndianRupee className="size-4" /> {order.paymentStatus === 'customer_says_paid' ? 'Verified paid' : 'Mark paid'}
             </Button>
           )}
-          {order.status === 'ready' && (
-            <Button variant="secondary" busy={busy === 'call'} onClick={() => run('call', () => api.post(`/restaurant/orders/${orderId}/notify-ready`))}>
-              <PhoneCall className="size-4" /> Call again
-            </Button>
-          )}
+          <Button variant="secondary" busy={busy === 'call'} disabled={!order.customerPhone} onClick={() => run('call', async () => {
+            const r = await api.post<{ started: boolean; dryRun?: boolean; reason?: string }>(`/restaurant/orders/${orderId}/call`);
+            setCallNote(r.started ? 'Calling the customer now with your phone agent.' : r.dryRun ? 'Test mode (DRY_RUN): everything was checked, nobody was called.' : `Call not placed: ${explainCallReason(r.reason)}`);
+          })}>
+            <PhoneCall className="size-4" /> {order.status === 'ready' ? 'Call: order ready' : 'Call customer'}
+          </Button>
           {order.allowedNext.includes('cancelled') && (
             <Button variant="danger" busy={busy === 'cancelled'} onClick={() => change({ status: 'cancelled' })}>
               Cancel
             </Button>
           )}
         </div>
+      )}
+      {callNote && (
+        <p role="status" data-testid="call-note" className="mx-5 mt-3 rounded-[8px] bg-sky-soft px-3 py-2 text-[12.5px] text-[#075985]">{callNote}</p>
       )}
       {actionError && (
         <div className="px-5 pt-3">
@@ -252,7 +258,11 @@ export function OrderPanel({ orderId, onClose, onChanged, canEdit }: { orderId: 
                           ? 'Payment updated'
                           : e.type === 'ready_notice'
                             ? 'Customer notified'
-                            : e.type}
+                            : e.type === 'call'
+                              ? 'Phone call'
+                              : e.type === 'follow_up'
+                                ? 'WhatsApp message'
+                                : e.type}
                   </b>{' '}
                   <span className="text-muted">by {actorLabel(e.actor)}</span>
                 </p>

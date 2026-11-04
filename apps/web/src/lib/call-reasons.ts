@@ -12,6 +12,8 @@ const RULES: Array<[RegExp, string]> = [
   [/^agent_not_active/, 'The voice agent is not published yet.'],
   [/^agent_outbound_disabled/, 'Outbound calls are switched off for this agent.'],
   [/^agent_has_no_sarvam_app_id/, 'The voice agent is not configured: it needs its Sarvam agent id.'],
+  [/^no_sarvam_agent/, 'Choose the agent that makes automatic calls: Voice agents → "Agent for automatic calls".'],
+  [/^no_calling_consent/, "The customer's calling consent has not been recorded (Customers → the customer → consent)."],
   [/sarvam_not_configured|no_sarvam_agent|agent_has_no_sarvam_app_id|TELEPHONY_WEBHOOK_SECRET/, 'The voice provider connection needs attention.'],
   [/^(concurrency_limit|daily_limit)/, 'Your calling limit was reached. Try again later.'],
   [/^call_already_in_progress/, 'A call to this customer is already in progress.'],

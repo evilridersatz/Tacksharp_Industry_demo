@@ -166,6 +166,10 @@ with sync_playwright() as p:
     check('order page: confirmation to the customer (test mode: simulated, recorded)', sc.get_by_role('status').count() == 1 and 'simulated' in sc.get_by_role('status').inner_text(), sc.get_by_role('status').inner_text() if sc.get_by_role('status').count() else '')
     sc.get_by_label('Another WhatsApp number').fill('9876512345'); sc.get_by_role('button', name='Send', exact=True).click(); pg3.wait_for_timeout(1500)
     check('order page: confirmation to another number', 'another number' in sc.get_by_role('status').inner_text())
+    pg3.get_by_role('button', name=re.compile('^Call')).first.click(); pg3.wait_for_timeout(2000)
+    cn = pg3.get_by_test_id('call-note')
+    check('order page: Call customer answers with what happened (here: test mode / not set up, with the reason)', cn.count() == 1 and len(cn.inner_text()) > 20, cn.inner_text() if cn.count() else '')
+    check('order page: the call attempt is in the order history', pg3.get_by_text('Phone call').count() >= 1)
     pg3.screenshot(path=os.path.join(SHOTS, 'order-page.png')); pg3.close()
 
     # Live order board: the open order in its stage column; one tap moves it on.

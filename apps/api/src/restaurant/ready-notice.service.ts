@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { TelephonyService } from '../telephony/telephony.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { WhatsAppSenderService } from '../whatsapp/whatsapp-sender.service.js';
@@ -14,9 +15,10 @@ const waStyleOf = (lang: string | null | undefined): Style => (lang === 'english
 
 /**
  * "Your order is ready, exactly as you asked — come and collect it."
- * When staff mark an order Ready, the customer gets the ready message on WhatsApp (free text inside the 24 h window,
- * otherwise the approved order-ready template). The old Plivo ready CALL was removed (2026-11); a Sarvam ready-call
- * agent is pending. Every outcome is written to the order's history; nothing is reported as delivered unless it was.
+ * When staff mark an order Ready (or press "Call: order ready"), the business's Sarvam phone agent calls the customer
+ * (same gates as every call). When that call cannot be placed (no consent, no phone agent, limits...), the ready
+ * message goes on WhatsApp instead (free text inside the 24 h window, otherwise the approved order-ready template).
+ * Every outcome is written to the order's history; nothing is reported as delivered unless it was.
  */
 @Injectable()
 export class ReadyNoticeService {
@@ -25,6 +27,7 @@ export class ReadyNoticeService {
     private readonly orders: OrdersService,
     private readonly conversations: ConversationsService,
     private readonly sender: WhatsAppSenderService,
+    @Optional() private readonly telephony?: TelephonyService,
   ) {}
 
   /** Serialize ready notifications per order to prevent concurrent duplicate calls/messages. */
@@ -75,7 +78,21 @@ export class ReadyNoticeService {
         });
       }
 
-      await this.whatsapp(order, 'Order ready');
+      // The phone agent calls first; WhatsApp when the call cannot be placed.
+      let why = 'Order ready';
+      if (this.telephony && order.channel !== 'test') {
+        const r = await this.telephony.placeSystemCall({
+          organizationId, customerId: order.customerId, purpose: 'order_ready',
+          idempotencyKey: `${order.id}${opts.force ? `:${Math.floor(Date.now() / 60_000)}` : ''}`,
+          ignoreCallWindow: Boolean(opts.force),
+          variables: { order_number: order.orderNumber, customer_name: order.customerName ?? '', order_status: 'ready' },
+        }).catch((e) => ({ started: false, reason: errorMessage(e) } as { started: boolean; reason?: string }));
+        if (r.started) {
+          return this.orders.recordReadyNotice(organizationId, order.id, { readyNotice: 'calling', note: 'Ready call placed by the phone agent.' });
+        }
+        why = `Ready call not placed (${(r.reason ?? 'unknown').slice(0, 120)})`;
+      }
+      await this.whatsapp(order, why);
     } catch (error) {
       log.error('ready_notice.failed', { organizationId, orderId, error: errorMessage(error) });
     }

@@ -15,6 +15,7 @@ import { followUpConfig } from './followup-config.js';
 import { TenancyService } from '../tenancy/tenancy.service.js';
 import { InventoryService } from './inventory.service.js';
 import { InboundMessageService } from '../whatsapp/inbound-messages.service.js';
+import { TelephonyService } from '../telephony/telephony.service.js';
 
 const IST_OFFSET_MS = 330 * 60_000;
 const istDay = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -39,6 +40,7 @@ export class RestaurantController {
     private readonly tenancy: TenancyService,
     private readonly inventory: InventoryService,
     private readonly inbound: InboundMessageService,
+    private readonly telephony: TelephonyService,
   ) {}
 
   @Get('overview')
@@ -130,6 +132,31 @@ export class RestaurantController {
       if (e instanceof NotFoundException) throw e;
       throw new BadRequestException(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /**
+   * "Call customer" from the order page: the business's Sarvam phone agent calls the customer about this order
+   * (ready for pickup, or a question about it). Same gates as every call (consent, do-not-contact, DRY_RUN, limits);
+   * staff pressing the button may call outside the automatic calling hours. One call per press (a double click within
+   * a minute is the same call). Recorded on the order.
+   */
+  @Post('orders/:id/call')
+  async callCustomer(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Param('id') id: string) {
+    requireStaff(user);
+    const order = await this.orders.getOrder(organizationId, id);
+    if (order.status === 'cancelled') throw new BadRequestException('This order is cancelled.');
+    const purpose = order.status === 'ready' ? 'order_ready' : 'order_call';
+    const r = await this.telephony.placeSystemCall({
+      organizationId,
+      customerId: order.customerId,
+      purpose,
+      idempotencyKey: `${id}:${Math.floor(Date.now() / 60_000)}`,
+      ignoreCallWindow: true,
+      variables: { order_number: order.orderNumber, customer_name: order.customerName ?? '', order_status: order.status },
+    });
+    const note = r.started ? `${purpose === 'order_ready' ? 'Ready' : 'Order'} call placed by the phone agent` : r.dryRun ? 'Call checked in test mode (DRY_RUN): nobody was called' : `Call not placed: ${r.reason ?? 'unknown reason'}`;
+    await this.prisma.orderEvent.create({ data: { organizationId, orderId: id, type: 'call', actor: `user:${user.sub}`, note: note.slice(0, 500) } });
+    return { ...r, note, order: await this.orders.getOrder(organizationId, id) };
   }
 
   /** "Call again" from the order screen. */
