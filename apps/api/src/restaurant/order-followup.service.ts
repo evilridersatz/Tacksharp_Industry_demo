@@ -15,6 +15,7 @@ import { TelephonyService } from '../telephony/telephony.service.js';
 import { firstName } from '../whatsapp/message-templates.js';
 import { normalizePhone } from '../common/phone.js';
 import { feedbackCallOpening } from './call-openings.js';
+import { onOutboundResult, type OutboundResult } from '../telephony/outbound-events.js';
 import { describeWhen } from '../conversation/when.js';
 import { FeedbackService } from './feedback.service.js';
 import { ReadyNoticeService } from './ready-notice.service.js';
@@ -86,6 +87,8 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
+    // A real feedback call's outcome (Sarvam post-call webhook): the rating / complaint goes on the order.
+    onOutboundResult((r) => this.onFeedbackCallResult(r));
     // Safety net: anything due whose job was lost (Redis restart, seed data) is queued again. Re-queueing is
     // harmless because processing checks the row status first.
     if (!config.runWorkers) return;
@@ -514,6 +517,31 @@ export class OrderFollowUpService implements OnModuleInit, OnModuleDestroy {
       return { status: 'scheduled', retryAt, error: `No answer (attempt ${attempt}/${row.maxAttempts}); retry at ${retryAt.toISOString()}`, result: { simulated, lastAttempt: 'no_answer' } };
     }
     return { status: 'no_answer', error: `No answer after ${attempt} attempt${attempt > 1 ? 's' : ''}`, result: { simulated } };
+  }
+
+  /**
+   * Sarvam's post-call webhook for a feedback call we placed ("order_feedback:<follow-up id>:<attempt>"): what the
+   * customer said -> rating / complaint on the order (the same rules as WhatsApp ratings and simulated calls).
+   * Not answered -> recorded; the follow-up keeps its normal retry rules.
+   */
+  async onFeedbackCallResult(r: OutboundResult) {
+    const m = r.idempotencyKey.match(/^order_feedback:([^:]+):(\d+)$/);
+    if (!m) return;
+    const row = await this.prisma.orderFollowUp.findFirst({ where: { id: m[1], organizationId: r.organizationId, kind: 'feedback_call' } });
+    if (!row) return;
+    const order = await this.prisma.order.findFirst({ where: { id: row.orderId, organizationId: r.organizationId }, include: { customer: true, items: true, outlet: true } });
+    if (!order) return;
+    const said = r.transcript.filter((l) => l.role === 'user').map((l) => l.content).join(' ').trim();
+    if (r.status !== 'completed' || !said) {
+      await this.prisma.orderEvent.create({ data: { organizationId: r.organizationId, orderId: order.id, type: 'follow_up', actor: 'system', note: `Feedback call ${r.status === 'completed' ? 'answered, no rating given' : `not answered (${r.status})`}` } });
+      return;
+    }
+    if (order.feedbackRating !== null && order.feedbackRating !== undefined) return; // already rated (WhatsApp or an earlier call)
+    const done = r.callId
+      ? await this.applyCallReply(row, order, r.callId, said, false)
+      : { ...(await this.feedback.apply(r.organizationId, order.id, { channel: 'voice', text: said, simulated: false })), reply: '' };
+    await this.prisma.orderFollowUp.update({ where: { id: row.id }, data: { result: { ...((row.result as object | null) ?? {}), rating: done.rating ?? null, complaint: Boolean(done.complaint), fromCall: r.callId } as never } });
+    log.info('followup.feedback_call_result', { organizationId: r.organizationId, orderId: order.id, rated: done.rating !== undefined, complaint: Boolean(done.complaint) });
   }
 
   /** What the customer said on the call -> rating / complaint on the order (shared by real and simulated calls). */

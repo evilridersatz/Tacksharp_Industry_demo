@@ -75,6 +75,7 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     telephony = { placeSystemCall: vi.fn(async () => ({ started: true, requestId: 'sarvam-req-1' })) };
     feedback = new FeedbackService(prisma);
     fu = new OrderFollowUpService(prisma, conversations, sender, ready, sarvam as any, feedback, telephony);
+    fu.onModuleInit(); // registers the feedback-call result listener (no sweeper: RUN_WORKERS is off in tests)
     fu.queue = { add: vi.fn(async () => undefined) };
     await setupOrg(ORG);
     await setupOrg(ORG_B);
@@ -208,6 +209,30 @@ describe.skipIf(!enabled)('GR Chicken follow-ups (integration)', () => {
     const after2 = await prisma.orderFollowUp.findUnique({ where: { id: row2.id } });
     expect(after2.status).toBe('skipped');
     expect(after2.lastError).toContain('no_sarvam_agent');
+  });
+
+  it('live feedback call result (Sarvam post-call webhook): the rating the customer said goes on the order; the opening asks for it', async () => {
+    process.env.DRY_RUN = 'false';
+    process.env.LIVE_TEST_RECIPIENTS = `+${REAL_TEST_PHONE}`;
+    const order = await collectedOrder({ phone: REAL_TEST_PHONE });
+    const row = (await fu.schedule({ organizationId: ORG, orderId: order.id, kind: 'feedback_call', at: new Date(), dedupeKey: `live-rate-${order.id}` })).row;
+    telephony.placeSystemCall.mockClear();
+    await fu.process(row.id);
+    const call = (telephony.placeSystemCall.mock.calls[0] as any[])[0];
+    expect(call.overrides.initialBotMessage).toMatch(/1 முதல் 5|1 to 5/);
+    // What Sarvam reports after the call (the request key is the one TelephonyService builds).
+    const { emitOutboundResult } = await import('../src/telephony/outbound-events.js');
+    await emitOutboundResult({ organizationId: ORG, requestId: 'sarvam-req-1', idempotencyKey: `order_feedback:${row.id}:1`, status: 'completed', callId: null,
+      transcript: [{ role: 'assistant', content: call.overrides.initialBotMessage }, { role: 'user', content: 'romba nalla irundhuchu, anju' }] });
+    const o = await prisma.order.findUnique({ where: { id: order.id } });
+    expect(o.feedbackRating).toBe(5);
+    expect(o.feedbackChannel).toBe('voice');
+    // Not answered: recorded, no rating invented.
+    const order2 = await collectedOrder({ phone: REAL_TEST_PHONE });
+    const row2 = (await fu.schedule({ organizationId: ORG, orderId: order2.id, kind: 'feedback_call', at: new Date(), dedupeKey: `live-rate-${order2.id}` })).row;
+    await emitOutboundResult({ organizationId: ORG, requestId: 'x', idempotencyKey: `order_feedback:${row2.id}:1`, status: 'no_answer', callId: null, transcript: [] });
+    expect((await prisma.order.findUnique({ where: { id: order2.id } })).feedbackRating).toBeNull();
+    expect(await prisma.orderEvent.count({ where: { orderId: order2.id, note: { contains: 'not answered' } } })).toBe(1);
   });
 
   it('duplicate prevention: same dedupe key = one row; processing twice or concurrently sends once', async () => {

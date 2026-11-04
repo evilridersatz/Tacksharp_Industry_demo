@@ -2,7 +2,8 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { config } from '../common/config.js';
-import { log } from '../common/logger.js';
+import { errorMessage, log } from '../common/logger.js';
+import { emitOutboundResult } from './outbound-events.js';
 import { normalizePhone } from '../common/phone.js';
 import { providerCredentials } from '../integrations/provider-scope.js';
 import { sarvamOutboundCall, type FetchLike } from '../integrations/provider-clients.js';
@@ -160,6 +161,8 @@ export class SarvamTelephonyProvider implements TelephonyProvider {
       await this.saveTranscript(org, req.customerId, req.toNumber, call.id, transcript);
     }
     await this.prisma.telephonyCallRequest.update({ where: { id: req.id }, data: { status: mapped, durationSec, failureReason: failure, callId, providerCallId: req.providerCallId ?? attemptId } });
+    // The module that asked for the call acts on its outcome (e.g. the rating from a feedback call). Never fails the webhook.
+    await emitOutboundResult({ organizationId: org, requestId: req.id, idempotencyKey: req.idempotencyKey, status: mapped, callId, transcript }).catch((e) => log.warn('telephony.outbound_listener_failed', { error: errorMessage(e) }));
     log.info('telephony.sarvam_result', { requestId: req.id, status: mapped, durationSec });
     return { accepted: true, organizationId: org };
   }
