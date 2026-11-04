@@ -320,6 +320,29 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     expect(Number(row.items[0].quantity)).toBe(2);
   });
 
+  it('phone agent that never calls place_order: a repeat quote whose account says the caller confirmed places the order once', async () => {
+    const caller = '919876588888';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    const base = { caller_phone: `+${caller}`, interaction_id: 'sarvam-phone-auto-1' };
+    const first = await tools.quote(ORG, { ...base, transcript: 'User wants 1 kg broiler chicken curry cut, pickup in 1 hour.' });
+    expect(first).toMatchObject({ ok: true, total: 220 });
+    expect(first.order_number).toBeUndefined();
+    // The agent quotes again instead of placing: its account says the caller confirmed.
+    const again = await tools.quote(ORG, { ...base, transcript: 'User confirmed 1 kg broiler chicken curry cut, pickup in 1 hour.' });
+    expect(again).toMatchObject({ ok: true });
+    expect(String(again.order_number)).toMatch(/^GR-/);
+    // Quoting again, or the agent finally calling place_order, never makes a second order.
+    const third = await tools.quote(ORG, { ...base, transcript: 'User confirmed the order.' });
+    expect(third.order_number).toBe(again.order_number);
+    const manual = await tools.order(ORG, { ...base, cart_token: String(first.cart_token), confirmed: 'yes' });
+    expect(manual.order_number).toBe(again.order_number);
+    const customer = await prisma.customer.findFirst({ where: { organizationId: ORG, phone: caller } });
+    expect(await prisma.order.count({ where: { organizationId: ORG, customerId: customer.id } })).toBe(1);
+    // A first quote that already "confirms" never places anything (the total was not read yet).
+    const fresh = await tools.quote(ORG, { ...base, interaction_id: 'sarvam-phone-auto-2', transcript: 'User confirmed 1 kg broiler chicken curry cut, pickup in 1 hour.' });
+    expect(fresh.order_number).toBeUndefined();
+  });
+
   it('tenant isolation: each organization sees only its own menu and prices', async () => {
     expect((await tools.item(ORG_B, { item_name: 'broiler' })).price).toBe(999);
     expect((await tools.item(ORG, { item_name: 'broiler' })).price).toBe(220);

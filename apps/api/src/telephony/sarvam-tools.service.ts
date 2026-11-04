@@ -118,6 +118,11 @@ async function writeLiveCallCart(store: CartStore, org: string, key: string, car
 }
 
 /** A clear yes from the caller, as the agent passes it (English, Tanglish, Tamil, or a boolean). */
+/** An account / answer that says no, not, cancel (English, Tanglish, Tamil). */
+export const negativeWords = (t: string) => /\b(no|nope|not|don'?t|cancel|cancelled|declined|refused|illa|illai|vendam|vendaam|venam)\b|இல்ல|வேண்டாம்|வேணாம்/i.test(t);
+/** The agent's account says the caller agreed ("confirmed", "said yes", "agreed", "aama", "sari"). */
+const CONFIRM_WORDS = /\b(confirm(s|ed)?|agreed|agrees|accepted|said (yes|ok|okay)|says (yes|ok|okay)|yes|okay|aama|aamaa|sari|seri)\b|ஆமா|சரி/i;
+
 export function saidYes(v: unknown): boolean {
   const s = String(v ?? '').trim().toLowerCase();
   if (!s) return false;
@@ -522,6 +527,9 @@ export class SarvamToolsService {
     const quotePhone = await this.callerPhone(organizationId, body);
     if (quotePhone) await this.carts.set(lastCartKey(organizationId, quotePhone), signed, CART_TTL_MS);
     const callId = await this.callRef(organizationId, body);
+    // The cart already priced on this call (if any), before this quote replaces it.
+    const prevSigned = callId ? await this.carts.get(callCartKey(organizationId, callId)) : null;
+    const prev = prevSigned ? readCart(prevSigned, secret) : null;
     if (callId) await this.carts.set(callCartKey(organizationId, callId), signed, CART_TTL_MS);
     const liveKey = callId || quotePhone || cart;
     const channel = (await this.fromDashboard(organizationId, body)) ? 'assistant' : 'voice';
@@ -532,6 +540,19 @@ export class SarvamToolsService {
       total: q.total, pickupAt: pickupAt!.toISOString(), updatedAt: new Date().toISOString(),
     }).catch(() => undefined);
     publishLive(organizationId, { type: 'cart.updated', channel, total: q.total, customer: known?.name ?? undefined });
+    // Phone calls: some agents never call place_order and quote again after the caller's yes. When the same order was
+    // already priced on this call and the agent's account now says the caller confirmed it (and nothing negative),
+    // the order is placed here, once (stable key per call and order), and the real order number is returned.
+    const account = agentSummary(body);
+    const sameOrder = Boolean(prev && JSON.stringify(prev.l) === JSON.stringify(lines) && prev.out === outlet!.id);
+    const confirmed = Boolean(account) && CONFIRM_WORDS.test(account) && !negativeWords(account);
+    log.info('sarvam_tools.quote_ok', { organizationId, total: q.total, repeatOnCall: sameOrder, accountConfirms: confirmed, ...(account ? { accountShape: transcriptShape(account).shape } : {}) });
+    if (sameOrder && confirmed && callId) {
+      const stable = createHmac('sha256', secret).update(`${callId}|${JSON.stringify(lines)}|${outlet!.id}`).digest('hex').slice(0, 24);
+      const placed = await this.order(organizationId, { ...body, cart_token: `auto-${stable}`, confirmed: 'yes' });
+      log.info('sarvam_tools.auto_placed', { organizationId, ok: placed.ok !== false, error: (placed as { error?: unknown }).error ?? null });
+      if (placed.ok) return { ...placed, summary_text: `Order ${placed.order_number} is placed.`, message: `${placed.message} Read the order number ${placed.order_number} to the caller exactly, letter by letter. Do not call quote_order or place_order again.`, next_step: 'read_order_number' };
+    }
     return {
       ok: true,
       summary_text: `${summary}. Total ${rupees(q.total)}. Pickup at ${outlet!.name}, ${pickupText}. Payment at the shop.`,
@@ -582,12 +603,12 @@ export class SarvamToolsService {
     const summary = agentSummary(body);
     // With the agent's own account as the only record (phone calls), place_order is called only after the caller's
     // yes (the agent instructions); the account must not say "no / not / cancel".
-    const negative = (t: string) => /\b(no|nope|not|don'?t|cancel|cancelled|declined|refused|illa|illai|vendam|vendaam|venam)\b|இல்ல|வேண்டாம்|வேணாம்/i.test(t);
-    const yes = explicit ? saidYes(explicit) : summary ? !negative(summary) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
+    const yes = explicit ? saidYes(explicit) : summary ? !negativeWords(summary) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
     if (!yes) return refuse('not_confirmed', 'Read the total and ask the caller to confirm; call place_order after they say yes.');
     if (!phone) return refuse('no_phone', 'The caller phone number is needed to place the order.');
     const callRef = callId || str(body.attempt_id, 120) || cart.p;
-    const idempotencyKey = `sarvam:${createHmac('sha256', secret).update(`${callRef}|${body.cart_token}`).digest('hex').slice(0, 40)}`;
+    // One order per call and order content: a retry, or the agent placing an order the server already placed, never makes a second.
+    const idempotencyKey = `sarvam:${createHmac('sha256', secret).update(`${callRef}|${JSON.stringify(cart.l)}|${cart.out}`).digest('hex').slice(0, 40)}`;
     try {
       const customer = await this.conversations.getOrCreateCustomerByPhone(organizationId, phone, { source: 'voice_inbound', name: str(body.customer_name, 80) || undefined });
       const r = await this.orders.createOrder({
