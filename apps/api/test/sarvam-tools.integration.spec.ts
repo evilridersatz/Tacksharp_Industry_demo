@@ -286,6 +286,24 @@ describe.skipIf(!enabled)('Sarvam voice-agent tools (integration)', () => {
     await tools.carts.set(mod.activeCallsKey(ORG), '[]', 60_000);
   });
 
+  it('phone call: the transcript is the agent\'s one-line account of the order (no speaker labels) -> priced, placed, never a phone number as quantity', async () => {
+    const caller = '919876566666';
+    await prisma.customer.deleteMany({ where: { organizationId: ORG, phone: caller } });
+    const base = { caller_phone: `+${caller}`, interaction_id: 'sarvam-phone-int-9' };
+    const q = await tools.quote(ORG, { ...base, transcript: 'The user wants 1 kg broiler chicken curry cut, pickup in 1 hour. Phone number 9876566666.' });
+    expect(q).toMatchObject({ ok: true, total: 220 });
+    const placed = await tools.order(ORG, { ...base, transcript: 'User confirmed the order of 1 kg broiler chicken curry cut, pickup in 1 hour.' });
+    expect(placed).toMatchObject({ ok: true });
+    expect(String(placed.order_number)).toMatch(/^GR-/);
+    const row = await prisma.order.findFirst({ where: { organizationId: ORG, orderNumber: placed.order_number }, include: { customer: true } });
+    expect(row.customer.phone).toBe(caller);
+    expect(row.channel).toBe('voice');
+    // An account that says the caller declined never places an order.
+    await tools.quote(ORG, { ...base, interaction_id: 'sarvam-phone-int-10', transcript: 'The user wants 1 kg broiler chicken curry cut, pickup in 1 hour.' });
+    const declined = await tools.order(ORG, { ...base, interaction_id: 'sarvam-phone-int-10', transcript: 'User did not confirm the order.' });
+    expect(declined).toMatchObject({ ok: false, error: 'not_confirmed' });
+  });
+
   it('tenant isolation: each organization sees only its own menu and prices', async () => {
     expect((await tools.item(ORG_B, { item_name: 'broiler' })).price).toBe(999);
     expect((await tools.item(ORG, { item_name: 'broiler' })).price).toBe(220);

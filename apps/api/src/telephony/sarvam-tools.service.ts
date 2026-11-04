@@ -183,9 +183,23 @@ const bodyKeys = (body: Record<string, unknown>) => Object.keys(body).filter((k)
  * words, so the tools work even when the agent passes no arguments of its own.
  */
 export function callerLines(body: Record<string, unknown>): string[] {
-  return transcriptTurns(body.transcript ?? body.call_transcript ?? body.conversation ?? body.messages)
-    .filter((t) => t.who === 'user')
-    .map((t) => t.text);
+  const raw = body.transcript ?? body.call_transcript ?? body.conversation ?? body.messages;
+  const turns = transcriptTurns(raw);
+  if (turns.length) return turns.filter((t) => t.who === 'user').map((t) => t.text);
+  // No speaker labels at all: on phone calls Sarvam fills this field with the agent's own one-line account of the
+  // order ("Customer wants 1 kg broiler curry cut at 6 pm. Phone 98..."). That sentence IS the order: it is read as
+  // the caller's words (phone numbers removed so they are never taken as a quantity).
+  const summary = agentSummary(body);
+  return summary ? [summary] : [];
+}
+
+/** The unlabelled one-sentence order account Sarvam passes as the transcript on phone calls ('' when not that). */
+export function agentSummary(body: Record<string, unknown>): string {
+  const raw = body.transcript ?? body.call_transcript;
+  if (typeof raw !== 'string') return '';
+  const s = raw.trim();
+  if (!s || isPlaceholder(s) || /^[[{]/.test(s) || transcriptTurns(s).length) return '';
+  return s.replace(/\+?\d[\d\s-]{8,}\d/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
 }
 
 /**
@@ -531,7 +545,11 @@ export class SarvamToolsService {
     // The yes: what the agent passed, else the caller's own last words on the call (a "no" there always wins).
     const lastSaid = (await this.heard(organizationId, body, (ls) => ls.length > 0 && saidYes(ls[ls.length - 1]))).slice(-2);
     const explicit = str(body.confirmed, 60);
-    const yes = explicit ? saidYes(explicit) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
+    const summary = agentSummary(body);
+    // With the agent's own account as the only record (phone calls), place_order is called only after the caller's
+    // yes (the agent instructions); the account must not say "no / not / cancel".
+    const negative = (t: string) => /\b(no|nope|not|don'?t|cancel|cancelled|declined|refused|illa|illai|vendam|vendaam|venam)\b|இல்ல|வேண்டாம்|வேணாம்/i.test(t);
+    const yes = explicit ? saidYes(explicit) : summary ? !negative(summary) : lastSaid.length > 0 && saidYes(lastSaid[lastSaid.length - 1]);
     if (!yes) return refuse('not_confirmed', 'Read the total and ask the caller to confirm; call place_order after they say yes.');
     if (!phone) return refuse('no_phone', 'The caller phone number is needed to place the order.');
     const callRef = callId || str(body.attempt_id, 120) || cart.p;
