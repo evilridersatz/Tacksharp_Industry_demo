@@ -183,24 +183,69 @@ const bodyKeys = (body: Record<string, unknown>) => Object.keys(body).filter((k)
  * words, so the tools work even when the agent passes no arguments of its own.
  */
 export function callerLines(body: Record<string, unknown>): string[] {
-  const t = body.transcript ?? body.call_transcript ?? body.conversation;
-  const out: string[] = [];
-  const isUser = (who: string) => /^(user|customer|caller|human|client)\b/i.test(who.trim());
+  return transcriptTurns(body.transcript ?? body.call_transcript ?? body.conversation ?? body.messages)
+    .filter((t) => t.who === 'user')
+    .map((t) => t.text);
+}
+
+/**
+ * The layout of a transcript we could not read, never its words: letters become "a", digits "0", so the log shows
+ * the format ("[00:00] Aaaa: aaaa\\n...") and nothing the caller said.
+ */
+export function transcriptShape(t: unknown): { type: string; length: number; shape: string } {
+  const raw = typeof t === 'string' ? t : t === undefined ? '' : JSON.stringify(t);
+  const shape = raw.slice(0, 160).replace(/\p{L}/gu, 'a').replace(/\p{M}/gu, '').replace(/\d/g, '0').replace(/a{3,}/g, 'aaa').replace(/\n/g, '\\n');
+  return { type: Array.isArray(t) ? 'array' : typeof t, length: raw.length, shape };
+}
+
+const USER_ROLE = /^(user|customer|caller|human|client|you|speaker[ _-]?1)$/i;
+const AGENT_ROLE = /^(agent|assistant|bot|ai|system|model|speaker[ _-]?0)$/i;
+const ROLE_WORD = '(user|customer|caller|human|client|agent|assistant|bot|ai)';
+
+/**
+ * Every turn of a call transcript, whatever shape Sarvam's "Call Transcript" variable has: an array of
+ * { role, content } (or speaker / text ...), the same as a JSON string, an object holding such an array, or text with
+ * "User: ..." / "[00:12] user: ..." / "<user> ..." lines, or all turns on one line ("user: .. agent: .. user: ..").
+ */
+export function transcriptTurns(t: unknown, depth = 0): Array<{ who: 'user' | 'agent'; text: string }> {
+  if (depth > 3 || t === null || t === undefined) return [];
+  const roleOf = (who: unknown): 'user' | 'agent' | null => {
+    const w = String(who ?? '').trim().replace(/[^\w -]/g, '');
+    return USER_ROLE.test(w) ? 'user' : AGENT_ROLE.test(w) ? 'agent' : null;
+  };
   if (Array.isArray(t)) {
+    const out: Array<{ who: 'user' | 'agent'; text: string }> = [];
     for (const x of t) {
+      if (typeof x === 'string') { out.push(...transcriptTurns(x, depth + 1)); continue; }
       const o = (x ?? {}) as Record<string, unknown>;
-      const who = String(o.role ?? o.speaker ?? o.from ?? '');
-      const text = String(o.content ?? o.text ?? o.message ?? '').trim();
-      if (text && isUser(who)) out.push(text);
+      const who = roleOf(o.role ?? o.speaker ?? o.from ?? o.sender ?? o.type ?? o.author);
+      const raw = o.content ?? o.text ?? o.message ?? o.transcript ?? o.utterance;
+      const text = (typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((r) => (typeof r === 'string' ? r : String((r as { text?: unknown })?.text ?? ''))).join(' ') : '').trim();
+      if (who && text) out.push({ who, text });
     }
     return out;
   }
-  if (typeof t === 'string' && !isPlaceholder(t.trim())) {
-    for (const line of t.split(/\r?\n/)) {
-      const m = line.match(/^\s*\[?([A-Za-z ]{2,12})\]?\s*[:\-–]\s*(.+)$/);
-      if (m && isUser(m[1])) out.push(m[2].trim());
-    }
+  if (typeof t === 'object') {
+    const o = t as Record<string, unknown>;
+    return transcriptTurns(o.messages ?? o.transcript ?? o.turns ?? o.conversation ?? o.items ?? o.data, depth + 1);
   }
+  if (typeof t !== 'string') return [];
+  const s = t.trim();
+  if (!s || isPlaceholder(s)) return [];
+  if (/^[[{]/.test(s)) {
+    try { return transcriptTurns(JSON.parse(s), depth + 1); } catch { /* not JSON: read as text */ }
+  }
+  // Text: split before every role label ("user:", "[user]", "<user>", "USER -"), on any line or within one line.
+  const label = new RegExp(`(?:^|\\n|\\s)(?:\\[[^\\]]{0,20}\\]\\s*)?(?:\\d{1,2}:\\d{2}(?::\\d{2})?\\s*)?[\\[<(]?${ROLE_WORD}[\\]>)]?\\s*(?:\\([^)]{0,20}\\))?\\s*[:>\\-–]\\s*`, 'gi');
+  const marks = [...s.matchAll(label)];
+  const out: Array<{ who: 'user' | 'agent'; text: string }> = [];
+  marks.forEach((m, i) => {
+    const from = (m.index ?? 0) + m[0].length;
+    const to = i + 1 < marks.length ? marks[i + 1].index ?? s.length : s.length;
+    const who = roleOf(m[1]);
+    const text = s.slice(from, to).trim();
+    if (who && text) out.push({ who, text });
+  });
   return out;
 }
 
@@ -387,6 +432,7 @@ export class SarvamToolsService {
     const said = str(body.items_text ?? body.items ?? body.order_text, 600) || (from >= 0 ? heard.join('. ').slice(0, 600) : '') || bodyWords(body);
     if (!said) {
       // No customer words in the log line: only how many caller turns were available, to tell "no words" from "no product".
+      log.info('sarvam_tools.transcript_shape', { organizationId, ...transcriptShape(body.transcript ?? body.call_transcript) });
       log.warn('sarvam_tools.quote_no_items', { organizationId, callerTurns: all.length, transcriptInBody: callerLines(body).length > 0, liveCall: Boolean(await this.liveCall(organizationId, body)), bodyKeys: bodyKeys(body) });
       return { ok: false, needs: 'items', message: 'Ask what the caller wants to order and how much.' };
     }
