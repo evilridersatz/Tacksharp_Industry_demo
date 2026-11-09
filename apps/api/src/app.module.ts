@@ -50,6 +50,7 @@ import { AnalyticsModule } from './analytics/analytics.module.js';
 import { BillingModule } from './billing/billing.module.js';
 import { McpModule } from './mcp/mcp.module.js';
 import { HomeModule } from './home/home.module.js';
+import { OfficeModule } from './office/office.module.js';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { HomeModule } from './home/home.module.js';
     BillingModule,
     McpModule,
     HomeModule,
+    OfficeModule,
   ],
   controllers: [AppController, PrivacyController],
   providers: [AppService],

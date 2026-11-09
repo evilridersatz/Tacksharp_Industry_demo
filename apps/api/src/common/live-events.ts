@@ -13,9 +13,13 @@ import { errorMessage, log } from './logger.js';
  * authenticated API.
  */
 export type LiveEvent = {
-  type: 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change' | 'alert';
-  /** Jarvis alert headline (no customer data). */
+  type: 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change' | 'alert' | 'office.plan' | 'office.task' | 'office.agent' | 'office.approval';
+  /** Jarvis alert / AI Office headline (no customer data). */
   title?: string;
+  /** AI Office: the plan / task the event is about (pages reload them through the normal API). */
+  planId?: string;
+  taskId?: string;
+  role?: string;
   orderId?: string;
   orderNumber?: string;
   channel?: string;
@@ -35,9 +39,20 @@ let subscribed: Promise<void> | null = null;
 const quick = <T>(p: Promise<T>, ms = 800) => Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error('redis timeout')), ms))]);
 const firstName = (n: unknown) => (typeof n === 'string' ? n.trim().split(/\s+/)[0]?.slice(0, 30) : undefined) || undefined;
 
+/**
+ * Taps see every event published in this process (the AI Office turns some into durable, versioned business events).
+ * A tap must be quick and must not throw; it never sees events from other processes, so nothing is recorded twice.
+ */
+const taps: Array<(organizationId: string, event: LiveEvent) => void> = [];
+export function registerLiveTap(fn: (organizationId: string, event: LiveEvent) => void): () => void {
+  taps.push(fn);
+  return () => { const i = taps.indexOf(fn); if (i >= 0) taps.splice(i, 1); };
+}
+
 /** Fire and forget: never throws, never delays the caller by more than a moment. */
 export function publishLive(organizationId: string, event: LiveEvent): void {
   if (!organizationId) return;
+  for (const t of taps) { try { t(organizationId, event); } catch { /* a tap never breaks the publisher */ } }
   const id = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const payload = { ...event, customer: firstName(event.customer), at: event.at ?? new Date().toISOString() };
   local.emit(organizationId, payload);

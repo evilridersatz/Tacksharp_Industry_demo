@@ -35,6 +35,19 @@ export function LiveUpdates() {
           toast(`Jarvis: ${e.title}`, e.status === 'critical' ? 'error' : 'ok', { href: '/jarvis/monitors', label: 'Open', ms: 12_000 });
           return;
         }
+        // AI Office: only what needs a person (approvals, reviews, finished plans, breakers) becomes a notice.
+        if (e.type === 'office.approval' && e.status === 'pending') {
+          toast(`AI Office: ${e.title ?? 'an action needs your approval'}`, 'ok', { href: '/office/approvals', label: 'Review', ms: 15_000 });
+          return;
+        }
+        if ((e.type === 'office.task' && (e.status === 'needs_review' || e.status === 'dead_letter')) || (e.type === 'office.agent' && (e.status === 'stopped' || e.status === 'constrained'))) {
+          toast(`AI Office: ${e.title ?? 'needs a person'}`, 'error', { href: e.taskId ? `/office/tasks?task=${e.taskId}` : '/office', label: 'Open', ms: 12_000 });
+          return;
+        }
+        if (e.type === 'office.plan' && (e.status === 'completed' || e.status === 'failed')) {
+          if (!pathname.startsWith('/office')) toast(`AI Office: ${e.title ?? `plan ${e.status}`}`, e.status === 'completed' ? 'ok' : 'error', { href: e.planId ? `/office/command?plan=${e.planId}` : '/office/command', label: 'Open', ms: 12_000 });
+          return;
+        }
         if (e.type === 'order.created' && e.orderNumber) {
           const via = CHANNEL_LABEL[e.channel ?? ''] ?? e.channel ?? '';
           const total = typeof e.total === 'number' ? ` · ₹${e.total.toLocaleString('en-IN')}` : '';

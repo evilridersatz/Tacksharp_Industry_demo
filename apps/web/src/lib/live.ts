@@ -33,9 +33,12 @@ export function onChange(fn: () => void): () => void {
  * reconnects by itself, and pages keep polling as a backstop.
  */
 export type ServerEvent = {
-  type: 'hello' | 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change' | 'alert';
-  /** Jarvis alert headline. */
+  type: 'hello' | 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change' | 'alert' | 'office.plan' | 'office.task' | 'office.agent' | 'office.approval';
+  /** Jarvis alert / AI Office headline. */
   title?: string;
+  planId?: string;
+  taskId?: string;
+  role?: string;
   orderId?: string;
   orderNumber?: string;
   channel?: string;

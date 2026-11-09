@@ -5,5 +5,5 @@ import { JarvisDataService } from './jarvis-data.service.js';
 import { JarvisScheduler } from './jarvis.scheduler.js';
 import { JarvisService } from './jarvis.service.js';
 
-@Module({ imports: [IntegrationsModule], controllers: [JarvisController], providers: [JarvisDataService, JarvisService, JarvisScheduler], exports: [JarvisService] })
+@Module({ imports: [IntegrationsModule], controllers: [JarvisController], providers: [JarvisDataService, JarvisService, JarvisScheduler], exports: [JarvisService, JarvisDataService] })
 export class JarvisModule {}

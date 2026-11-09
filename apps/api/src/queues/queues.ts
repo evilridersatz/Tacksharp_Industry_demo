@@ -68,12 +68,14 @@ export type WhatsAppMessageJobData = {
 export type OrderFollowUpJobData = { followUpId: string };
 export type AgentTaskJobData = { organizationId: string; taskId: string };
 export type CampaignJobData = { campaignId: string; recipientId: string };
+export type OfficeTaskJobData = { organizationId: string; taskId: string };
 
 export const FOLLOW_UP_QUEUE = 'follow-up';
 export const ORDER_FOLLOW_UP_QUEUE = 'restaurant-follow-up';
 export const AGENT_QUEUE = 'agent-task';
 export const MARKETING_QUEUE = 'marketing-campaign';
 export const WHATSAPP_QUEUE = 'whatsapp-message';
+export const OFFICE_QUEUE = 'office-task';
 
 export const followUpQueue = new Queue<FollowUpJobData>(FOLLOW_UP_QUEUE, {
   connection,
@@ -130,6 +132,15 @@ export const marketingQueue = new Queue<CampaignJobData>(MARKETING_QUEUE, {
     removeOnComplete: { age: 7 * 24 * 3600, count: 20000 },
     removeOnFail: { age: 14 * 24 * 3600 },
   },
+});
+
+/**
+ * AI Office tasks. The OfficeTask row is the source of truth (status, attempts, lease); a job only says "try this task
+ * now". A duplicate or stale job finds the task already claimed and does nothing.
+ */
+export const officeQueue = new Queue<OfficeTaskJobData>(OFFICE_QUEUE, {
+  connection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: { age: 24 * 3600, count: 5000 }, removeOnFail: { age: 14 * 24 * 3600 } },
 });
 
 export const queueRedis = connection;

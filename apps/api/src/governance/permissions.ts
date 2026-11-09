@@ -6,7 +6,7 @@ import { ForbiddenException } from '@nestjs/common';
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: ['*'],
-  manager: ['inbox.*', 'integrations.view', 'customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*'],
+  manager: ['inbox.*', 'integrations.view', 'customers.*', 'sales.*', 'operations.*', 'marketing.*', 'agents.view', 'agents.run', 'agents.manage', 'orders.*', 'bookings.*', 'clinic.*', 'insurance.view', 'monitoring.*', 'office.view', 'office.run', 'office.approve'],
   sales: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'sales.view', 'agents.view', 'agents.run', 'finance.record_payment'],
   operations: ['inbox.view', 'customers.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'agents.view', 'agents.run', 'orders.*', 'monitoring.view', 'monitoring.operate'],
   // Hotel front desk: reservations, check-in / check-out, room status.
@@ -24,13 +24,13 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
   // monitoring incidents), no people / settings / integrations / finance approvals.
   operator: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'sales.view', 'operations.view', 'operations.receive_stock', 'operations.manage_tasks', 'operations.dispatch', 'orders.*', 'bookings.view', 'bookings.manage', 'clinic.view', 'clinic.manage', 'monitoring.view', 'monitoring.operate', 'marketing.view', 'agents.view', 'agents.run'],
   // Read-only demo / stakeholder access: views the workspace; every write is refused by the auth guard.
-  viewer: ['inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
+  viewer: ['office.view', 'inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
   // Team lead: runs the team inbox (assigns, labels, saved replies), the CRM and campaigns drafts; no settings / people.
   team_lead: ['inbox.*', 'customers.*', 'sales.view', 'marketing.view', 'marketing.manage', 'orders.view', 'bookings.view', 'agents.view', 'agents.run'],
   // Support agent: answers customers in the inbox and keeps their records; no campaigns, no settings.
   support: ['inbox.view', 'inbox.reply', 'customers.view', 'customers.manage', 'orders.view', 'bookings.view', 'agents.view'],
   // Read-only analyst: sees everything a viewer sees (writes refused by the auth guard).
-  analyst: ['inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
+  analyst: ['office.view', 'inbox.view', 'customers.view', 'sales.view', 'operations.view', 'marketing.view', 'agents.view', 'bookings.view', 'clinic.view', 'insurance.view', 'monitoring.view', 'finance.view', 'orders.view'],
 };
 
 export const PERMISSIONS = {
@@ -88,6 +88,14 @@ export const PERMISSIONS = {
   monitoringOperate: 'monitoring.operate',
   /** Customers, sites, devices, technicians, agents (tokens), contracts, settings. */
   monitoringManage: 'monitoring.manage',
+  /** AI Office: see the floor, plans, tasks, approvals, usage and audit. */
+  officeView: 'office.view',
+  /** AI Office: give the CEO instructions, start / pause / cancel plans, retry or accept tasks. */
+  officeRun: 'office.run',
+  /** AI Office: settings, agent configurations, workflows, memory. */
+  officeManage: 'office.manage',
+  /** AI Office: approve or reject an agent's sensitive action (customer messages and other mandatory approvals). */
+  officeApprove: 'office.approve',
 } as const;
 
 export function can(role: string | undefined, permission: string): boolean {

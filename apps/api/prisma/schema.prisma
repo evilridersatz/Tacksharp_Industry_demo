@@ -72,6 +72,20 @@ model Organization {
   agentTaskEvents     AgentTaskEvent[]
   approvals           Approval[]
   workTasks           WorkTask[]
+  officeDepartments   OfficeDepartment[]
+  officeAgents        OfficeAgent[]
+  officeAgentConfigs  OfficeAgentConfiguration[]
+  officePlans         OfficePlan[]
+  officeTasks         OfficeTask[]
+  officeExecutions    OfficeExecution[]
+  officeToolCalls     OfficeToolCall[]
+  officeMessages      OfficeMessage[]
+  officeMemories      OfficeMemory[]
+  officeWorkflows     OfficeWorkflow[]
+  officeWorkflowRuns  OfficeWorkflowRun[]
+  officeAuditLogs     OfficeAuditLog[]
+  officeUsageRecords  OfficeUsageRecord[]
+  officeEvents        OfficeEvent[]
   inventoryBalances   InventoryBalance[]
   stockMovements      StockMovement[]
   invoices            Invoice[]
@@ -2888,4 +2902,382 @@ model PaymentWebhookEvent {
   receivedAt DateTime @default(now())
 
   @@unique([provider, eventId])
+}
+
+// ============================================================================================================
+// AI Office: a CEO agent plans an owner's instruction into tasks for specialist agents; a MySQL state machine
+// (driven by BullMQ) runs them. Models only propose plans, messages and tool calls; the engine decides. Every row is
+// scoped by organizationId. Approvals reuse the shared Approval table (actions office.*).
+// ============================================================================================================
+
+/// A department of the office (operations, sales, ...): groups agents on the office floor.
+model OfficeDepartment {
+  id             String        @id @default(cuid())
+  organizationId String
+  key            String        @db.VarChar(40)
+  name           String        @db.VarChar(80)
+  sort           Int           @default(0)
+  createdAt      DateTime      @default(now())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agents         OfficeAgent[]
+
+  @@unique([organizationId, key])
+}
+
+/// One AI employee of the office. Its behaviour comes from the active, versioned configuration.
+model OfficeAgent {
+  id             String                     @id @default(cuid())
+  organizationId String
+  departmentId   String?
+  /// ceo | operations | sales | support | reporting | qa | finance | marketing | hr | research
+  role           String                     @db.VarChar(30)
+  name           String                     @db.VarChar(80)
+  /// idle | working | waiting | paused | error
+  status         String                     @default("idle") @db.VarChar(20)
+  /// Kill switch: a paused agent takes no step and calls no tool.
+  paused         Boolean                    @default(false)
+  enabled        Boolean                    @default(true)
+  /// healthy | steering | constrained | stopped (circuit breaker level)
+  breaker        String                     @default("healthy") @db.VarChar(20)
+  currentTaskId  String?
+  activeVersion  Int                        @default(1)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+  organization   Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department     OfficeDepartment?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  configurations OfficeAgentConfiguration[]
+  tasks          OfficeTask[]
+
+  @@unique([organizationId, role])
+  @@index([organizationId, status])
+  @@index([departmentId])
+}
+
+/// A version of an agent's configuration. Never edited: a change writes the next version.
+model OfficeAgentConfiguration {
+  id             String                 @id @default(cuid())
+  organizationId String
+  agentId        String
+  version        Int
+  model          String                 @db.VarChar(60)
+  /// Extra guidance from the owner (added to the role's fixed instructions, never replacing them).
+  instructions   String?                @db.Text
+  /// Roles this agent may message or delegate to.
+  canMessage     Json
+  /// { maxStepsPerTask, maxToolCallsPerTask, maxTokensPerTask }
+  budgets        Json
+  createdBy      String                 @db.VarChar(191)
+  note           String?                @db.VarChar(300)
+  createdAt      DateTime               @default(now())
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent          OfficeAgent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tools          OfficeToolPermission[]
+
+  @@unique([agentId, version])
+  @@index([organizationId])
+}
+
+/// Whether an agent configuration may use a tool: auto | approval | denied (mandatory approvals cannot be lowered).
+model OfficeToolPermission {
+  id            String                   @id @default(cuid())
+  agentConfigId String
+  tool          String                   @db.VarChar(60)
+  mode          String                   @db.VarChar(20)
+  limits        Json?
+  config        OfficeAgentConfiguration @relation(fields: [agentConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([agentConfigId, tool])
+}
+
+/// One owner instruction (or a workflow run) planned by the CEO agent into tasks.
+model OfficePlan {
+  id             String       @id @default(cuid())
+  organizationId String
+  instruction    String       @db.Text
+  /// manual | supervised | autonomous
+  mode           String       @db.VarChar(20)
+  /// draft | running | completed | failed | cancelled | paused
+  status         String       @default("draft") @db.VarChar(20)
+  summary        String?      @db.Text
+  /// The validated CEO plan (tasks, owners, dependencies, tools) as proposed.
+  plan           Json
+  /// { tokensIn, tokensOut, usd, inr, tasks, model }
+  estimate       Json
+  /// { maxUsd, maxTokens, maxSteps, maxToolCalls, deadlineMinutes }
+  budgets        Json
+  tokensIn       Int          @default(0)
+  tokensOut      Int          @default(0)
+  costUsd        Decimal      @default(0) @db.Decimal(12, 6)
+  steps          Int          @default(0)
+  toolCalls      Int          @default(0)
+  report         String?      @db.Text
+  reportData     Json?
+  /// Same key = same plan (double click, workflow re-trigger).
+  idempotencyKey String       @db.VarChar(191)
+  source         String       @default("owner") @db.VarChar(20)
+  workflowRunId  String?
+  createdBy      String       @db.VarChar(191)
+  approvedBy     String?      @db.VarChar(191)
+  deadline       DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks          OfficeTask[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status, createdAt])
+}
+
+/// One unit of work for one agent. The engine is the only writer of `status`.
+model OfficeTask {
+  id             String                 @id @default(cuid())
+  organizationId String
+  planId         String?
+  agentId        String
+  role           String                 @db.VarChar(30)
+  /// The task's key inside its plan (dependencies refer to it).
+  key            String                 @db.VarChar(40)
+  title          String                 @db.VarChar(300)
+  instructions   String                 @db.Text
+  /// blocked | queued | running | waiting_tool | waiting_approval | verifying | needs_review | completed | failed |
+  /// paused | cancelled | dead_letter
+  status         String                 @default("blocked") @db.VarChar(20)
+  priority       Int                    @default(5)
+  idempotencyKey String                 @db.VarChar(191)
+  parentTaskId   String?
+  /// Delegation depth from the plan's own tasks (bounded, so agents can never loop).
+  depth          Int                    @default(0)
+  attempts       Int                    @default(0)
+  maxAttempts    Int                    @default(2)
+  /// QA send-backs used (a failed review sends the task back once, then to a person).
+  reviews        Int                    @default(0)
+  runAfter       DateTime?
+  /// A running task's lease: past it, the worker is presumed dead and the task is recovered.
+  leaseUntil     DateTime?
+  deadline       DateTime?
+  tools          Json
+  /// Engine-owned context: drafts, pending tool proposal, approved call, QA feedback.
+  context        Json?
+  result         Json?
+  verification   Json?
+  error          String?                @db.Text
+  verifiedAt     DateTime?
+  createdBy      String                 @db.VarChar(191)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           OfficePlan?            @relation(fields: [planId], references: [id], onDelete: Cascade)
+  agent          OfficeAgent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  parent         OfficeTask?            @relation("OfficeTaskDelegation", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  children       OfficeTask[]           @relation("OfficeTaskDelegation")
+  dependsOn      OfficeTaskDependency[] @relation("OfficeTaskDependent")
+  dependents     OfficeTaskDependency[] @relation("OfficeTaskPrerequisite")
+  executions     OfficeExecution[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status, priority])
+  @@index([planId])
+  @@index([status, leaseUntil])
+  @@index([agentId])
+  @@index([parentTaskId])
+}
+
+model OfficeTaskDependency {
+  id          String     @id @default(cuid())
+  taskId      String
+  dependsOnId String
+  task        OfficeTask @relation("OfficeTaskDependent", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn   OfficeTask @relation("OfficeTaskPrerequisite", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+/// One attempt at a task: model, steps, tool calls, tokens, cost, error class.
+model OfficeExecution {
+  id             String       @id @default(cuid())
+  organizationId String
+  taskId         String
+  attempt        Int
+  model          String?      @db.VarChar(60)
+  /// running | done | waiting_approval | failed | stopped
+  status         String       @default("running") @db.VarChar(20)
+  steps          Int          @default(0)
+  toolCalls      Int          @default(0)
+  tokensIn       Int          @default(0)
+  tokensOut      Int          @default(0)
+  costUsd        Decimal      @default(0) @db.Decimal(12, 6)
+  errorClass     String?      @db.VarChar(40)
+  error          String?      @db.Text
+  trace          Json?
+  startedAt      DateTime     @default(now())
+  finishedAt     DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  task           OfficeTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, attempt])
+  @@index([organizationId, startedAt])
+}
+
+/// Every tool call, keyed so a retried task never repeats a write (the stored result is returned instead).
+model OfficeToolCall {
+  id             String       @id @default(cuid())
+  organizationId String
+  taskId         String
+  agentRole      String       @db.VarChar(30)
+  tool           String       @db.VarChar(60)
+  /// sha256(task + tool + arguments)
+  idempotencyKey String       @db.VarChar(64)
+  args           Json
+  /// ok | error | denied | approval_required
+  status         String       @db.VarChar(20)
+  result         Json?
+  /// What the verifier re-checks later (e.g. { workTaskId } / { conversationId, assigneeId }).
+  evidence       Json?
+  ms             Int          @default(0)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([taskId, createdAt])
+}
+
+/// Structured message between agents (speech acts). Agents write to their outbox; delivery moves it to the inbox.
+model OfficeMessage {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// The conversation (the plan id, or a task id outside plans): the hop cap counts per conversation.
+  correlationId  String       @db.VarChar(191)
+  inReplyTo      String?
+  taskId         String?
+  fromRole       String       @db.VarChar(30)
+  toRole         String       @db.VarChar(30)
+  /// request | inform | propose | query | agree | refuse | done
+  act            String       @db.VarChar(20)
+  body           String       @db.Text
+  hops           Int          @default(0)
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, toRole, deliveredAt])
+  @@index([organizationId, correlationId])
+}
+
+/// Department / organization memory with provenance. Agent-written items start as `proposed`.
+model OfficeMemory {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// organization | department | agent
+  scope          String       @db.VarChar(20)
+  scopeKey       String?      @db.VarChar(40)
+  text           String       @db.Text
+  source         String       @db.VarChar(300)
+  author         String       @db.VarChar(191)
+  /// proposed | verified | rejected
+  status         String       @default("proposed") @db.VarChar(20)
+  version        Int          @default(1)
+  pinned         Boolean      @default(false)
+  expiresAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, scope, status])
+}
+
+/// A standing instruction run by a business event (type + version) or a daily schedule (India time).
+model OfficeWorkflow {
+  id             String              @id @default(cuid())
+  organizationId String
+  name           String              @db.VarChar(120)
+  /// event | schedule
+  triggerType    String              @db.VarChar(20)
+  /// event: "order.completed.v1"; schedule: "daily@08:30"
+  trigger        String              @db.VarChar(80)
+  instruction    String              @db.Text
+  mode           String              @db.VarChar(20)
+  enabled        Boolean             @default(true)
+  lastRunAt      DateTime?
+  createdBy      String              @db.VarChar(191)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs           OfficeWorkflowRun[]
+
+  @@index([organizationId, triggerType, enabled])
+}
+
+model OfficeWorkflowRun {
+  id             String         @id @default(cuid())
+  organizationId String
+  workflowId     String
+  /// The event id or the schedule date: one run per trigger, however often it is seen.
+  triggerKey     String         @db.VarChar(191)
+  planId         String?
+  /// started | skipped | failed
+  status         String         @db.VarChar(20)
+  note           String?        @db.VarChar(500)
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow       OfficeWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, triggerKey])
+  @@index([organizationId, createdAt])
+}
+
+/// Append-only audit of everything the office did or was told to do.
+model OfficeAuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// user:<id> | agent:<role> | engine
+  actor          String       @db.VarChar(191)
+  action         String       @db.VarChar(80)
+  target         String?      @db.VarChar(191)
+  data           Json?
+  at             DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, at])
+}
+
+/// Model usage per call: tokens and cost (US$ from the price table), per plan, task and agent.
+model OfficeUsageRecord {
+  id             String       @id @default(cuid())
+  organizationId String
+  planId         String?
+  taskId         String?
+  agentRole      String       @db.VarChar(30)
+  model          String       @db.VarChar(60)
+  tokensIn       Int
+  tokensOut      Int
+  cachedIn       Int          @default(0)
+  costUsd        Decimal      @db.Decimal(12, 6)
+  at             DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, at])
+  @@index([organizationId, agentRole, at])
+}
+
+/// Versioned business events from other Tacksharp products (lead.created.v1, order.completed.v1, call.ended.v1).
+model OfficeEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  type           String       @db.VarChar(60)
+  version        Int          @default(1)
+  /// The producer's own id for the event: the same event published twice is stored once.
+  key            String       @db.VarChar(191)
+  payload        Json
+  consumedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@index([consumedAt, createdAt])
 }
