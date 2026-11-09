@@ -96,6 +96,8 @@ export function BusinessAssistant() {
   const mergeRole = useRef<'user' | 'assistant' | null>(null);
   /** This call's Sarvam interaction id, and the pending push of the caller's words to our server. */
   const iidRef = useRef<string | null>(null);
+  /** What happened on the live call, sent with the transcript when it ends, so a dropped call can be explained. */
+  const diag = useRef({ states: [] as string[], micChunks: 0, lastMic: 0, agentChunks: 0, lastAgent: 0, lastLine: 0 });
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const phoneOk = phone.replace(/\D/g, '').length >= 10;
   const phoneRef = useRef(phone);
@@ -162,6 +164,7 @@ export function BusinessAssistant() {
 
   /** One spoken line from the live call: pieces of the same turn grow one bubble. */
   const addCallLine = useCallback((role: 'user' | 'assistant', content: string) => {
+    diag.current.lastLine = Date.now();
     const text = content.trim();
     if (!text) return;
     const lines = callLines.current;
@@ -189,8 +192,10 @@ export function BusinessAssistant() {
     void c?.stop().catch(() => undefined);
   }, []);
 
-  const endCall = useCallback(async (reason?: string) => {
+  const endCall = useCallback(async (reason?: string, by = 'staff') => {
     const a = agent.current;
+    const endedAt = Date.now();
+    const hadVideo = Boolean(simli.current);
     agent.current = null;
     setCall((c) => (c === 'off' ? 'off' : 'ended'));
     setLevel(0);
@@ -204,7 +209,10 @@ export function BusinessAssistant() {
     const usedId = iidRef.current;
     iidRef.current = null;
     if (a) {
-      await api.post('/business-assistant/live/transcript', { phone, interactionId: a.getInteractionId() ?? usedId ?? null, durationSec: Math.round((Date.now() - startedAt.current) / 1000), lines }).catch(() => undefined);
+      const d = diag.current;
+      const ago = (t: number) => (t ? Math.round((endedAt - t) / 1000) : null);
+      const endInfo = { by, states: d.states.slice(-12).join(' '), micChunks: d.micChunks, micIdleSec: ago(d.lastMic), agentChunks: d.agentChunks, agentIdleSec: ago(d.lastAgent), lineIdleSec: ago(d.lastLine), video: hadVideo || undefined, hidden: typeof document !== 'undefined' ? document.hidden : undefined };
+      await api.post('/business-assistant/live/transcript', { phone, interactionId: a.getInteractionId() ?? usedId ?? null, durationSec: Math.round((endedAt - startedAt.current) / 1000), lines, end: endInfo }).catch(() => undefined);
     }
     loadMemory(phone);
   }, [phone, loadMemory, stopVideo]);
@@ -228,7 +236,7 @@ export function BusinessAssistant() {
       if (agent.current) {
         setWithVideo(false);
         setNotice('The video stopped. The call goes on by voice.');
-      } else void endCall('The video call ended.');
+      } else void endCall('The video call ended.', 'video_stopped');
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -254,6 +262,7 @@ export function BusinessAssistant() {
     callLines.current = [];
     mergeRole.current = null;
     startedAt.current = Date.now();
+    diag.current = { states: [], micChunks: 0, lastMic: 0, agentChunks: 0, lastAgent: 0, lastLine: 0 };
     setSeconds(0);
     try {
       const [s, sdk, before] = await Promise.all([
@@ -267,18 +276,22 @@ export function BusinessAssistant() {
       const onLevel = (l: { rms: number }) => setLevel(Math.min(1, l.rms * 5));
       // Video: the agent's audio drives the presenter (which plays it); voice: the SDK plays it directly.
       // While the video runs its lips follow the agent's audio; if it stops, the same audio plays on the speakers.
-      const audio = presenter
-        ? new (class extends sdk.BrowserAudioInterface {
-            async output(a: Uint8Array, rate?: number) {
-              if (simli.current === presenter) presenter.sendAudioData(a);
-              else await super.output(a, rate ?? 16000);
-            }
-            interrupt() {
-              if (simli.current === presenter) { try { presenter.ClearBuffer(); } catch { /* ended */ } }
-              else super.interrupt();
-            }
-          })(16000, { outputLevelCallback: onLevel })
-        : new sdk.BrowserAudioInterface(16000, { outputLevelCallback: onLevel });
+      // Microphone audio sent and agent audio received are counted (no content kept) for the end-of-call report.
+      const d = diag.current;
+      const audio = new (class extends sdk.BrowserAudioInterface {
+        async start(cb: Parameters<InstanceType<typeof sdk.BrowserAudioInterface>['start']>[0]) {
+          return super.start(async (data, frames) => { d.micChunks++; d.lastMic = Date.now(); return cb(data, frames); });
+        }
+        async output(a: Uint8Array, rate?: number) {
+          d.agentChunks++; d.lastAgent = Date.now();
+          if (presenter && simli.current === presenter) presenter.sendAudioData(a);
+          else await super.output(a, rate);
+        }
+        interrupt() {
+          if (presenter && simli.current === presenter) { try { presenter.ClearBuffer(); } catch { /* ended */ } }
+          else super.interrupt();
+        }
+      })(16000, { outputLevelCallback: onLevel });
       const a = new sdk.ConversationAgent({
         apiKey: '',
         baseUrl: `${API_URL}/business-assistant/live/runtime/${encodeURIComponent(s.organizationId)}/`,
@@ -287,11 +300,17 @@ export function BusinessAssistant() {
         audioInterface: audio,
         transcriptCallback: async (m: { role: string; content: string }) => addCallLine(m.role === 'user' ? 'user' : 'assistant', m.content),
         stateCallback: (st: string) => {
+          d.states.push(`${st}@${Math.round((Date.now() - startedAt.current) / 1000)}`);
           if (st === 'listening' || st === 'connected') setCall('listening');
           else if (st === 'speaking') setCall('speaking');
-          else if (st === 'error') void endCall('The call dropped. Check your internet and start it again.');
+          else if (st === 'error') void endCall('The call dropped. Check your internet and start it again.', 'state_error');
         },
-        endCallback: async () => { if (agent.current === a) void endCall(); },
+        // Sarvam closed the call (the agent ended it, or its no-speech timeout). Say so instead of ending silently.
+        endCallback: async () => {
+          if (agent.current !== a) return;
+          const quiet = d.lastLine ? Date.now() - d.lastLine : Date.now() - startedAt.current;
+          void endCall(quiet > 40_000 ? 'The call ended: nothing was heard for about a minute. Check the microphone and speak after the agent.' : 'The agent ended the call.', 'sarvam_ended');
+        },
       }) as unknown as AgentLike;
       agent.current = a;
       await a.start();
@@ -323,7 +342,7 @@ export function BusinessAssistant() {
     } catch (e) {
       const name = (e as DOMException)?.name;
       const why = name === 'NotAllowedError' ? 'Microphone permission is blocked. Allow it in the browser (lock icon in the address bar).' : name === 'NotFoundError' ? 'No microphone was found.' : errText(e);
-      await endCall(`The call could not start: ${why}`);
+      await endCall(`The call could not start: ${why}`, 'start_failed');
       setCall('off');
     } finally {
       starting.current = false;
@@ -380,7 +399,7 @@ export function BusinessAssistant() {
     if (pane !== 'help' || helpGreeting) return;
     api.get<{ greeting: string }>('/assistant/status?lang=en').then((s) => setHelpGreeting(s.greeting)).catch(() => setHelpGreeting('Hi! Ask me how to use Tacksharp.'));
   }, [pane, helpGreeting]);
-  const close = () => { if (onCall) void endCall(); setOpen(false); };
+  const close = () => { if (onCall) void endCall(undefined, 'panel_closed'); setOpen(false); };
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };

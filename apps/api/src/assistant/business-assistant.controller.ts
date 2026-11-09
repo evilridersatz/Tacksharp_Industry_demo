@@ -47,6 +47,23 @@ export function callIdOf(v: unknown): string {
   const s = typeof v === 'string' ? v.trim() : '';
   return /^[^\s\x00-\x1f\x7f]{4,160}$/u.test(s) ? s : '';
 }
+/** The browser's end-of-call report, reduced to known fields of safe types (it carries no words or numbers). */
+function endReport(v: unknown) {
+  const e = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? Math.max(0, Math.min(1e7, Math.round(x))) : null);
+  const word = (x: unknown, max: number) => (typeof x === 'string' ? x.replace(/[^\w@ .-]/g, '').slice(0, max) : null);
+  return {
+    endedBy: word(e.by, 20),
+    states: word(e.states, 240),
+    micChunks: num(e.micChunks),
+    micIdleSec: num(e.micIdleSec),
+    agentChunks: num(e.agentChunks),
+    agentIdleSec: num(e.agentIdleSec),
+    lineIdleSec: num(e.lineIdleSec),
+    video: e.video === true,
+    tabHidden: e.hidden === true,
+  };
+}
 /** Why an id was refused, without the id itself: length and which kinds of characters it has. */
 function callIdShape(v: unknown) {
   if (typeof v !== 'string') return { idType: v === undefined ? 'missing' : typeof v };
@@ -340,8 +357,10 @@ export class BusinessAssistantController {
    */
   @Post('live/transcript')
   @HttpCode(200)
-  async liveTranscript(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown; interactionId?: unknown; durationSec?: unknown; lines?: unknown }) {
+  async liveTranscript(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown; interactionId?: unknown; durationSec?: unknown; lines?: unknown; end?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
+    // How the call ended (who closed it, audio counters, call states): logged for every call, even one with no words.
+    log.info('business_assistant.live_ended', { organizationId, durationSec: Number(body?.durationSec) || 0, lines: Array.isArray(body?.lines) ? body.lines.length : 0, ...endReport(body?.end) });
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!phone) throw new BadRequestException('Mobile number required.');
     // The call is over: it is no longer a live dashboard call for the agent's tools.
