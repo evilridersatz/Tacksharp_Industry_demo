@@ -220,7 +220,16 @@ export function BusinessAssistant() {
       const { SimliClient, LogLevel } = await import('simli-client');
       client = new SimliClient(sessionToken, videoEl.current!, videoAudioEl.current!, null, LogLevel.ERROR, 'livekit') as unknown as SimliLike;
     }
-    client.on('stop', () => { if (simli.current === client) void endCall('The video call ended.'); });
+    // The video can end on its own (network, Simli's limits). The phone agent call does not end with it: the agent's
+    // audio switches to the speakers and the call goes on by voice.
+    client.on('stop', () => {
+      if (simli.current !== client) return;
+      simli.current = null;
+      if (agent.current) {
+        setWithVideo(false);
+        setNotice('The video stopped. The call goes on by voice.');
+      } else void endCall('The video call ended.');
+    });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       // start() rejects at once with Simli's own reason when it refuses the session (expired token, no minutes left).
@@ -257,11 +266,18 @@ export function BusinessAssistant() {
       const presenter = video ? await startPresenter() : null;
       const onLevel = (l: { rms: number }) => setLevel(Math.min(1, l.rms * 5));
       // Video: the agent's audio drives the presenter (which plays it); voice: the SDK plays it directly.
+      // While the video runs its lips follow the agent's audio; if it stops, the same audio plays on the speakers.
       const audio = presenter
         ? new (class extends sdk.BrowserAudioInterface {
-            async output(a: Uint8Array) { presenter.sendAudioData(a); }
-            interrupt() { try { presenter.ClearBuffer(); } catch { /* ended */ } }
-          })(16000)
+            async output(a: Uint8Array, rate?: number) {
+              if (simli.current === presenter) presenter.sendAudioData(a);
+              else await super.output(a, rate ?? 16000);
+            }
+            interrupt() {
+              if (simli.current === presenter) { try { presenter.ClearBuffer(); } catch { /* ended */ } }
+              else super.interrupt();
+            }
+          })(16000, { outputLevelCallback: onLevel })
         : new sdk.BrowserAudioInterface(16000, { outputLevelCallback: onLevel });
       const a = new sdk.ConversationAgent({
         apiKey: '',

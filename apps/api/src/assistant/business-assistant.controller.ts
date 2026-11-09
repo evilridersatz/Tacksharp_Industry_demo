@@ -40,6 +40,20 @@ function liveTicket(organizationId: string, appId: string, exp: number, secret: 
 }
 
 /**
+ * Sarvam's Interaction ID as the browser SDK reports it. Trimmed the same way the agent's tool requests are read (so
+ * both sides use the same key), any characters except spaces and control characters accepted: Sarvam's ids are not only letters, digits and "-".
+ */
+export function callIdOf(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return /^[^\s\x00-\x1f\x7f]{4,160}$/u.test(s) ? s : '';
+}
+/** Why an id was refused, without the id itself: length and which kinds of characters it has. */
+function callIdShape(v: unknown) {
+  if (typeof v !== 'string') return { idType: v === undefined ? 'missing' : typeof v };
+  return { idLength: v.length, idTrimmedLength: v.trim().length, idHasSpace: /\s/.test(v), idNonAscii: /[^\x00-\x7f]/.test(v), idControl: /[\x00-\x1f]/.test(v) };
+}
+
+/**
  * The dashboard assistant in "business" mode: staff talk to THEIR business's assistant as a customer would, by chat,
  * voice or the video presenter. Every turn goes through the same engine as WhatsApp and phone calls (a restaurant:
  * the ordering engine with the live menu, prices, stock, outlets and the customer's history by mobile number), on the
@@ -265,10 +279,10 @@ export class BusinessAssistantController {
   @HttpCode(200)
   async liveBind(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown; replaces?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
-    const id = typeof body?.interactionId === 'string' && /^[\w.:@|+=-]{4,160}$/.test(body.interactionId) ? body.interactionId : '';
+    const id = callIdOf(body?.interactionId);
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!id || !phone) {
-      log.warn('business_assistant.live_bind_refused', { organizationId, idLength: typeof body?.interactionId === 'string' ? body.interactionId.length : null, hasPhone: Boolean(phone) });
+      log.warn('business_assistant.live_bind_refused', { organizationId, ...callIdShape(body?.interactionId), hasPhone: Boolean(phone) });
       throw new BadRequestException('interactionId and phone are required.');
     }
     const store = sharedCartStore();
@@ -302,9 +316,12 @@ export class BusinessAssistantController {
   @HttpCode(200)
   async liveLines(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { interactionId?: unknown; phone?: unknown; lines?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
-    const id = typeof body?.interactionId === 'string' && /^[\w.:@|+=-]{4,160}$/.test(body.interactionId) ? body.interactionId : '';
+    const id = callIdOf(body?.interactionId);
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
-    if (!id || !phone) throw new BadRequestException('interactionId and phone are required.');
+    if (!id || !phone) {
+      log.warn('business_assistant.live_lines_refused', { organizationId, ...callIdShape(body?.interactionId), hasPhone: Boolean(phone) });
+      throw new BadRequestException('interactionId and phone are required.');
+    }
     const lines = (Array.isArray(body?.lines) ? body.lines : [])
       .filter((l): l is { role: string; content: string } => Boolean(l) && typeof (l as { content?: unknown }).content === 'string')
       .slice(-60)
@@ -328,14 +345,15 @@ export class BusinessAssistantController {
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!phone) throw new BadRequestException('Mobile number required.');
     // The call is over: it is no longer a live dashboard call for the agent's tools.
-    if (typeof body?.interactionId === 'string' && body.interactionId) await this.markActive(organizationId, body.interactionId.slice(0, 120), null);
+    const endedId = callIdOf(body?.interactionId);
+    if (endedId) await this.markActive(organizationId, endedId, null);
     const lines = (Array.isArray(body?.lines) ? body.lines : [])
       .filter((l): l is { role: string; content: string } => Boolean(l) && typeof (l as { content?: unknown }).content === 'string')
       .slice(0, 200)
       .map((l) => ({ role: l.role === 'user' ? ('user' as const) : ('assistant' as const), content: l.content.trim().slice(0, 4000) }))
       .filter((l) => l.content);
     if (!lines.length) return { saved: false };
-    const interactionId = typeof body?.interactionId === 'string' && /^[\w-]{1,120}$/.test(body.interactionId) ? body.interactionId : `web-${randomUUID()}`;
+    const interactionId = (endedId && endedId.length <= 120 ? endedId : '') || `web-${randomUUID()}`;
     if (await this.prisma.call.findFirst({ where: { organizationId, providerCallId: interactionId }, select: { id: true } })) return { saved: false, duplicate: true };
     const durationSec = Number.isFinite(Number(body?.durationSec)) ? Math.max(0, Math.min(7200, Math.round(Number(body.durationSec)))) : null;
     const customer = (await this.prisma.customer.findFirst({ where: { organizationId, phone } })) ?? (await this.prisma.customer.create({ data: { organizationId, phone, source: 'voice_web' } }));

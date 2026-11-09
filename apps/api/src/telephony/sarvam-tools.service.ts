@@ -309,7 +309,10 @@ export class SarvamToolsService {
   private standIn(active: ActiveCall[], body: Record<string, unknown>): ActiveCall | undefined {
     if (normalizePhone(str(body.caller_phone ?? body.user_phone_number ?? body.user_identifier ?? body.phone, 30))) return undefined;
     const waiting = active.filter((c) => c.iid.startsWith('web-'));
-    return waiting.length === 1 ? waiting[0] : undefined;
+    if (waiting.length === 1) return waiting[0];
+    // The browser's id for the call and the id in Sarvam's tool request can be written differently: with exactly one
+    // live dashboard call and no caller number in the request (a real phone call always has one), it is that call.
+    return waiting.length === 0 && active.length === 1 ? active[0] : undefined;
   }
 
   /** True when this request comes from a call the dashboard assistant is running (not a real phone call). */

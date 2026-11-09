@@ -162,8 +162,10 @@ export class AssistantService {
    * SIMLI_BACKGROUND_ID: one of the account's uploaded backgrounds (optional).
    */
   async videoSession(opts: { business?: boolean } = {}) {
-    const apiKey = process.env.SIMLI_API_KEY ?? '';
-    const faceId = process.env.SIMLI_FACE_ID ?? '';
+    // Trimmed, with surrounding quotes removed: a pasted key often carries a space, a Windows "\r" or quotes.
+    const clean = (v: string | undefined) => (v ?? '').trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+    const apiKey = clean(process.env.SIMLI_API_KEY);
+    const faceId = clean(process.env.SIMLI_FACE_ID);
     if (!apiKey || !faceId) throw new ServiceUnavailableException('The video presenter is not set up. Chat and voice still work.');
     const num = (name: string, fallback: number) => Number(process.env[name]) || fallback;
     const backgroundId = (process.env.SIMLI_BACKGROUND_ID ?? '').trim();
@@ -189,7 +191,11 @@ export class AssistantService {
       return { sessionToken: r.session_token };
     } catch (e) {
       // Simli's own reason (e.g. no minutes left, invalid face) is logged; the key is never part of it.
-      const reason = (typeof e === 'string' ? e : errorMessage(e)).replaceAll(apiKey, '***').slice(0, 300);
+      // Any session token in Simli's reply is hidden too (it is short-lived, but has no place in a log or on screen).
+      const reason = (typeof e === 'string' ? e : errorMessage(e))
+        .replaceAll(apiKey, '***')
+        .replace(/("?session_token"?\s*[:=]\s*"?)[^",}\s]+/gi, '$1***')
+        .slice(0, 300);
       log.warn('assistant.video_refused', { reason, ms: Date.now() - started });
       if (/minute|credit|quota|balance/i.test(reason)) throw new ServiceUnavailableException('The video presenter has no minutes left on the Simli account. Chat and voice still work.');
       // Signed-in staff (business dashboard) see Simli's own reason, so the cause is visible without server logs.
