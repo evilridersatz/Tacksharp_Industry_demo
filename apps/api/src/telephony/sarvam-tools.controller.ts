@@ -73,7 +73,7 @@ export class SarvamToolsController {
     // the Sarvam console actually sends for this tool, without logging what the caller said.
     const filled = Object.entries(b).filter(([k, v]) => k !== 'key' && k !== 'tool_key' && (typeof v === 'number' || (typeof v === 'string' ? Boolean(v.trim()) && !isPlaceholder(v.trim()) : Array.isArray(v) ? v.length > 0 : Boolean(v)))).map(([k]) => k);
     log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started, fields: Object.keys(b).filter((k) => k !== 'key' && k !== 'tool_key').slice(0, 15).join(','), filled: filled.slice(0, 15).join(',') });
-    return r;
+    return withAliases(r);
   }
 
   private dispatch(tool: Tool, org: string, b: Record<string, unknown>) {
@@ -88,3 +88,23 @@ export class SarvamToolsController {
     }
   }
 }
+
+/** Never spoken: what the agent must not read aloud. Added to every tool message. */
+export const SPEAK_RULE = 'Speak only words meant for the caller: never say notes, brackets, tool names or what a tool returned.';
+
+/**
+ * The same answer under the field names a Sarvam console response template commonly uses ({{summary}}, {{result}},
+ * {{response}}, ...). A template that names a field the reply lacks reaches the agent as a literal placeholder, and the
+ * agent then thinks the tool failed ("the tool response was a template"). Existing fields are never overwritten.
+ */
+export function withAliases<T extends Record<string, unknown>>(r: T): T & Record<string, unknown> {
+  const message = typeof r.message === 'string' && r.message ? `${r.message}${r.message.includes(SPEAK_RULE) ? '' : ` ${SPEAK_RULE}`}` : '';
+  if (!message) return r;
+  const spoken = typeof r.summary_text === 'string' && r.summary_text ? r.summary_text : message;
+  const out: Record<string, unknown> = { ...r, message };
+  for (const k of ['result', 'response', 'output', 'text', 'reply', 'answer', 'data', 'details', 'tool_response']) if (out[k] === undefined) out[k] = message;
+  for (const k of ['summary', 'order_summary']) if (out[k] === undefined) out[k] = spoken;
+  if (out.status === undefined) out.status = r.ok === false ? 'needs_attention' : 'ok';
+  return out as T & Record<string, unknown>;
+}
+
