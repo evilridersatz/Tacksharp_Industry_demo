@@ -73,7 +73,7 @@ export class SarvamToolsController {
     // the Sarvam console actually sends for this tool, without logging what the caller said.
     const filled = Object.entries(b).filter(([k, v]) => k !== 'key' && k !== 'tool_key' && (typeof v === 'number' || (typeof v === 'string' ? Boolean(v.trim()) && !isPlaceholder(v.trim()) : Array.isArray(v) ? v.length > 0 : Boolean(v)))).map(([k]) => k);
     log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started, fields: Object.keys(b).filter((k) => k !== 'key' && k !== 'tool_key').slice(0, 15).join(','), filled: filled.slice(0, 15).join(',') });
-    return withAliases(withAllFields(tool as Tool, r));
+    return forAgent(tool as Tool, withAllFields(tool as Tool, r));
   }
 
   private dispatch(tool: Tool, org: string, b: Record<string, unknown>) {
@@ -89,22 +89,18 @@ export class SarvamToolsController {
   }
 }
 
-/** Never spoken: what the agent must not read aloud. Added to every tool message. */
-export const SPEAK_RULE = 'Speak only words meant for the caller: never say notes, brackets, tool names or what a tool returned.';
+/** Never spoken: what the agent must not read aloud. Added once to every tool message (kept short: it costs tokens). */
+export const SPEAK_RULE = 'Say only words for the caller; never notes or tool names.';
 
 /**
- * The same answer under the field names a Sarvam console response template commonly uses ({{summary}}, {{result}},
- * {{response}}, ...). A template that names a field the reply lacks reaches the agent as a literal placeholder, and the
- * agent then thinks the tool failed ("the tool response was a template"). Existing fields are never overwritten.
+ * The reply as the agent's model reads it, kept small because every word is Sarvam LLM tokens on every turn: the
+ * console forwards @message, and a tool with "Include in context" on puts the whole reply in context. So: no copies
+ * of the message under other names, and the menu's item list (the same as menu_text) only on the GET menu route.
  */
-export function withAliases<T extends Record<string, unknown>>(r: T): T & Record<string, unknown> {
-  const message = typeof r.message === 'string' && r.message ? `${r.message}${r.message.includes(SPEAK_RULE) ? '' : ` ${SPEAK_RULE}`}` : '';
-  if (!message) return r;
-  const spoken = typeof r.summary_text === 'string' && r.summary_text ? r.summary_text : message;
-  const out: Record<string, unknown> = { ...r, message };
-  for (const k of ['result', 'response', 'output', 'text', 'reply', 'answer', 'data', 'details', 'tool_response']) if (out[k] === undefined) out[k] = message;
-  for (const k of ['summary', 'order_summary']) if (out[k] === undefined) out[k] = spoken;
-  if (out.status === undefined) out.status = r.ok === false ? 'needs_attention' : 'ok';
+export function forAgent<T extends Record<string, unknown>>(tool: Tool, r: T): T & Record<string, unknown> {
+  const out: Record<string, unknown> = { ...r };
+  if (tool === 'menu') delete out.items;
+  if (typeof out.message === 'string' && out.message && !out.message.includes(SPEAK_RULE)) out.message = `${out.message} ${SPEAK_RULE}`;
   return out as T & Record<string, unknown>;
 }
 

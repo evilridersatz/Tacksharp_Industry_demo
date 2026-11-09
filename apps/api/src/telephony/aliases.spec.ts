@@ -1,24 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { SPEAK_RULE, withAliases, withAllFields } from './sarvam-tools.controller.js';
+import { SPEAK_RULE, forAgent, withAllFields } from './sarvam-tools.controller.js';
 
-describe('withAliases (tool replies under the names a console template may use)', () => {
-  it('fills common template names from the message and keeps real fields', () => {
-    const r = withAliases({ ok: true, summary_text: '1 kg Broiler = ₹220. Total ₹440.', total: 440, cart_token: 'AB12', message: 'Priced. Read this to the caller.' });
-    expect(r.total).toBe(440);
-    expect(r.cart_token).toBe('AB12');
-    expect(r.summary).toBe('1 kg Broiler = ₹220. Total ₹440.');
-    expect(r.result).toContain('Priced.');
-    expect(r.response).toContain(SPEAK_RULE);
-    expect(r.status).toBe('ok');
+describe('forAgent (small replies: every word is Sarvam tokens)', () => {
+  it('sends no copies of the message and adds the speaking rule once', () => {
+    const r = forAgent('quote', { ok: true, summary_text: '1 kg Broiler = ₹220.', total: 220, cart_token: 'AB12', message: 'Priced.' });
+    expect(r).toEqual({ ok: true, summary_text: '1 kg Broiler = ₹220.', total: 220, cart_token: 'AB12', message: `Priced. ${SPEAK_RULE}` });
+    expect(forAgent('quote', r).message).toBe(r.message);
   });
-  it('never overwrites an existing field, and adds the rule once', () => {
-    const r = withAliases({ ok: true, status: 'confirmed', result: 'x', message: 'Done.' });
-    expect(r.status).toBe('confirmed');
-    expect(r.result).toBe('x');
-    expect(withAliases(r).message).toBe(r.message);
+  it('drops the menu item list (menu_text says the same)', () => {
+    expect(forAgent('menu', { ok: true, menu_text: 'Broiler 220', items: [{ name: 'Broiler' }] })).toEqual({ ok: true, menu_text: 'Broiler 220' });
   });
   it('leaves replies without a message as they are', () => {
-    expect(withAliases({ ok: false, error: 'no_phone' })).toEqual({ ok: false, error: 'no_phone' });
+    expect(forAgent('order', { ok: false, error: 'no_phone' })).toEqual({ ok: false, error: 'no_phone' });
   });
 });
 
