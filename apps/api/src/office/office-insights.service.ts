@@ -17,12 +17,14 @@ export class OfficeInsightsService {
   async floor(organizationId: string) {
     const [agents, cfg] = await Promise.all([this.setup.agents(organizationId), this.setup.config(organizationId)]);
     const currentIds = agents.map((a) => a.currentTaskId).filter((x): x is string => Boolean(x));
-    const [current, open, approvals, spend, running] = await Promise.all([
+    const [current, open, approvals, spend, running, messages] = await Promise.all([
       currentIds.length ? this.prisma.officeTask.findMany({ where: { id: { in: currentIds }, organizationId }, select: { id: true, title: true, status: true } }) : [],
       this.prisma.officeTask.groupBy({ by: ['role', 'status'], where: { organizationId, status: { in: [...OPEN] } }, _count: true }),
       this.prisma.approval.count({ where: { organizationId, action: OFFICE_APPROVAL_ACTION, status: 'pending' } }),
       this.prisma.officeUsageRecord.aggregate({ where: { organizationId, at: { gte: istDayStart(new Date()) } }, _sum: { costUsd: true } }),
       this.prisma.officePlan.count({ where: { organizationId, status: 'running' } }),
+      // Recent agent-to-agent messages: the animated floor shows them as envelopes carried between desks.
+      this.prisma.officeMessage.findMany({ where: { organizationId, createdAt: { gte: new Date(Date.now() - 15 * 60_000) } }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, fromRole: true, toRole: true, act: true, createdAt: true } }),
     ]);
     const taskOf = new Map(current.map((t) => [t.id, t]));
     const openBy = new Map<string, Record<string, number>>();
@@ -34,7 +36,7 @@ export class OfficeInsightsService {
       const t = a.currentTaskId ? taskOf.get(a.currentTaskId) : undefined;
       departments.get(key)!.agents.push({ id: a.id, role: a.role, name: a.name, status: a.paused ? 'paused' : !a.enabled ? 'off' : a.status, breaker: a.breaker, enabled: a.enabled, purpose: a.purpose, currentTask: t ? { id: t.id, title: t.title } : null, open: openBy.get(a.role) ?? {} });
     }
-    return { mode: cfg.mode, paused: cfg.paused, runningPlans: running, pendingApprovals: approvals, spendTodayUsd: r4(n(spend._sum.costUsd)), maxUsdPerDay: cfg.maxUsdPerDay, inrPerUsd: cfg.inrPerUsd, departments: [...departments.values()] };
+    return { mode: cfg.mode, paused: cfg.paused, runningPlans: running, pendingApprovals: approvals, spendTodayUsd: r4(n(spend._sum.costUsd)), maxUsdPerDay: cfg.maxUsdPerDay, inrPerUsd: cfg.inrPerUsd, departments: [...departments.values()], messages: messages.reverse() };
   }
 
   // ---------------------------------------------------------------------------------------------- usage

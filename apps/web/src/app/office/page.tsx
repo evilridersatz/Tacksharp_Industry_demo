@@ -6,13 +6,14 @@ import { useRouter } from 'next/navigation';
 import { Crown, Pause, Play, Send } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
-import { Badge, Button, Card, ErrorBanner, Skeleton, cx } from '@/components/ui';
+import { Badge, Button, Card, ErrorBanner, Segmented, Skeleton, cx } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { toast } from '@/components/toast';
 import { AgentFigure, StatusPill, errorText, usd, withInr } from '@/components/office';
+import { OfficeFloorScene, type SceneMessage } from '@/components/office-floor-scene';
 
 type FloorAgent = { id: string; role: string; name: string; status: string; breaker: string; enabled: boolean; purpose: string; currentTask: { id: string; title: string } | null; open: Record<string, number> };
-type Floor = { mode: string; paused: boolean; runningPlans: number; pendingApprovals: number; spendTodayUsd: number; maxUsdPerDay: number; inrPerUsd: number; departments: Array<{ key: string; name: string; agents: FloorAgent[] }> };
+type Floor = { messages: SceneMessage[]; mode: string; paused: boolean; runningPlans: number; pendingApprovals: number; spendTodayUsd: number; maxUsdPerDay: number; inrPerUsd: number; departments: Array<{ key: string; name: string; agents: FloorAgent[] }> };
 
 const MODE_LABEL: Record<string, string> = { manual: 'Manual: every action needs approval', supervised: 'Supervised: sensitive actions need approval', autonomous: 'Autonomous within budget and policy' };
 
@@ -20,6 +21,7 @@ export default function OfficeFloorPage() {
   const { data, error, reload } = useApi<Floor>('/office/floor', 10_000);
   const [busy, setBusy] = useState(false);
   const [instruction, setInstruction] = useState('');
+  const [view, setView] = useState<'floor' | 'list'>('floor');
   const router = useRouter();
   const togglePause = async () => {
     if (!data) return;
@@ -50,6 +52,13 @@ export default function OfficeFloorPage() {
             </form>
           </Card>
 
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[12.5px] text-muted">{view === 'floor' ? 'Live: typing = working on a task, “!” = waiting for your approval, “z z z” = paused, an envelope = a message to a colleague. Click anyone to open their page.' : 'Every agent by department.'}</p>
+            <Segmented label="View" value={view} onChange={setView} options={[{ value: 'floor', label: 'Office floor' }, { value: 'list', label: 'List' }]} />
+          </div>
+          {view === 'floor' ? (
+            <Card className="overflow-x-auto p-2"><OfficeFloorScene departments={data.departments} messages={data.messages ?? []} paused={data.paused} /></Card>
+          ) : (
           <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
             {data.departments.map((d) => (
               <section key={d.key} aria-label={d.name} className="rounded-[var(--radius-card)] border border-line bg-[repeating-linear-gradient(45deg,#f8fafc_0,#f8fafc_12px,#f1f5f9_12px,#f1f5f9_24px)] p-3">
@@ -71,6 +80,7 @@ export default function OfficeFloorPage() {
               </section>
             ))}
           </div>
+          )}
           <p className="mt-4 text-[11.5px] text-faint">Agents are AI. They only use the tools listed on their page, never see passwords or keys, and every action is recorded in the audit trail. Messages to customers always wait for a person’s approval.</p>
         </>
       )}
