@@ -360,7 +360,11 @@ export class BusinessAssistantController {
   async liveTranscript(@Org() organizationId: string, @CurrentUser() user: SessionClaims, @Body() body: { phone?: unknown; interactionId?: unknown; durationSec?: unknown; lines?: unknown; end?: unknown }) {
     if (user.role === 'viewer') throw new ForbiddenException('Your role can only view.');
     // How the call ended (who closed it, audio counters, call states): logged for every call, even one with no words.
-    log.info('business_assistant.live_ended', { organizationId, durationSec: Number(body?.durationSec) || 0, lines: Array.isArray(body?.lines) ? body.lines.length : 0, ...endReport(body?.end) });
+    const report = endReport(body?.end);
+    log.info('business_assistant.live_ended', { organizationId, durationSec: Number(body?.durationSec) || 0, lines: Array.isArray(body?.lines) ? body.lines.length : 0, ...report });
+    // Video presenter minutes for the usage tracker (Jarvis → Usage & cost): one event per video call.
+    const videoSec = Math.max(0, Math.min(7200, Math.round(Number(body?.durationSec) || 0)));
+    if (report.video && videoSec > 0) void this.prisma.integrationEvent.create({ data: { organizationId, provider: 'simli', kind: 'video', ok: true, units: videoSec, unitType: 'seconds', source: 'environment' } }).catch(() => undefined);
     const phone = normalizePhone(typeof body?.phone === 'string' ? body.phone : '');
     if (!phone) throw new BadRequestException('Mobile number required.');
     // The call is over: it is no longer a live dashboard call for the agent's tools.

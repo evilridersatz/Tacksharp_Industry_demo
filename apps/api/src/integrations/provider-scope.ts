@@ -70,6 +70,7 @@ export function environmentCredentials(provider: Provider): ResolvedCredentials 
       );
     case 'meta_social':
     case 'meta_capi':
+    case 'office_mail':
       // Per organization only: conversions are reported to that business's own ad account, never a shared one.
       return { source: 'none', secrets: {}, config: {}, reason: 'Configured per organization only' };
   }

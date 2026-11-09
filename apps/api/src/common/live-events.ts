@@ -13,7 +13,9 @@ import { errorMessage, log } from './logger.js';
  * authenticated API.
  */
 export type LiveEvent = {
-  type: 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change';
+  type: 'order.created' | 'order.updated' | 'cart.updated' | 'message' | 'call.started' | 'call.ended' | 'change' | 'alert';
+  /** Jarvis alert headline (no customer data). */
+  title?: string;
   orderId?: string;
   orderNumber?: string;
   channel?: string;

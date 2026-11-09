@@ -2,7 +2,8 @@ import {
   Activity, BarChart3, Bot, Boxes, Building2, CalendarCheck, ClipboardCheck, Columns3, Factory, FileText, FlaskConical, Gauge, Gift, Headset, Landmark,
   Cpu, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageSquare, Package, Phone, PlugZap, Settings, Shirt, ShoppingBag, ShoppingCart, Star, Store,
   TrendingUp, UtensilsCrossed, Users, Wrench, BedDouble, CalendarDays, ConciergeBell, Database, DoorOpen, HeartPulse, PlayCircle, ShieldCheck, Stethoscope, UserRound,
-  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, Receipt, BookOpen, type LucideIcon, AudioLines } from 'lucide-react';
+  Cctv, Siren, MapPin, UserCog, BellRing, FileBarChart, Calculator, Inbox, Workflow, GitBranch, Receipt, BookOpen, type LucideIcon, AudioLines,
+  Sparkles, Radar, MessageCircleQuestion, Wallet, MailCheck } from 'lucide-react';
 
 /**
  * Industry registry (web). The server decides WHICH industry a workspace is (GET /industry/workspace); this file decides
@@ -307,10 +308,11 @@ export const navHrefs = (id: IndustryId) => INDUSTRIES[id].nav.flatMap((g) => g.
  * Activity, Analytics, Integrations, Settings. Each industry keeps its own items and labels (its registry above); this
  * only places them in the standard sections, in a fixed order, so every business finds things in the same place.
  */
-export const STANDARD_SECTIONS = ['Home', 'AI Agents', 'Customers & Leads', 'Conversations', 'Orders & Business Activity', 'Analytics', 'Integrations', 'Settings'] as const;
+export const STANDARD_SECTIONS = ['Home', 'AI Agents', 'Jarvis', 'Customers & Leads', 'Conversations', 'Orders & Business Activity', 'Analytics', 'Integrations', 'Settings'] as const;
 export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
   const p = href.split('?')[0];
   if (p === '/') return 'Home';
+  if (/^\/jarvis(\/|$)/.test(p)) return 'Jarvis';
   if (/^\/(agents|voice-agents|knowledge|test-chat)(\/|$)/.test(p)) return 'AI Agents';
   if (/^\/(contacts|customers|leads|drips|workflows|follow-ups|site-visits|hospital\/patients)(\/|$)/.test(p)) return 'Customers & Leads';
   if (/^\/(inbox|conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
@@ -319,9 +321,17 @@ export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
   if (/^\/(settings|team|demo-data|scenarios)(\/|$)/.test(p)) return 'Settings';
   return 'Orders & Business Activity';
 }
-export function standardNav(groups: NavGroup[]): NavGroup[] {
+/** Jarvis: the assistant's extra jobs (digest, monitors, ask your data, usage, mail / Instagram / ERP checks). */
+export const JARVIS_NAV: NavItem[] = [
+  { href: '/jarvis', label: 'Daily briefing', icon: Sparkles },
+  { href: '/jarvis/monitors', label: 'Monitors & alerts', icon: Radar },
+  { href: '/jarvis/ask', label: 'Ask your data', icon: MessageCircleQuestion },
+  { href: '/jarvis/usage', label: 'Usage & cost', icon: Wallet },
+  { href: '/jarvis/checks', label: 'Mail, Instagram & ERP', icon: MailCheck },
+];
+export function standardNav(groups: NavGroup[], opts: { jarvis?: boolean } = {}): NavGroup[] {
   // The team inbox is shared by every industry: first item of "Conversations".
-  const items = [{ href: '/inbox', label: 'Team inbox', icon: Inbox } as NavItem, ...groups.flatMap((g) => g.items), { href: '/drips', label: 'Drip sequences', icon: Workflow } as NavItem, { href: '/workflows', label: 'Workflow studio', icon: GitBranch } as NavItem];
+  const items = [{ href: '/inbox', label: 'Team inbox', icon: Inbox } as NavItem, ...groups.flatMap((g) => g.items), ...(opts.jarvis ? JARVIS_NAV : []), { href: '/drips', label: 'Drip sequences', icon: Workflow } as NavItem, { href: '/workflows', label: 'Workflow studio', icon: GitBranch } as NavItem];
   const seen = new Set<string>();
   return STANDARD_SECTIONS.map((section) => ({
     section,

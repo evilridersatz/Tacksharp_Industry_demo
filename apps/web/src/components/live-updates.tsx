@@ -31,6 +31,10 @@ export function LiveUpdates() {
   useEffect(
     () =>
       onServerEvent((e) => {
+        if (e.type === 'alert' && e.title) {
+          toast(`Jarvis: ${e.title}`, e.status === 'critical' ? 'error' : 'ok', { href: '/jarvis/monitors', label: 'Open', ms: 12_000 });
+          return;
+        }
         if (e.type === 'order.created' && e.orderNumber) {
           const via = CHANNEL_LABEL[e.channel ?? ''] ?? e.channel ?? '';
           const total = typeof e.total === 'number' ? ` · ₹${e.total.toLocaleString('en-IN')}` : '';

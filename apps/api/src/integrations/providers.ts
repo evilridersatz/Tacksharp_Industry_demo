@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
  * Provider definitions: which fields are SECRET (encrypted, never returned) and which are plain configuration
  * (returned as-is), with validation. The backend decides what is allowed; the browser only renders it.
  */
-export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony', 'meta_capi', 'meta_social'] as const;
+export const PROVIDERS = ['sarvam', 'openai', 'whatsapp', 'sarvam_telephony', 'meta_capi', 'meta_social', 'office_mail'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const isProvider = (p: string): p is Provider => (PROVIDERS as readonly string[]).includes(p);
@@ -65,6 +65,11 @@ export const FIELDS: Record<Provider, FieldDef[]> = {
     { key: 'autoReply', label: 'Automatic acknowledgement', secret: false, required: false, help: 'Sent once when a customer writes after 24 hours of silence, e.g. "Thanks! Our team will reply shortly." Leave empty for none.' },
     { key: 'humanAgentTag', label: 'Human Agent replies (7 days)', secret: false, required: false, options: ['off', 'on'], help: 'Turn on only after Meta approved your app for the Human Agent permission: your team (never the AI) may then reply up to 7 days after the customer\'s last message.' },
   ],
+  office_mail: [
+    { key: 'email', label: 'Gmail address', secret: false, required: true, help: 'The office inbox Jarvis checks (Gmail or Google Workspace). Read-only: Jarvis only reads senders and subjects.' },
+    { key: 'appPassword', label: 'App password', secret: true, required: true, help: 'Google account → Security → 2-Step Verification → App passwords (16 letters). Never your normal password. IMAP must be on in Gmail settings.' },
+    { key: 'host', label: 'IMAP server', secret: false, required: false, help: 'imap.gmail.com for Gmail and Google Workspace.' },
+  ],
 };
 
 export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
@@ -74,6 +79,7 @@ export const DEFAULT_CONFIG: Record<Provider, Record<string, string>> = {
   sarvam_telephony: {},
   meta_capi: { events: 'purchase_and_lead' },
   meta_social: {},
+  office_mail: { host: 'imap.gmail.com' },
 };
 
 const digits = (v: string) => v.replace(/[\s()+-]/g, '');
@@ -92,7 +98,8 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
     if (f.secret) {
       if (raw === null) { secrets[f.key] = null; continue; }
       if (typeof raw !== 'string') { errors[f.key] = 'Must be text.'; continue; }
-      const v = raw.trim();
+      // Gmail shows app passwords in groups of four ("abcd efgh ijkl mnop"): the spaces are not part of it.
+      const v = provider === 'office_mail' && f.key === 'appPassword' ? raw.replace(/\s+/g, '') : raw.trim();
       if (!v) continue; // unchanged
       if (v.length > 512 || /\s/.test(v)) { errors[f.key] = 'That does not look like a valid value (no spaces, at most 512 characters).'; continue; }
       if (v.startsWith('••••')) continue; // the masked hint sent back unchanged
@@ -110,6 +117,8 @@ export function validateSave(provider: Provider, body: Record<string, unknown>, 
       if (provider === 'meta_social' && f.key === 'autoReply' && v.length > 500) { errors[f.key] = 'Keep it under 500 characters.'; continue; }
       if (provider === 'meta_capi' && f.key === 'pixelId' && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy the dataset ID from Events Manager).'; continue; }
       if (provider === 'meta_capi' && f.key === 'testEventCode' && v && !/^[A-Za-z0-9]{4,40}$/.test(v)) { errors[f.key] = 'Letters and digits only (copy it from Test events).'; continue; }
+      if (provider === 'office_mail' && f.key === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { errors[f.key] = 'Enter the full mail address.'; continue; }
+      if (provider === 'office_mail' && f.key === 'host' && v && !/^[a-z0-9.-]{3,100}$/i.test(v)) { errors[f.key] = 'A server name like imap.gmail.com.'; continue; }
       if (provider === 'whatsapp' && (f.key === 'phoneNumberId' || f.key === 'businessAccountId') && v && !/^\d{5,30}$/.test(v)) { errors[f.key] = 'Digits only (copy it from WhatsApp Manager).'; continue; }
       config[f.key] = v;
     }

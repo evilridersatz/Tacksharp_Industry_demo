@@ -53,7 +53,8 @@ function activeHref(items: NavItem[], pathname: string, search: URLSearchParams)
 
 function NavListInner({ def, badges, onNavigate, search }: { def: IndustryDef; badges: Badges; onNavigate?: () => void; search: URLSearchParams }) {
   const pathname = usePathname();
-  const groups = standardNav(def.nav);
+  // Jarvis is for the AI-agents workspaces (VisionOps has its own monitoring).
+  const groups = standardNav(def.nav, { jarvis: productOf(def.id) === 'agents' });
   const active = activeHref(groups.flatMap((g) => g.items), pathname, search);
   return (
     <nav aria-label="Main" className="mt-5 flex flex-col gap-5">

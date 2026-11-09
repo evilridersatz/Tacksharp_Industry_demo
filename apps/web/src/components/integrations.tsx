@@ -9,7 +9,7 @@ import { Badge, Button, Card, CardHeader, ErrorBanner, Skeleton, cx } from './ui
 import { Dialog, inputCls } from './textile';
 import { toast } from './toast';
 
-export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony' | 'meta_capi' | 'meta_social';
+export type ProviderId = 'sarvam' | 'openai' | 'whatsapp' | 'sarvam_telephony' | 'meta_capi' | 'meta_social' | 'office_mail';
 type Field = { key: string; label: string; secret: boolean; required: boolean; help?: string; options?: string[] };
 type Usage = {
   days: number; total: number; failed: number; costEstimate: number | null; costNote: string;
@@ -42,6 +42,7 @@ export const PROVIDER_META: Record<ProviderId, { name: string; group: 'Integrati
   openai: { name: 'OpenAI', group: 'AI providers', href: '/settings/ai-providers/openai', blurb: 'The language model behind conversations and drafts.' },
   sarvam_telephony: { name: 'Sarvam Voice Agents (telephony)', group: 'Integrations', href: '/settings/integrations/sarvam-telephony', blurb: 'Calls answered by an agent hosted on Sarvam: outbound calls and post-call results.' },
   meta_social: { name: 'Instagram & Messenger', group: 'Integrations', href: '/settings/integrations/meta-social', blurb: 'Instagram and Facebook Messenger messages in the team inbox; your team or a chosen AI agent replies.' },
+  office_mail: { name: 'Office mail (Gmail)', group: 'Integrations', href: '/settings/integrations/office-mail', blurb: 'Jarvis checks the office inbox (read-only: senders and subjects) and alerts on unread mail.' },
   meta_capi: { name: 'Meta Conversions API', group: 'Integrations', href: '/settings/integrations/meta-capi', blurb: 'Report completed orders and new enquiries to your Meta ads dataset (hashed customer data only).' },
 };
 

@@ -45,6 +45,7 @@
     "ai": "file:../../packages/ai",
     "bullmq": "^6.3.11",
     "dotenv": "^17.4.2",
+    "imapflow": "2.9.1",
     "ioredis": "^6.0.0",
     "jszip": "3.10.2",
     "mammoth": "1.13.0",

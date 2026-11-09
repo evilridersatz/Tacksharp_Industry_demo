@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { officeMailTest } from '../jarvis/jarvis-checks.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { config } from '../common/config.js';
 import { normalizePhone } from '../common/phone.js';
@@ -27,6 +28,8 @@ export const OPERATIONS: Record<Provider, string[]> = {
   meta_capi: ['connection', 'test_event'],
   // connection = read the Page (and its linked Instagram account) with the token; nothing is sent.
   meta_social: ['connection'],
+  // connection = sign in over IMAP (read-only) and count the inbox.
+  office_mail: ['connection'],
 };
 
 const SAMPLE_TEXT: Record<string, string> = {
@@ -245,6 +248,9 @@ export class IntegrationsService {
           : pg;
         break;
       }
+      case 'office_mail:connection':
+        result = await officeMailTest(cfg, secrets);
+        break;
       case 'meta_capi:connection':
         result = await clients.metaPixel(this.fetchImpl, secrets.accessToken, cfg.pixelId);
         break;
