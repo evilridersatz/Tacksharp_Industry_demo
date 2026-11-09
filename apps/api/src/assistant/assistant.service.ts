@@ -191,7 +191,11 @@ export class AssistantService {
       // Simli's own reason (e.g. no minutes left, invalid face) is logged; the key is never part of it.
       const reason = (typeof e === 'string' ? e : errorMessage(e)).replaceAll(apiKey, '***').slice(0, 300);
       log.warn('assistant.video_refused', { reason, ms: Date.now() - started });
-      throw new ServiceUnavailableException(/minute|credit|quota|balance/i.test(reason) ? 'The video presenter has no minutes left on the Simli account. Chat and voice still work.' : 'The video presenter could not start. Chat and voice still work.');
+      if (/minute|credit|quota|balance/i.test(reason)) throw new ServiceUnavailableException('The video presenter has no minutes left on the Simli account. Chat and voice still work.');
+      // Signed-in staff (business dashboard) see Simli's own reason, so the cause is visible without server logs.
+      // The public website presenter keeps the generic text. The key is masked above and never part of it.
+      const detail = opts.business ? ` Simli said: ${reason.replace(/\s+/g, ' ').slice(0, 200)}.` : '';
+      throw new ServiceUnavailableException(`The video presenter could not start.${detail} Chat and voice still work.`);
     }
   }
 
