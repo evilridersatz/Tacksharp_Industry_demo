@@ -10,7 +10,7 @@ import { SarvamTelephonyProvider } from './sarvam.provider.js';
 import { SarvamToolsService, isPlaceholder, sarvamConfigPack, verifyToolKey } from './sarvam-tools.service.js';
 
 const TOOLS = ['context', 'menu', 'item', 'quote', 'order', 'status', 'handoff'] as const;
-type Tool = (typeof TOOLS)[number];
+export type Tool = (typeof TOOLS)[number];
 
 /**
  * Endpoints the Sarvam voice agent calls during a live call (configured as Sarvam "API tools" / on-start hook).
@@ -73,7 +73,7 @@ export class SarvamToolsController {
     // the Sarvam console actually sends for this tool, without logging what the caller said.
     const filled = Object.entries(b).filter(([k, v]) => k !== 'key' && k !== 'tool_key' && (typeof v === 'number' || (typeof v === 'string' ? Boolean(v.trim()) && !isPlaceholder(v.trim()) : Array.isArray(v) ? v.length > 0 : Boolean(v)))).map(([k]) => k);
     log.info('sarvam_tools.call', { organizationId: org, tool, ok: r.ok !== false, error: (r as { error?: unknown }).error ?? (r as { needs?: unknown }).needs ?? null, ms: Date.now() - started, fields: Object.keys(b).filter((k) => k !== 'key' && k !== 'tool_key').slice(0, 15).join(','), filled: filled.slice(0, 15).join(',') });
-    return withAliases(r);
+    return withAliases(withAllFields(tool as Tool, r));
   }
 
   private dispatch(tool: Tool, org: string, b: Record<string, unknown>) {
@@ -105,6 +105,28 @@ export function withAliases<T extends Record<string, unknown>>(r: T): T & Record
   for (const k of ['result', 'response', 'output', 'text', 'reply', 'answer', 'data', 'details', 'tool_response']) if (out[k] === undefined) out[k] = message;
   for (const k of ['summary', 'order_summary']) if (out[k] === undefined) out[k] = spoken;
   if (out.status === undefined) out.status = r.ok === false ? 'needs_attention' : 'ok';
+  return out as T & Record<string, unknown>;
+}
+
+/**
+ * Every field the console may forward for a tool ("Send fields from the API response to the agent": @summary_text,
+ * @order_number, ...). A field the reply lacks reaches the agent as the literal "@summary_text"; it is sent empty instead.
+ */
+const TOOL_FIELDS: Record<Tool, string[]> = {
+  context: ['business_name', 'customer_name', 'menu_text', 'unavailable_today', 'shops_text', 'delivery', 'language_rule', 'message'],
+  menu: ['menu_text', 'unavailable_today', 'shops_text', 'message'],
+  item: ['found', 'price_text', 'availability_text', 'cuts', 'message'],
+  quote: ['ok', 'summary_text', 'total', 'cart_token', 'questions_text', 'problems_text', 'message'],
+  order: ['ok', 'order_number', 'message'],
+  status: ['found', 'order_number', 'status', 'message'],
+  handoff: ['ok', 'message'],
+};
+export function withAllFields<T extends Record<string, unknown>>(tool: Tool, r: T): T & Record<string, unknown> {
+  const out: Record<string, unknown> = { ...r };
+  for (const k of TOOL_FIELDS[tool] ?? []) {
+    if (out[k] !== undefined && out[k] !== null) continue;
+    out[k] = k === 'ok' ? r.ok !== false : k === 'found' ? false : k === 'message' ? (typeof r.error === 'string' ? `The tool could not do this (${r.error}). Offer the caller a staff call back.` : '') : '';
+  }
   return out as T & Record<string, unknown>;
 }
 

@@ -161,7 +161,9 @@ const per = (unit: string) => (unit === 'piece' ? 'per piece' : 'per kilo');
  * A body value as text. A value the Sarvam console did not fill in arrives as its placeholder ("@confirmed",
  * "{{cart_token}}", "<the caller phone ...>": seen live 2026-11-04): that is treated as missing, never as data.
  */
-export const isPlaceholder = (s: string) => /^@\S/.test(s) || /^\{\{.*\}\}$/.test(s) || /^<.*>$/.test(s);
+// Also the stand-in words of the console set-up cURL commands (CALLER, CALLID, TRANSCRIPT), if one was left in a tool body
+// instead of the console's @variable: treated as "not sent", so the call's own number and transcript are used.
+export const isPlaceholder = (s: string) => /^@\S/.test(s) || /^\{\{.*\}\}$/.test(s) || /^<.*>$/.test(s) || /^(CALLER|CALLID|TRANSCRIPT|PASTE_TOOL_KEY_HERE)$/.test(s);
 const str = (v: unknown, max = 500) => {
   const s = typeof v === 'string' ? v.trim() : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '';
   return isPlaceholder(s) ? '' : s.slice(0, max);
@@ -455,6 +457,8 @@ export class SarvamToolsService {
       available: hit.available,
       availability_text: hit.available ? `${hit.name} is available today.` : `${hit.name} is not available today.`,
       cuts: hit.cutOptions.join(', '),
+      // All of it in one field too: a console that forwards only @message still gives the agent price and stock.
+      message: `${hit.name} is ${rupees(hit.price)} ${per(hit.unit)}. ${hit.available ? 'Available today.' : 'Not available today.'}${hit.cutOptions.length ? ` Cuts: ${hit.cutOptions.join(', ')}.` : ''}`,
     };
   }
 
