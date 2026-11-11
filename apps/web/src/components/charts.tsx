@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { cx } from './ui';
 
 /** Small area sparkline used on KPI cards. */
 export function Sparkline({ values, color, height = 34 }: { values: number[]; color: string; height?: number }) {
@@ -159,5 +160,39 @@ export function Funnel({ labels, values, color }: { labels: string[]; values: nu
         );
       })}
     </ol>
+  );
+}
+
+/** Vertical columns with a value on top of each (sales per day). Highlights the last column (today). */
+export function ColumnChart({ labels, values, color, format = (v) => String(v), height = 190 }: { labels: string[]; values: number[]; color: string; format?: (v: number) => string; height?: number }) {
+  const max = Math.max(...values, 1);
+  return (
+    <div role="img" aria-label={labels.map((l, i) => `${l}: ${format(values[i] ?? 0)}`).join(', ')} className="flex items-end gap-2 sm:gap-3" style={{ height }}>
+      {labels.map((l, i) => {
+        const v = values[i] ?? 0;
+        const last = i === labels.length - 1;
+        return (
+          <div key={l + i} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
+            <span className={cx('truncate text-[11px] font-semibold tabular', v ? 'text-ink' : 'text-faint')}>{v ? format(v) : '—'}</span>
+            <span className="w-full max-w-12 rounded-t-[8px] transition-all" style={{ height: `${Math.max(3, (v / max) * (height - 46))}px`, background: color, opacity: last ? 1 : 0.55 }} />
+            <span className={cx('text-[11px]', last ? 'font-bold text-ink' : 'text-muted')}>{l}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Progress ring (setup progress and similar). */
+export function Ring({ value, total, color, size = 76, label }: { value: number; total: number; color: string; size?: number; label?: string }) {
+  const r = 30;
+  const c = 2 * Math.PI * r;
+  const pct = total ? value / total : 0;
+  return (
+    <svg viewBox="0 0 76 76" width={size} height={size} role="img" aria-label={label ?? `${value} of ${total}`}>
+      <circle cx="38" cy="38" r={r} fill="none" stroke="#eef1f6" strokeWidth="8" />
+      <circle cx="38" cy="38" r={r} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round" strokeDasharray={`${pct * c} ${c}`} transform="rotate(-90 38 38)" />
+      <text x="38" y="43" textAnchor="middle" className="fill-ink text-[15px] font-bold">{value}/{total}</text>
+    </svg>
   );
 }

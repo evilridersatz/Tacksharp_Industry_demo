@@ -20,6 +20,9 @@ import { IndustryDashboard } from '@/components/industry-dashboard';
 import { RestaurantOverview } from '@/components/restaurant/overview';
 import { VisionOpsOverview } from '@/components/visionops-overview';
 import { HomeOverview } from '@/components/home-overview';
+import { OwnerHome } from '@/components/owner-home';
+
+const OWNER_HOME = ['restaurant', 'food'];
 import type { ActivityEvent, FollowUp, Summary } from '@/lib/types';
 import {
   CALL_OUTCOME,
@@ -55,8 +58,13 @@ export default function DashboardPage() {
   return (
     <>
       {/* Home: setup, attention, results and activity for every industry; the industry's detailed dashboard follows. */}
-      <HomeOverview />
-      <IndustryDetails industry={workspace.industry} />
+      {/* Owner's Home for the AI-agents businesses; other industries keep their detailed dashboard below the overview. */}
+      {OWNER_HOME.includes(workspace.industry) ? <OwnerHome /> : (
+        <>
+          <HomeOverview />
+          <IndustryDetails industry={workspace.industry} />
+        </>
+      )}
     </>
   );
 }

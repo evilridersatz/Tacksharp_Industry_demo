@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Scissors, Store, UtensilsCrossed } from 'lucide-react';
+import { PackageCheck, PackageX, Plus, Scissors, Store, TriangleAlert, UtensilsCrossed } from 'lucide-react';
+import { StatTiles } from '@/components/stat-tiles';
 import { api, useApi } from '@/lib/api';
 import { inr, qty, useMe, type Catalog, type MenuItem } from '@/lib/restaurant';
 import { PageHeader } from '@/components/shell';
@@ -34,6 +35,18 @@ export default function ProductsPage() {
         </DemoBanner>
       )}
       {error && !menu && <ErrorBanner message={error} onRetry={reload} />}
+      {menu && menu.items.length > 0 && (() => {
+        const n = (st: string) => menu.items.filter((i) => (i.stockStatus ?? 'unknown') === st).length;
+        const selling = menu.items.filter((i) => i.available).length;
+        return (
+          <StatTiles label="Products at a glance" tiles={[
+            { label: 'Selling today', value: `${selling} of ${menu.items.length}`, sub: 'Customers can order these', icon: Store, color: '#059669', bg: '#ecfdf5' },
+            { label: 'In stock', value: n('in_stock'), sub: 'Enough counted stock', icon: PackageCheck, color: '#0284c7', bg: '#f0f9ff' },
+            { label: 'Running low', value: n('low'), sub: n('low') ? 'Reorder soon' : 'Nothing low', icon: TriangleAlert, color: '#d97706', bg: '#fffbeb' },
+            { label: 'Out of stock', value: n('out'), sub: n('unknown') ? `${n('unknown')} without a stock count` : 'All counted', icon: PackageX, color: '#e11d48', bg: '#fff1f2' },
+          ]} />
+        );
+      })()}
       {adding && menu && (menu.categories.length ? <AddProduct categories={menu.categories} onDone={() => (setAdding(false), reload())} /> : <Card className="mb-4 p-5"><p className="mb-2 text-[13px] text-body">Products belong to a category. Add one first.</p><AddCategory onDone={reload} /></Card>)}
 
       {!menu ? (

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { BarList, ColumnChart } from '@/components/charts';
 import { LiveStamp } from '@/components/live-stamp';
 import { Button, Card, ErrorBanner, Skeleton } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
@@ -41,10 +42,15 @@ export default function JarvisBriefingPage() {
             </div>
           </SectionCard>
 
+          {s.days && s.days.some((d) => d.orders > 0) && (
+            <SectionCard title="Sales this week" subtitle={`${inr(s.last7.revenue)} from ${s.last7.orders} orders`}>
+              <div className="px-4 pb-4"><ColumnChart labels={s.days.map((d, i) => (i === s.days!.length - 1 ? 'Today' : new Date(`${d.date}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short' })))} values={s.days.map((d) => d.revenue)} color="var(--industry-accent)" format={(v) => (v >= 1000 ? `₹${(v / 1000).toFixed(1)}k` : `₹${Math.round(v)}`)} height={170} /></div>
+            </SectionCard>
+          )}
           <div className="grid gap-4 lg:grid-cols-2">
             <SectionCard title="Top sellers (7 days)">
               {s.topItems.length ? (
-                <table className="w-full text-[13px]"><tbody>{s.topItems.map((i) => <tr key={i.name} className="border-t border-line"><td className="px-4 py-2 text-ink">{i.name}</td><td className="px-4 py-2 text-right tabular text-body">{i.qty} {i.unit}</td><td className="px-4 py-2 text-right tabular font-semibold text-ink">{inr(i.revenue)}</td></tr>)}</tbody></table>
+                <div className="px-4 pb-4"><BarList labels={s.topItems.map((i) => `${i.name} · ${i.qty} ${i.unit}`)} values={s.topItems.map((i) => i.revenue)} color="var(--industry-accent)" format={(v) => inr(v)} /></div>
               ) : <p className="px-4 pb-4 text-[12.5px] text-muted">No orders in the last 7 days.</p>}
             </SectionCard>
             <SectionCard title="Top customers (30 days)" subtitle="Phone numbers masked.">

@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { Search, ShoppingBag } from 'lucide-react';
 import { useApi } from '@/lib/api';
+import { OrderPipeline } from '@/components/restaurant/pipeline';
 import { displayName, timeAgo } from '@/lib/format';
 import { CHANNEL_LABEL, ORDER_STATUS, READY_NOTICE, inr, pickupLabel, qty, useMe, type Order } from '@/lib/restaurant';
 import { PageHeader } from '@/components/shell';
@@ -53,6 +54,7 @@ function Orders() {
       <PageHeader title="Live orders" crumb="Orders" />
       {orders?.some((o) => o.isDemo) && <DemoBanner />}
       {error && !orders && <ErrorBanner message={error} onRetry={reload} />}
+      <OrderPipeline onPick={(st) => setFilter(st === 'pending' ? 'pending' : st === 'completed' ? 'completed' : 'active')} />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="max-w-full overflow-x-auto pane-scroll">

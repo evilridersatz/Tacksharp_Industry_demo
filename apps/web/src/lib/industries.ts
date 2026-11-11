@@ -304,24 +304,27 @@ export const ORCHESTRATED_INDUSTRIES: IndustryId[] = ['textile', 'retail', 'manu
 export const navHrefs = (id: IndustryId) => INDUSTRIES[id].nav.flatMap((g) => g.items.map((i) => i.href.split('?')[0]));
 
 /**
- * One sidebar structure for every industry: Home, AI Agents, Customers & Leads, Conversations, Orders & Business
- * Activity, Analytics, Integrations, Settings. Each industry keeps its own items and labels (its registry above); this
- * only places them in the standard sections, in a fixed order, so every business finds things in the same place.
+ * One sidebar for every industry, written for owners: a few plain sections, one entry per job. Pages that belong
+ * together (all of the AI Office, all of Jarvis, all settings, the order list and board) are one menu entry with
+ * tabs at the top of the page (TAB_GROUPS). Technical and testing pages live in a folded "Advanced" section.
  */
-export const STANDARD_SECTIONS = ['Home', 'AI Agents', 'AI Office', 'Jarvis', 'Customers & Leads', 'Conversations', 'Orders & Business Activity', 'Analytics', 'Integrations', 'Settings'] as const;
-export function sectionOf(href: string): (typeof STANDARD_SECTIONS)[number] {
+export const STANDARD_SECTIONS = ['Home', 'Orders & business', 'Customers & chats', 'AI team', 'Reports', 'Settings', 'Advanced'] as const;
+type Section = (typeof STANDARD_SECTIONS)[number];
+
+/** Testing, data and technical pages: still reachable, folded away from the everyday menu. */
+const ADVANCED_PATHS = ['/test-chat', '/scenarios', '/demo-data', '/drips', '/workflows', '/activity', '/conversations', '/settings/ai-providers', '/settings/diagnostics', '/voice-agents'];
+
+export function sectionOf(href: string): Section {
   const p = href.split('?')[0];
   if (p === '/') return 'Home';
-  if (/^\/jarvis(\/|$)/.test(p)) return 'Jarvis';
-  if (/^\/office(\/|$)/.test(p)) return 'AI Office';
-  if (/^\/(agents|voice-agents|knowledge|test-chat)(\/|$)/.test(p)) return 'AI Agents';
-  if (/^\/(contacts|customers|leads|drips|workflows|follow-ups|site-visits|hospital\/patients)(\/|$)/.test(p)) return 'Customers & Leads';
-  if (/^\/(inbox|conversations|calls|handoffs|activity|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Conversations';
-  if (/^\/(analytics|performance)(\/|$)/.test(p) || p === '/visionops/reports') return 'Analytics';
-  if (/^\/(settings\/integrations|settings\/ai-providers|integrations)(\/|$)/.test(p)) return 'Integrations';
-  if (/^\/(settings|team|demo-data|scenarios)(\/|$)/.test(p)) return 'Settings';
-  return 'Orders & Business Activity';
+  if (ADVANCED_PATHS.some((a) => p === a || p.startsWith(`${a}/`))) return 'Advanced';
+  if (/^\/(jarvis|office|agents|knowledge)(\/|$)/.test(p)) return 'AI team';
+  if (/^\/(inbox|contacts|customers|leads|follow-ups|site-visits|hospital\/patients|calls|handoffs|feedback)(\/|$)/.test(p) || p === '/visionops/notifications') return 'Customers & chats';
+  if (/^\/(analytics|performance)(\/|$)/.test(p) || p === '/visionops/reports') return 'Reports';
+  if (/^\/(settings|team|integrations)(\/|$)/.test(p)) return 'Settings';
+  return 'Orders & business';
 }
+
 /** Jarvis: the assistant's extra jobs (digest, monitors, ask your data, usage, mail / Instagram / ERP checks). */
 export const JARVIS_NAV: NavItem[] = [
   { href: '/jarvis', label: 'Daily briefing', icon: Sparkles },
@@ -341,14 +344,66 @@ export const OFFICE_NAV: NavItem[] = [
   { href: '/office/memory', label: 'Memory', icon: Brain },
   { href: '/office/usage', label: 'Usage & settings', icon: Gauge },
 ];
+/** Pages shown as tabs inside one menu entry. The first tab is the menu entry. */
+export const TAB_GROUPS: Array<{ entry: NavItem; tabs: Array<{ href: string; label: string }> }> = [
+  { entry: { href: '/orders', label: 'Orders', icon: ShoppingBag, badge: 'orders' }, tabs: [{ href: '/orders', label: 'All orders' }, { href: '/orders/board', label: 'Live board' }] },
+  { entry: { href: '/office', label: 'AI Office', icon: Building2 }, tabs: [] }, // filled from OFFICE_NAV below
+  { entry: { href: '/jarvis', label: 'Jarvis', icon: Sparkles }, tabs: [] }, // filled from JARVIS_NAV below
+  { entry: { href: '/agents', label: 'AI agents', icon: Bot }, tabs: [{ href: '/agents', label: 'AI agents' }, { href: '/knowledge', label: 'Knowledge' }] },
+  { entry: { href: '/settings', label: 'Settings', icon: Settings }, tabs: [{ href: '/settings', label: 'Business' }, { href: '/integrations', label: 'Channels' }, { href: '/settings/integrations', label: 'Integrations' }, { href: '/team', label: 'Team' }, { href: '/settings/billing', label: 'Plan & billing' }] },
+];
+TAB_GROUPS[1].tabs = OFFICE_NAV.map((i) => ({ href: i.href, label: i.label }));
+TAB_GROUPS[2].tabs = JARVIS_NAV.map((i) => ({ href: i.href, label: i.label }));
+
+/** The tab group a page belongs to (exact tab match, or a page under a tab, e.g. /orders/123 is not a tab). */
+export function tabGroupOf(pathname: string, available: Set<string>) {
+  for (const g of TAB_GROUPS) {
+    const tabs = g.tabs.filter((t) => available.has(t.href));
+    if (tabs.length > 1 && tabs.some((t) => t.href === pathname)) return tabs;
+  }
+  return null;
+}
+
+/** Tabs folded into one entry: the sidebar highlights the entry when one of its tabs is open. */
+export function entryFor(pathname: string): string | null {
+  for (const g of TAB_GROUPS) if (g.tabs.some((t) => t.href === pathname || (t.href !== '/' && pathname.startsWith(`${t.href}/`)))) return g.entry.href;
+  return null;
+}
+
 export function standardNav(groups: NavGroup[], opts: { jarvis?: boolean } = {}): NavGroup[] {
-  // The team inbox is shared by every industry: first item of "Conversations".
-  const items = [{ href: '/inbox', label: 'Team inbox', icon: Inbox } as NavItem, ...groups.flatMap((g) => g.items), ...(opts.jarvis ? [...OFFICE_NAV, ...JARVIS_NAV] : []), { href: '/drips', label: 'Drip sequences', icon: Workflow } as NavItem, { href: '/workflows', label: 'Workflow studio', icon: GitBranch } as NavItem];
+  const own = groups.flatMap((g) => g.items);
+  const all: NavItem[] = [
+    { href: '/inbox', label: 'Team inbox', icon: Inbox, badge: own.find((i) => i.badge === 'handoff')?.badge } as NavItem,
+    ...own,
+    ...(opts.jarvis ? [...OFFICE_NAV, ...JARVIS_NAV] : []),
+    { href: '/drips', label: 'Drip sequences', icon: Workflow } as NavItem,
+    { href: '/workflows', label: 'Workflow studio', icon: GitBranch } as NavItem,
+  ];
+  const available = new Set(all.map((i) => i.href.split('?')[0]));
+  // Tab pages collapse into their group's single entry (only when the group has more than one page here).
+  const folded = new Set<string>();
+  const entries = new Map<string, NavItem>();
+  for (const g of TAB_GROUPS) {
+    const tabs = g.tabs.filter((t) => available.has(t.href));
+    if (tabs.length < 2 && !(g.entry.href === '/office' || g.entry.href === '/jarvis')) continue;
+    if (!tabs.length) continue;
+    tabs.forEach((t) => folded.add(t.href));
+    const original = all.find((i) => i.href === g.entry.href);
+    entries.set(tabs[0].href, { ...g.entry, href: tabs[0].href, badge: original?.badge ?? g.entry.badge });
+  }
+  const items: NavItem[] = [];
   const seen = new Set<string>();
+  for (const i of all) {
+    const path = i.href.split('?')[0];
+    const item = folded.has(path) ? entries.get(path) : i;
+    if (!item || seen.has(item.href)) continue;
+    seen.add(item.href);
+    items.push(item.href === '/conversations' ? { ...item, label: 'All conversations', badge: undefined } : item);
+  }
   return STANDARD_SECTIONS.map((section) => ({
     section,
     items: items
-      .filter((i) => sectionOf(i.href) === section && !seen.has(i.href) && seen.add(i.href))
+      .filter((i) => sectionOf(i.href) === section)
       // The overview page becomes "Home"; a home with its own name (VisionOps "Operations center") keeps it.
       .map((i) => (i.href === '/' && /overview|dashboard/i.test(i.label) ? { ...i, label: 'Home' } : i)),
   })).filter((g) => g.items.length > 0);

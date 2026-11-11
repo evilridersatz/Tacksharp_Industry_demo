@@ -9,6 +9,8 @@ import { toast } from '@/components/toast';
 
 export type Period = { orders: number; revenue: number; cancelled: number; byChannel: Record<string, number>; calls: number; callMinutes: number; failedCalls: number; newCustomers: number };
 export type Snapshot = {
+  /** Last 7 India-time days, oldest first. */
+  days?: Array<{ date: string; orders: number; revenue: number }>;
   at: string; today: Period; yesterday: Period; last7: Period; sameTimeLastWeek: number;
   topItems: Array<{ name: string; qty: number; unit: string; revenue: number }>;
   topCustomers: Array<{ name: string; phone: string; orders: number; spend: number }>;

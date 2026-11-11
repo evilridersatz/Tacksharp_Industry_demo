@@ -9,7 +9,7 @@ const snap = (o: Partial<Snapshot> = {}): Snapshot => ({
   at: '2026-11-09T09:00:00.000Z', // 14:30 India time
   today: period(), yesterday: period(), last7: period(), sameTimeLastWeek: 0, topItems: [], topCustomers: [],
   stock: { tracked: 0, low: [] }, pendingOrders: [], unpaidToday: { count: 0, amount: 0 }, handoffs: [], instagramWaiting: [],
-  failedCallsLastHour: 0, overdue: { count: 0, amount: 0 }, feedback: { rated: 0, average: null, complaintsOpen: 0 }, ...o,
+  failedCallsLastHour: 0, overdue: { count: 0, amount: 0 }, feedback: { rated: 0, average: null, complaintsOpen: 0 }, days: [], ...o,
 });
 
 describe('India time helpers', () => {

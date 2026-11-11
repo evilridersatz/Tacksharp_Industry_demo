@@ -24,6 +24,8 @@ export type Snapshot = {
   failedCallsLastHour: number;
   overdue: { count: number; amount: number };
   feedback: { rated: number; average: number | null; complaintsOpen: number };
+  /** The last 7 India-time days, oldest first (orders not cancelled): for the owner's sales chart. */
+  days: Array<{ date: string; orders: number; revenue: number }>;
 };
 
 /**
@@ -135,8 +137,14 @@ export class JarvisDataService {
     const u = unpaid as { _count: number; _sum: { total: unknown } };
     const r = rated as { _count: { feedbackRating: number }; _avg: { feedbackRating: number | null } };
 
+    // Sales per India-time day for the last 7 days (one query, bucketed here).
+    const dayRows = await this.safe('days', organizationId, () => this.prisma.order.findMany({ where: { organizationId, ...R.order, status: { not: 'cancelled' }, createdAt: { gte: istDayStart(now, 6) } }, select: { createdAt: true, total: true } }), []);
+    const ist = (d: Date) => new Date(d.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+    const days = Array.from({ length: 7 }, (_, i) => ({ date: ist(istDayStart(now, 6 - i)), orders: 0, revenue: 0 }));
+    for (const o of dayRows) { const d = days.find((x) => x.date === ist(o.createdAt)); if (d) { d.orders += 1; d.revenue += n(o.total); } }
     return {
       at: now.toISOString(),
+      days: days.map((d) => ({ ...d, revenue: round(d.revenue) })),
       today: pToday,
       yesterday: pYesterday,
       last7: p7,

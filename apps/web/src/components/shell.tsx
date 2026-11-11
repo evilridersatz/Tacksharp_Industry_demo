@@ -7,11 +7,11 @@ import { LiveUpdates } from './live-updates';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, Check, ChevronsUpDown, Clock, FlaskConical, Loader2, LogOut, Menu, Pause, Play, Search, ShieldCheck, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, ChevronsUpDown, Clock, FlaskConical, Loader2, LogOut, Menu, Pause, Play, Search, ShieldCheck, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Summary } from '@/lib/types';
 import { forgetMe, useMe, type Overview } from '@/lib/restaurant';
-import { INDUSTRIES, PRODUCT_LABEL, PRODUCT_TAGLINE, industryDef, productOf, standardNav, type IndustryDef, type NavItem, type ProductFamily } from '@/lib/industries';
+import { INDUSTRIES, PRODUCT_LABEL, PRODUCT_TAGLINE, entryFor, industryDef, productOf, standardNav, tabGroupOf, type IndustryDef, type NavItem, type ProductFamily } from '@/lib/industries';
 import { forgetWorkspace, switchWorkspace, useWorkspace, type WorkspaceOption } from '@/lib/industry';
 import { cx } from './ui';
 
@@ -55,13 +55,29 @@ function NavListInner({ def, badges, onNavigate, search }: { def: IndustryDef; b
   const pathname = usePathname();
   // Jarvis is for the AI-agents workspaces (VisionOps has its own monitoring).
   const groups = standardNav(def.nav, { jarvis: productOf(def.id) === 'agents' });
-  const active = activeHref(groups.flatMap((g) => g.items), pathname, search);
+  // A page shown as a tab highlights its single menu entry (e.g. /team → Settings, /office/tasks → AI Office).
+  const active = activeHref(groups.flatMap((g) => g.items), entryFor(pathname) ?? pathname, search);
+  const advancedActive = groups.some((g) => g.section === 'Advanced' && g.items.some((i) => i.href === active));
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  useEffect(() => {
+    try { setAdvancedOpen(window.localStorage.getItem('nav.advanced') === 'open'); } catch { /* storage unavailable */ }
+  }, []);
+  const toggleAdvanced = () => setAdvancedOpen((o) => { try { window.localStorage.setItem('nav.advanced', o ? 'closed' : 'open'); } catch { /* ignore */ } return !o; });
   return (
-    <nav aria-label="Main" className="mt-5 flex flex-col gap-5">
-      {groups.map((group) => (
-        <div key={group.section}>
-          <p className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{group.section}</p>
-          <ul className="flex flex-col gap-0.5">
+    <nav aria-label="Main" className="mt-5 flex flex-col gap-4">
+      {groups.map((group) => {
+        const advanced = group.section === 'Advanced';
+        const open = !advanced || advancedOpen || advancedActive;
+        return (
+        <div key={group.section} className={cx(advanced && 'border-t border-white/10 pt-3')}>
+          {advanced ? (
+            <button type="button" onClick={toggleAdvanced} aria-expanded={open} className="flex w-full items-center justify-between px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase hover:text-slate-300">
+              Advanced &amp; testing <ChevronDown className={cx('size-3.5 transition-transform', open && 'rotate-180')} aria-hidden />
+            </button>
+          ) : (
+            <p className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-slate-500 uppercase">{group.section}</p>
+          )}
+          {open && <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => {
               const isActive = item.href === active;
               const count = item.badge ? badges[item.badge] : undefined;
@@ -93,9 +109,10 @@ function NavListInner({ def, badges, onNavigate, search }: { def: IndustryDef; b
                 </li>
               );
             })}
-          </ul>
+          </ul>}
         </div>
-      ))}
+        );
+      })}
     </nav>
   );
 }
@@ -462,6 +479,7 @@ function Shell({ children }: { children: ReactNode }) {
         )}
         {workspace?.isDemo && def && <DemoBanner def={def} />}
         {workspace && !workspace.isDemo && def && <LiveSetupCard industry={workspace.industry} />}
+        {def && <SectionTabs def={def} />}
         {children}
       </main>
     </div>
@@ -516,5 +534,29 @@ export function PageHeader({ title, crumb, actions }: { title: string; crumb?: s
         {actions}
       </div>
     </header>
+  );
+}
+
+/** Tabs for pages that share one menu entry (AI Office, Jarvis, Settings, Orders, AI agents). */
+function SectionTabs({ def }: { def: IndustryDef }) {
+  const pathname = usePathname();
+  const groups = standardNav(def.nav, { jarvis: productOf(def.id) === 'agents' });
+  const available = new Set([...def.nav.flatMap((g) => g.items.map((i) => i.href.split('?')[0])), ...groups.flatMap((g) => g.items.map((i) => i.href.split('?')[0])),
+    ...['/office', '/office/command', '/office/tasks', '/office/approvals', '/office/agents', '/office/workflows', '/office/memory', '/office/usage', '/jarvis', '/jarvis/monitors', '/jarvis/ask', '/jarvis/usage', '/jarvis/checks', '/settings', '/team', '/settings/integrations', '/settings/billing', '/knowledge'].filter((h) => productOf(def.id) === 'agents' || !/^\/(office|jarvis)/.test(h))]);
+  const tabs = tabGroupOf(pathname, available);
+  if (!tabs) return null;
+  return (
+    <div className="-mx-4 mb-4 overflow-x-auto px-4 sm:mx-0 sm:px-0 print:hidden">
+      <nav aria-label="Section" className="flex w-max gap-1 rounded-[12px] border border-line bg-white p-1 shadow-[var(--shadow-card)]">
+        {tabs.map((t) => {
+          const on = t.href === pathname;
+          return (
+            <Link key={t.href} href={t.href} aria-current={on ? 'page' : undefined} className={cx('rounded-[9px] px-3 py-1.5 text-[13px] whitespace-nowrap transition-colors', on ? 'font-semibold text-white' : 'text-body hover:bg-slate-100')} style={on ? { background: def.accent } : undefined}>
+              {t.label}
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
   );
 }

@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { Search, ShieldCheck, ShieldOff, Users, X } from 'lucide-react';
+import { IndianRupee, MessageCircle, Repeat2, Search, ShieldCheck, ShieldOff, Users, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { dateTime, displayName, formatPhone, timeAgo } from '@/lib/format';
 import { CHANNEL_LABEL, ORDER_STATUS, inr, plain, useMe, type Order, type RCustomer } from '@/lib/restaurant';
+import { StatTiles } from '@/components/stat-tiles';
 import { PageHeader } from '@/components/shell';
 import { Avatar, Badge, Button, Card, Empty, ErrorBanner, Field, Skeleton, cx } from '@/components/ui';
 
@@ -58,6 +59,21 @@ function Customers() {
     <>
       <PageHeader title="Customers" />
       {error && !customers && <ErrorBanner message={error} onRetry={reload} />}
+      {customers && !debounced.trim() && (() => {
+        const real = customers.filter((c) => !c.isDemo);
+        const list = real.length ? real : customers;
+        const repeat = list.filter((c) => c.orders >= 2).length;
+        const reachable = list.filter((c) => c.messagingConsent && !c.optedOutAt && !c.doNotContact).length;
+        const spend = list.reduce((a, c) => a + Number(c.totalSpend || 0), 0);
+        return (
+          <StatTiles label="Customers at a glance" tiles={[
+            { label: 'Customers', value: list.length, sub: real.length && real.length < customers.length ? `+ ${customers.length - real.length} demo` : 'Everyone who wrote or ordered', icon: Users, color: '#0284c7', bg: '#f0f9ff' },
+            { label: 'Come back again', value: repeat, sub: list.length ? `${Math.round((repeat / list.length) * 100)}% ordered 2+ times` : '—', icon: Repeat2, color: '#059669', bg: '#ecfdf5' },
+            { label: 'Can get WhatsApp offers', value: reachable, sub: 'Agreed, not opted out', icon: MessageCircle, color: '#16a34a', bg: '#f0fdf4' },
+            { label: 'Total spend', value: inr(spend), sub: list.length ? `${inr(spend / Math.max(1, list.length))} per customer` : '—', icon: IndianRupee, color: '#ea580c', bg: '#fff7ed' },
+          ]} />
+        );
+      })()}
       <div className="mb-3 flex justify-end">
         <div className="relative w-full sm:w-auto">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" />
