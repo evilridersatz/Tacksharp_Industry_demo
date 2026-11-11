@@ -211,7 +211,11 @@ function WebsiteApi({ endpoint, configured, isAdmin }: { endpoint: string; confi
     <Card>
       <CardHeader title="2 · From the website" subtitle="After each website order, the site sends us the customer; the assistant sends the Tamil offer message." action={<Badge tone={configured ? 'brand' : 'slate'}>{configured ? 'Key set' : 'No key'}</Badge>} />
       <div className="px-5 pb-5 text-[13px]">
-        <pre className="overflow-x-auto rounded-[8px] bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">{example}</pre>
+        <p className="text-body">{configured ? 'Your website is connected: every website order gets the offer message automatically.' : 'Not connected yet. Send the details below to whoever runs your website.'}</p>
+        <details className="mt-2 rounded-[10px] border border-line px-3 py-2">
+          <summary className="cursor-pointer text-[12.5px] font-semibold text-ink">For your web developer</summary>
+          <pre className="mt-2 overflow-x-auto rounded-[8px] bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">{example}</pre>
+        </details>
         {key && (
           <p className="mt-2 rounded-[8px] bg-amber-soft px-3 py-2 text-[12px] text-[#92400e]">
             <b>Copy this key now — it will not be shown again:</b>

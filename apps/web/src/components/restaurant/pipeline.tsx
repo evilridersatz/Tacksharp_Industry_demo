@@ -17,14 +17,14 @@ const STEPS = [
  * Today's orders as a pipeline, left to right: how many are new, being prepared, ready, collected. Tapping a step
  * filters the list below. Collected counts today (India time); the other stages are every open order.
  */
-export function OrderPipeline({ onPick }: { onPick?: (status: string) => void }) {
+export function OrderPipeline({ onPick, includeDemo = false }: { onPick?: (status: string) => void; includeDemo?: boolean }) {
   const active = useApi<Order[]>('/restaurant/orders?status=active', 15_000);
   const done = useApi<Order[]>('/restaurant/orders?status=completed', 30_000);
   const data = active.data && done.data;
   const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
   const by: Record<string, number> = {};
-  for (const o of active.data ?? []) by[o.status] = (by[o.status] ?? 0) + 1;
-  by.completed = (done.data ?? []).filter((o) => new Date(new Date(o.updatedAt).getTime() + 330 * 60_000).toISOString().slice(0, 10) === today).length;
+  for (const o of (active.data ?? []).filter((x) => includeDemo || !x.isDemo)) by[o.status] = (by[o.status] ?? 0) + 1;
+  by.completed = (done.data ?? []).filter((o) => (includeDemo || !o.isDemo) && new Date(new Date(o.updatedAt).getTime() + 330 * 60_000).toISOString().slice(0, 10) === today).length;
   return (
     <ol className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label="Today's orders by stage">
       {STEPS.map((s, i) => (

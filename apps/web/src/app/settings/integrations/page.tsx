@@ -8,7 +8,7 @@ import { ChannelSummary, ProviderList } from '@/components/integrations';
 export default function Page() {
   return (
     <>
-      <PageHeader title="Integrations" crumb="Connections" />
+      <PageHeader title="Connections" crumb="Settings" />
       <div className="grid gap-6">
         <ChannelSummary />
         <section aria-labelledby="ch-h" className="grid gap-3">

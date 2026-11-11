@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { Search, ShoppingBag } from 'lucide-react';
 import { useApi } from '@/lib/api';
+import { useWorkspace } from '@/lib/industry';
 import { OrderPipeline } from '@/components/restaurant/pipeline';
 import { displayName, timeAgo } from '@/lib/format';
 import { CHANNEL_LABEL, ORDER_STATUS, READY_NOTICE, inr, pickupLabel, qty, useMe, type Order } from '@/lib/restaurant';
@@ -40,7 +41,12 @@ function Orders() {
   const query = new URLSearchParams();
   if (filter !== 'all') query.set('status', filter);
   if (debounced.trim()) query.set('q', debounced.trim());
-  const { data: orders, error, reload, loading } = useApi<Order[]>(`/restaurant/orders?${query}`, 8_000);
+  const { data: allOrders, error, reload, loading } = useApi<Order[]>(`/restaurant/orders?${query}`, 8_000);
+  // A live workspace hides demo (seed) orders unless asked; a demo workspace shows them (they are all it has).
+  const { workspace } = useWorkspace();
+  const [showDemo, setShowDemo] = useState(false);
+  const demoCount = (allOrders ?? []).filter((o) => o.isDemo).length;
+  const orders = allOrders && (workspace?.isDemo || showDemo ? allOrders : allOrders.filter((o) => !o.isDemo));
 
   const select = (id: string | null) => {
     const next = new URLSearchParams(params.toString());
@@ -53,8 +59,14 @@ function Orders() {
     <>
       <PageHeader title="Live orders" crumb="Orders" />
       {orders?.some((o) => o.isDemo) && <DemoBanner />}
+      {!workspace?.isDemo && demoCount > 0 && (
+        <label className="mb-3 flex w-fit items-center gap-2 rounded-full border border-line bg-white px-3 py-1.5 text-[12.5px] text-body">
+          <input type="checkbox" className="size-4" checked={showDemo} onChange={(e) => setShowDemo(e.target.checked)} />
+          Show {demoCount} demo order{demoCount === 1 ? '' : 's'} (sample data, not real customers)
+        </label>
+      )}
       {error && !orders && <ErrorBanner message={error} onRetry={reload} />}
-      <OrderPipeline onPick={(st) => setFilter(st === 'pending' ? 'pending' : st === 'completed' ? 'completed' : 'active')} />
+      <OrderPipeline includeDemo={Boolean(workspace?.isDemo || showDemo)} onPick={(st) => setFilter(st === 'pending' ? 'pending' : st === 'completed' ? 'completed' : 'active')} />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="max-w-full overflow-x-auto pane-scroll">

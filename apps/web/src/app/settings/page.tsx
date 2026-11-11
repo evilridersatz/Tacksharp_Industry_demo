@@ -5,6 +5,7 @@ import { CheckCircle2, Save } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Property, TenantSettings } from '@/lib/types';
 import { PageHeader } from '@/components/shell';
+import { SettingsHub } from '@/components/settings-hub';
 import { Button, Card, CardHeader, ErrorBanner, Skeleton } from '@/components/ui';
 import { Dialog } from '@/components/textile';
 import { toast } from '@/components/toast';
@@ -136,17 +137,22 @@ export default function SettingsPage() {
   // Restaurant workspaces keep their own engine; everyone else previews sections for the selected industry.
   const def = industryDef(workspace?.industry === 'restaurant' ? 'restaurant' : d?.industry);
   const show = (section: (typeof def.settings)[number]) => def.settings.includes(section);
+  const hasRules = canChange || def.settings.some((x) => x !== 'restaurant');
   return (
     <>
       <PageHeader
         title="Settings"
         actions={
+          // Only when there is something to save below (a restaurant workspace has no editable rules here).
+          hasRules && (
           <Button variant="primary" busy={saving} disabled={!d} onClick={() => save()}>
             {saved ? <CheckCircle2 className="size-4" /> : <Save className="size-4" />}
             {saved ? 'Saved' : 'Save changes'}
           </Button>
+          )
         }
       />
+      <SettingsHub />
       {(err || (error && !data)) && <div className="mb-4"><ErrorBanner message={err ?? error!} onRetry={reload} /></div>}
       {!d && <Skeleton className="h-96" />}
       <BusinessProfile />

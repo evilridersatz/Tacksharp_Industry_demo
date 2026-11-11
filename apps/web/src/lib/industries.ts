@@ -350,7 +350,7 @@ export const TAB_GROUPS: Array<{ entry: NavItem; tabs: Array<{ href: string; lab
   { entry: { href: '/office', label: 'AI Office', icon: Building2 }, tabs: [] }, // filled from OFFICE_NAV below
   { entry: { href: '/jarvis', label: 'Jarvis', icon: Sparkles }, tabs: [] }, // filled from JARVIS_NAV below
   { entry: { href: '/agents', label: 'AI agents', icon: Bot }, tabs: [{ href: '/agents', label: 'AI agents' }, { href: '/knowledge', label: 'Knowledge' }] },
-  { entry: { href: '/settings', label: 'Settings', icon: Settings }, tabs: [{ href: '/settings', label: 'Business' }, { href: '/integrations', label: 'Channels' }, { href: '/settings/integrations', label: 'Integrations' }, { href: '/team', label: 'Team' }, { href: '/settings/billing', label: 'Plan & billing' }] },
+  { entry: { href: '/settings', label: 'Settings', icon: Settings }, tabs: [{ href: '/settings', label: 'Business' }, { href: '/settings/integrations', label: 'Connections' }, { href: '/team', label: 'Team' }, { href: '/settings/billing', label: 'Plan & billing' }, { href: '/integrations', label: 'Technical status' }] },
 ];
 TAB_GROUPS[1].tabs = OFFICE_NAV.map((i) => ({ href: i.href, label: i.label }));
 TAB_GROUPS[2].tabs = JARVIS_NAV.map((i) => ({ href: i.href, label: i.label }));

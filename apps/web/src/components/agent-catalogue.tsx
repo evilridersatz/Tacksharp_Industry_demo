@@ -79,11 +79,15 @@ export function AgentCatalogue() {
         ))}
       </div>
       {data && (
-        <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-muted">
-          <span>WhatsApp: <b className="text-body">{data.integrations.whatsapp ? 'configured' : 'not configured'}</b></span>
-          <span>Voice: <b className="text-body">{data.integrations.voice ? 'configured' : 'not configured'}</b></span>
-          <span>AI model: <b className="text-body">{data.integrations.ai ? 'configured' : 'rules only'}</b></span>
-          {data.integrations.dryRun && <span>DRY_RUN on: <b className="text-body">no real messages or calls</b></span>}
+        <p className="mt-2 flex flex-wrap gap-2 text-[12px]">
+          {[
+            { on: data.integrations.whatsapp, yes: 'WhatsApp connected', no: 'WhatsApp not connected' },
+            { on: data.integrations.voice, yes: 'Phone calls connected', no: 'Phone calls not connected' },
+            { on: data.integrations.ai, yes: 'AI model connected', no: 'No AI model: agents use fixed rules' },
+            { on: !data.integrations.dryRun, yes: 'Live: real messages and calls', no: 'Test mode: nothing is sent' },
+          ].map((x) => (
+            <span key={x.yes} className={x.on ? 'rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-800' : 'rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600'}>{x.on ? '✓ ' : '○ '}{x.on ? x.yes : x.no}</span>
+          ))}
         </p>
       )}
 

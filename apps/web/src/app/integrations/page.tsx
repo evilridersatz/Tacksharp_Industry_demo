@@ -59,7 +59,7 @@ export default function IntegrationsPage() {
   const { data: d, error, reload } = useApi<Integrations>('/restaurant/integrations', 30_000);
   return (
     <>
-      <PageHeader title="Settings & integrations" crumb="Settings" />
+      <PageHeader title="Technical status" crumb="Settings" />
       {error && !d && <ErrorBanner message={error} onRetry={reload} />}
       {!d ? (
         <Skeleton className="h-[520px] rounded-[14px]" />
