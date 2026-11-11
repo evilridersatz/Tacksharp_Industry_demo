@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Ban, Crown, Pause, Play, Rocket } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, Card, CardHeader, Empty, Segmented, Skeleton, cx } from '@/components/ui';
 import { toast } from '@/components/toast';
 import { PlanTaskList, RoleChip, StatusPill, TaskPanel, ago, errorText, usd, withInr, type OfficeSettings, type PlanRow, type PlanView } from '@/components/office';
@@ -59,6 +60,8 @@ function Command() {
   const inrRate = settings.data?.inrPerUsd ?? 0;
 
   return (
+    <>
+    <LiveStamp at={plan.updatedAt ?? list.updatedAt} every="plan progress updates as tasks finish" />
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <div className="min-w-0">
         <Card className="mb-4">
@@ -134,5 +137,6 @@ function Command() {
         )}
       </Card>
     </div>
+    </>
   );
 }

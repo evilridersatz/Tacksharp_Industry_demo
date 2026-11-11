@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, ErrorBanner, Segmented, Skeleton } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { toast } from '@/components/toast';
@@ -15,7 +16,7 @@ const input = 'h-9 w-full rounded-[10px] border border-line bg-white px-3 text-[
 
 export default function JarvisUsagePage() {
   const [days, setDays] = useState<'1' | '7' | '30'>('7');
-  const { data, error, reload } = useApi<Usage>(`/jarvis/usage?days=${days}`, 60_000);
+  const { data, error, reload, updatedAt } = useApi<Usage>(`/jarvis/usage?days=${days}`, 60_000);
   const settings = useApi<JarvisSettings>('/jarvis/settings', 0);
   const [form, setForm] = useState<JarvisSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,6 +36,7 @@ export default function JarvisUsagePage() {
   return (
     <>
       <PageHeader title="Usage & cost" crumb="Jarvis" actions={<Segmented label="Period" value={days} onChange={setDays} options={[{ value: '1', label: 'Today' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days' }]} />} />
+      <LiveStamp at={updatedAt} every="from recorded calls, messages and model usage" />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data || !t ? <Skeleton className="h-64" /> : (
         <>

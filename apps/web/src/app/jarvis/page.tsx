@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, Card, ErrorBanner, Skeleton } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { toast } from '@/components/toast';
 import { AlertList, SectionCard, SpeakButton, inr, when, type Overview } from '@/components/jarvis';
 
 export default function JarvisBriefingPage() {
-  const { data, error, reload } = useApi<Overview>('/jarvis/overview', 60_000);
+  const { data, error, reload, updatedAt } = useApi<Overview>('/jarvis/overview', 60_000);
   const [busy, setBusy] = useState(false);
   const refresh = async () => {
     setBusy(true);
@@ -21,6 +22,7 @@ export default function JarvisBriefingPage() {
   return (
     <>
       <PageHeader title="Daily briefing" crumb="Jarvis" actions={<Button onClick={() => void refresh()} busy={busy}><RefreshCw className="size-4" aria-hidden /> Refresh now</Button>} />
+      <LiveStamp at={updatedAt} every="refreshes on every new order, call and message" />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data || !s ? <Skeleton className="h-96" /> : (
         <>

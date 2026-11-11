@@ -83,3 +83,12 @@ body {
 @media print {
   body { background: #fff !important; }
 }
+
+/*
+ * Phones: a grid without an explicit column count gets one column that may shrink below its content's width, so a
+ * wide table or chart inside a card scrolls inside the card instead of widening the whole page. In the base layer,
+ * so any grid-cols-* utility (including sm:/md:/xl: variants) still wins.
+ */
+@layer base {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}

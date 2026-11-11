@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Crown, Pause, Play, Send } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Badge, Button, Card, ErrorBanner, Segmented, Skeleton, cx } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { toast } from '@/components/toast';
@@ -18,7 +19,7 @@ type Floor = { messages: SceneMessage[]; mode: string; paused: boolean; runningP
 const MODE_LABEL: Record<string, string> = { manual: 'Manual: every action needs approval', supervised: 'Supervised: sensitive actions need approval', autonomous: 'Autonomous within budget and policy' };
 
 export default function OfficeFloorPage() {
-  const { data, error, reload } = useApi<Floor>('/office/floor', 10_000);
+  const { data, error, reload, updatedAt } = useApi<Floor>('/office/floor', 10_000);
   const [busy, setBusy] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [view, setView] = useState<'floor' | 'list'>('floor');
@@ -32,6 +33,7 @@ export default function OfficeFloorPage() {
   return (
     <>
       <PageHeader title="Office floor" crumb="AI Office" actions={data && <Button onClick={() => void togglePause()} busy={busy} variant={data.paused ? 'primary' : 'secondary'}>{data.paused ? <><Play className="size-4" aria-hidden /> Resume office</> : <><Pause className="size-4" aria-hidden /> Pause office</>}</Button>} />
+      <LiveStamp at={updatedAt} every="agents and tasks as they change" />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data ? <Skeleton className="h-96" /> : (
         <>

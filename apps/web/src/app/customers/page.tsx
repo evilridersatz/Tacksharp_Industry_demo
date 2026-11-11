@@ -79,32 +79,32 @@ function Customers() {
               Customers are added when they share their number in the chat or message on WhatsApp.
             </Empty>
           ) : (
-            <table className="w-full min-w-[640px] text-[13px]">
+            <table className="w-full text-[13px] sm:min-w-[640px]">
               <thead>
                 <tr className="border-b border-line bg-slate-50/60 text-left text-[11.5px] font-semibold tracking-wide text-muted uppercase">
-                  <th className="px-5 py-2">Customer</th>
-                  <th className="px-3 py-2 text-right">Orders</th>
-                  <th className="px-3 py-2 text-right">Spend</th>
-                  <th className="px-3 py-2">Last order</th>
-                  <th className="px-5 py-2">Consent</th>
+                  <th className="px-4 py-2 sm:px-5">Customer</th>
+                  <th className="hidden px-3 py-2 text-right sm:table-cell">Orders</th>
+                  <th className="px-4 py-2 text-right sm:px-3">Spend</th>
+                  <th className="hidden px-3 py-2 sm:table-cell">Last order</th>
+                  <th className="hidden px-5 py-2 sm:table-cell">Consent</th>
                 </tr>
               </thead>
               <tbody>
                 {customers.map((c) => (
                   <tr key={c.id} onClick={() => select(c.id)} className={cx('cursor-pointer border-b border-line last:border-0 hover:bg-slate-50/60', selected === c.id && 'bg-brand-soft/40')}>
-                    <td className="px-5 py-2.5">
+                    <td className="px-4 py-2.5 sm:px-5">
                       <div className="flex items-center gap-2.5">
                         <Avatar person={c} size={30} />
                         <div>
                           <p className="flex items-center gap-1.5 font-semibold text-ink">{displayName(c)}{c.isDemo && <Badge tone="amber">Demo</Badge>}</p>
-                          <p className="text-[11.5px] text-faint">{formatPhone(c.phone)}</p>
+                          <p className="text-[11.5px] text-faint">{formatPhone(c.phone)}<span className="sm:hidden"> · {c.orders} order{c.orders === 1 ? '' : 's'}{c.lastOrderAt ? ` · ${timeAgo(c.lastOrderAt)} ago` : ''}{c.optedOutAt || c.doNotContact ? ' · do not contact' : ''}</span></p>
                         </div>
                       </div>
                     </td>
-                    <td className="tabular px-3 py-2.5 text-right font-semibold text-ink">{c.orders}</td>
-                    <td className="tabular px-3 py-2.5 text-right">{inr(c.totalSpend)}</td>
-                    <td className="px-3 py-2.5 text-muted">{c.lastOrderAt ? `${timeAgo(c.lastOrderAt)} ago` : '—'}</td>
-                    <td className="px-5 py-2.5">
+                    <td className="tabular hidden px-3 py-2.5 text-right font-semibold text-ink sm:table-cell">{c.orders}</td>
+                    <td className="tabular px-4 py-2.5 text-right sm:px-3">{inr(c.totalSpend)}</td>
+                    <td className="hidden px-3 py-2.5 text-muted sm:table-cell">{c.lastOrderAt ? `${timeAgo(c.lastOrderAt)} ago` : '—'}</td>
+                    <td className="hidden px-5 py-2.5 sm:table-cell">
                       {c.optedOutAt || c.doNotContact ? (
                         <Badge tone="rose">{c.optedOutAt ? 'Replied STOP' : 'Do not contact'}</Badge>
                       ) : (

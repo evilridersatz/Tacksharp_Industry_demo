@@ -66,7 +66,8 @@ export default function TeamPage() {
               <h2 className="text-[14px] font-semibold text-ink">People with access to {workspace?.name ?? 'this workspace'}</h2>
               <span className="text-[12px] text-muted">{data.members.length} people</span>
             </div>
-            <div className="overflow-x-auto">
+            {/* relative: keeps the buttons' screen-reader labels inside the scroll area on phones */}
+            <div className="relative overflow-x-auto">
               <table className="w-full text-[13px]">
                 <thead className="bg-slate-50 text-left text-[11.5px] font-semibold tracking-wide text-muted uppercase">
                   <tr><th className="px-4 py-2">Person</th><th className="px-4 py-2">Role</th><th className="px-4 py-2">Last login</th><th className="px-4 py-2"><span className="sr-only">Actions</span></th></tr>

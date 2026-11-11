@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, ErrorBanner, Segmented, Skeleton } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { toast } from '@/components/toast';
@@ -21,7 +22,7 @@ type Usage = {
 
 export default function OfficeUsagePage() {
   const [days, setDays] = useState<'1' | '7' | '30'>('7');
-  const { data, error, reload } = useApi<Usage>(`/office/usage?days=${days}`, 60_000);
+  const { data, error, reload, updatedAt } = useApi<Usage>(`/office/usage?days=${days}`, 60_000);
   const settings = useApi<OfficeSettings>('/office/settings', 0);
   const [f, setF] = useState<OfficeSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,6 +37,7 @@ export default function OfficeUsagePage() {
   return (
     <>
       <PageHeader title="Usage & settings" crumb="AI Office" actions={<Segmented label="Period" value={days} onChange={setDays} options={[{ value: '1', label: 'Today' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days' }]} />} />
+      <LiveStamp at={updatedAt} every="measured per model call" />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data ? <Skeleton className="h-64" /> : (
         <>

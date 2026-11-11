@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { ArrowUp, Loader2, Mic, MicOff, Phone, PhoneOff, ReceiptText, Sparkles, Store, UserRound, Video, X } from 'lucide-react';
 import { API_URL, ApiError, api } from '@/lib/api';
 import { announceChange } from '@/lib/live';
@@ -62,7 +63,11 @@ function Bars({ level, on }: { level: number; on: boolean }) {
   );
 }
 
+/** Pages with their own message box at the bottom of a phone screen (the assistant button moves above it). */
+const COMPOSER_PAGES = /^\/(test-chat|inbox|conversations|jarvis\/ask)(\/|$)/;
+
 export function BusinessAssistant() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -424,8 +429,9 @@ export function BusinessAssistant() {
   return (
     <>
       {!open && (
-        <button onClick={() => setOpen(true)} aria-label="Open the AI assistant" className="group fixed right-4 bottom-4 z-[55] flex items-center gap-3 rounded-full border border-white/10 bg-[#16183d] p-1.5 text-left text-white shadow-[0_18px_40px_-14px_rgba(22,24,61,0.75)] transition-transform hover:-translate-y-0.5 sm:pr-5 print:hidden">
-          <span className="relative"><Orb size={44} /><span className="absolute right-0 bottom-0 size-3 rounded-full bg-emerald-400 ring-2 ring-[#16183d]" /></span>
+        // Phones: a smaller button, and lifted above pages that have their own message box at the bottom.
+        <button onClick={() => setOpen(true)} aria-label="Open the AI assistant" className={`group fixed right-3 z-[55] flex items-center gap-3 rounded-full border border-white/10 bg-[#16183d] p-1 text-left text-white shadow-[0_18px_40px_-14px_rgba(22,24,61,0.75)] transition-transform hover:-translate-y-0.5 sm:right-4 sm:bottom-4 sm:p-1.5 sm:pr-5 print:hidden ${COMPOSER_PAGES.test(pathname ?? '') ? 'bottom-24' : 'bottom-3'}`}>
+          <span className="relative"><span className="sm:hidden"><Orb size={34} /></span><span className="hidden sm:inline"><Orb size={44} /></span><span className="absolute right-0 bottom-0 size-2.5 rounded-full bg-emerald-400 ring-2 ring-[#16183d] sm:size-3" /></span>
           <span className="hidden leading-tight sm:block">
             <span className="block text-[14px] font-semibold">AI assistant</span>
             <span className="block text-[11.5px] text-white/60">Chat · voice · video</span>

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, Card, Empty, ErrorBanner, Segmented, Skeleton } from '@/components/ui';
 import { toast } from '@/components/toast';
 import { RoleChip, StatusPill, ago, errorText, inputCls } from '@/components/office';
@@ -21,7 +22,7 @@ const TOOL_LABEL: Record<string, string> = { send_whatsapp: 'Send a WhatsApp mes
 
 export default function OfficeApprovalsPage() {
   const [show, setShow] = useState<'pending' | 'all'>('pending');
-  const { data, error, reload } = useApi<{ items: Approval[] }>(`/office/approvals${show === 'pending' ? '?status=pending' : ''}`, 8_000);
+  const { data, error, reload, updatedAt } = useApi<{ items: Approval[] }>(`/office/approvals${show === 'pending' ? '?status=pending' : ''}`, 8_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const decide = async (a: Approval, decision: 'approve' | 'reject') => {
@@ -37,6 +38,7 @@ export default function OfficeApprovalsPage() {
   return (
     <>
       <PageHeader title="Approvals" crumb="AI Office" actions={<Segmented label="Show" value={show} onChange={setShow} options={[{ value: 'pending', label: 'Waiting' }, { value: 'all', label: 'History' }]} />} />
+      <LiveStamp at={updatedAt} every="new requests appear as agents ask" />
       <p className="mb-4 text-[12.5px] text-muted">An approval runs exactly what is shown here, once, as you. Anything else the agent wants needs a new approval. Requests expire after 48 hours.</p>
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data ? <Skeleton className="h-64" /> : data.items.length === 0 ? <Card><Empty title={show === 'pending' ? 'Nothing waiting for you' : 'No approvals yet'}>When an agent wants to do something that needs a person (like messaging a customer), it appears here.</Empty></Card> : (

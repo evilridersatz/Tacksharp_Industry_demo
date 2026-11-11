@@ -58,6 +58,8 @@ export function useApi<T>(path: string | null, refreshMs = 10_000) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
+  /** When the data on screen was last fetched (for “updated hh:mm:ss” stamps). */
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const pathRef = useRef(path);
   pathRef.current = path;
 
@@ -69,6 +71,7 @@ export function useApi<T>(path: string | null, refreshMs = 10_000) {
       if (pathRef.current === current) {
         setData(result);
         setError(null);
+        setUpdatedAt(new Date());
       }
     } catch (e) {
       if (pathRef.current === current) setError(e instanceof Error ? e.message : String(e));
@@ -94,5 +97,5 @@ export function useApi<T>(path: string | null, refreshMs = 10_000) {
     return () => { clearInterval(timer); off(); };
   }, [path, refreshMs, load]);
 
-  return { data, error, loading, reload: load };
+  return { data, error, loading, reload: load, updatedAt };
 }

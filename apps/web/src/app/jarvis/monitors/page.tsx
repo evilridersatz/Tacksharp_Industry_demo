@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Play, Save } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Button, ErrorBanner, Segmented, Skeleton } from '@/components/ui';
 import { toast } from '@/components/toast';
 import { AlertList, FormField, SectionCard, type JarvisAlert, type JarvisSettings, type MonitorId, type Overview } from '@/components/jarvis';
@@ -38,6 +39,7 @@ export default function JarvisMonitorsPage() {
   return (
     <>
       <PageHeader title="Monitors & alerts" crumb="Jarvis" actions={<Button onClick={() => void run()} busy={busy === 'run'}><Play className="size-4" aria-hidden /> Check now</Button>} />
+      <LiveStamp at={alerts.updatedAt} every="alerts checked every few minutes" />
       {(overview.error || alerts.error) && !overview.data && <ErrorBanner message={overview.error ?? alerts.error ?? ''} onRetry={overview.reload} />}
       <SectionCard title="Alerts" subtitle="Shown here and as a notice on every open dashboard. Kept 30 days." action={<Segmented label="Show" value={show} onChange={setShow} options={[{ value: 'open', label: 'Open' }, { value: 'all', label: 'All' }]} />}>
         {alerts.data ? <AlertList alerts={items} onResolved={alerts.reload} /> : <Skeleton className="m-4 h-24" />}

@@ -35,6 +35,30 @@ export type Snapshot = {
 export class JarvisDataService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private readonly liveCache = new Map<string, { at: number; live: boolean }>();
+
+  /**
+   * Filters that keep demo / seed records (customers, orders and stock marked isDemo) out of a live workspace's
+   * numbers, so Jarvis reports only real business. A demo workspace keeps them (they are all it has).
+   */
+  async realOnly(organizationId: string) {
+    const hit = this.liveCache.get(organizationId);
+    let live = hit && Date.now() - hit.at < 60_000 ? hit.live : undefined;
+    if (live === undefined) {
+      const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { isDemo: true } }).catch(() => null);
+      live = !org?.isDemo;
+      this.liveCache.set(organizationId, { at: Date.now(), live });
+    }
+    if (!live) return { order: {}, customer: {}, call: {}, conv: {}, menu: {} };
+    return {
+      order: { isDemo: false },
+      customer: { isDemo: false },
+      call: { customer: { isDemo: false } },
+      conv: { OR: [{ customerId: null }, { Customer: { isDemo: false } }] },
+      menu: { isDemo: false, stockIsDemo: false },
+    };
+  }
+
   private async safe<T>(what: string, organizationId: string, f: () => Promise<T>, fallback: T): Promise<T> {
     try {
       return await f();
@@ -46,13 +70,14 @@ export class JarvisDataService {
 
   async period(organizationId: string, from: Date, to: Date): Promise<Period> {
     const where = { organizationId, createdAt: { gte: from, lt: to } };
+    const R = await this.realOnly(organizationId);
     const [orders, cancelled, byChannel, calls, failedCalls, newCustomers] = await Promise.all([
-      this.safe('orders', organizationId, () => this.prisma.order.aggregate({ where: { ...where, status: { not: 'cancelled' } }, _count: true, _sum: { total: true } }), { _count: 0, _sum: { total: null } } as never),
-      this.safe('cancelled', organizationId, () => this.prisma.order.count({ where: { ...where, status: 'cancelled' } }), 0),
-      this.safe('channels', organizationId, () => this.prisma.order.groupBy({ by: ['channel'], where: { ...where, status: { not: 'cancelled' } }, _count: true }), [] as never),
-      this.safe('calls', organizationId, () => this.prisma.call.aggregate({ where, _count: true, _sum: { durationSec: true } }), { _count: 0, _sum: { durationSec: null } } as never),
-      this.safe('failedCalls', organizationId, () => this.prisma.call.count({ where: { ...where, status: { in: ['failed', 'no_answer', 'busy'] } } }), 0),
-      this.safe('customers', organizationId, () => this.prisma.customer.count({ where }), 0),
+      this.safe('orders', organizationId, () => this.prisma.order.aggregate({ where: { ...where, ...R.order, status: { not: 'cancelled' } }, _count: true, _sum: { total: true } }), { _count: 0, _sum: { total: null } } as never),
+      this.safe('cancelled', organizationId, () => this.prisma.order.count({ where: { ...where, ...R.order, status: 'cancelled' } }), 0),
+      this.safe('channels', organizationId, () => this.prisma.order.groupBy({ by: ['channel'], where: { ...where, ...R.order, status: { not: 'cancelled' } }, _count: true }), [] as never),
+      this.safe('calls', organizationId, () => this.prisma.call.aggregate({ where: { ...where, ...R.call }, _count: true, _sum: { durationSec: true } }), { _count: 0, _sum: { durationSec: null } } as never),
+      this.safe('failedCalls', organizationId, () => this.prisma.call.count({ where: { ...where, ...R.call, status: { in: ['failed', 'no_answer', 'busy'] } } }), 0),
+      this.safe('customers', organizationId, () => this.prisma.customer.count({ where: { ...where, ...R.customer } }), 0),
     ]);
     const o = orders as { _count: number; _sum: { total: unknown } };
     const c = calls as { _count: number; _sum: { durationSec: number | null } };
@@ -69,6 +94,7 @@ export class JarvisDataService {
   }
 
   async snapshot(organizationId: string, cfg: JarvisConfig, now = new Date()): Promise<Snapshot> {
+    const R = await this.realOnly(organizationId);
     const today = istDayStart(now);
     const yesterday = istDayStart(now, 1);
     const week = istDayStart(now, 7);
@@ -80,18 +106,18 @@ export class JarvisDataService {
       this.period(organizationId, today, now),
       this.period(organizationId, yesterday, today),
       this.period(organizationId, week, now),
-      this.safe('lastWeek', organizationId, () => this.prisma.order.count({ where: { organizationId, status: { not: 'cancelled' }, createdAt: { gte: istDayStart(weekAgoNow), lt: weekAgoNow } } }), 0),
-      this.safe('topItems', organizationId, () => this.prisma.orderItem.groupBy({ by: ['name', 'unit'], where: { order: { organizationId, status: { not: 'cancelled' }, createdAt: { gte: week } } }, _sum: { quantity: true, lineTotal: true }, orderBy: { _sum: { lineTotal: 'desc' } }, take: 5 }), [] as never),
-      this.safe('topCustomers', organizationId, () => this.prisma.order.groupBy({ by: ['customerId'], where: { organizationId, status: { not: 'cancelled' }, createdAt: { gte: month } }, _sum: { total: true }, _count: true, orderBy: { _sum: { total: 'desc' } }, take: 5 }), [] as never),
-      this.safe('stock', organizationId, () => this.prisma.menuItem.findMany({ where: { organizationId, stockQty: { not: null } }, select: { name: true, unit: true, stockQty: true, lowStockThreshold: true, available: true } }), []),
-      this.safe('pending', organizationId, () => this.prisma.order.findMany({ where: { organizationId, status: 'pending', createdAt: { lt: new Date(now.getTime() - pendingMin * 60_000), gte: yesterday } }, select: { orderNumber: true, createdAt: true, total: true }, orderBy: { createdAt: 'asc' }, take: 10 }), []),
-      this.safe('unpaid', organizationId, () => this.prisma.order.aggregate({ where: { organizationId, createdAt: { gte: today }, status: { not: 'cancelled' }, paymentStatus: { not: 'paid' } }, _count: true, _sum: { total: true } }), { _count: 0, _sum: { total: null } } as never),
-      this.safe('handoffs', organizationId, () => this.prisma.conversation.findMany({ where: { organizationId, status: 'human_handoff', inboxStatus: 'open', handoffAt: { not: null } }, select: { handoffAt: true, channel: true, handoffReason: true }, orderBy: { handoffAt: 'asc' }, take: 20 }), []),
-      this.safe('instagram', organizationId, () => this.prisma.conversation.findMany({ where: { organizationId, channel: { in: ['instagram', 'instagram_comment'] }, inboxStatus: 'open', lastCustomerAt: { not: null, gte: week } }, select: { lastCustomerAt: true, channel: true, id: true }, orderBy: { lastCustomerAt: 'asc' }, take: 50 }), []),
-      this.safe('failedHour', organizationId, () => this.prisma.call.count({ where: { organizationId, createdAt: { gte: new Date(now.getTime() - 3_600_000) }, status: { in: ['failed', 'no_answer', 'busy'] } } }), 0),
+      this.safe('lastWeek', organizationId, () => this.prisma.order.count({ where: { organizationId, ...R.order, status: { not: 'cancelled' }, createdAt: { gte: istDayStart(weekAgoNow), lt: weekAgoNow } } }), 0),
+      this.safe('topItems', organizationId, () => this.prisma.orderItem.groupBy({ by: ['name', 'unit'], where: { order: { organizationId, ...R.order, status: { not: 'cancelled' }, createdAt: { gte: week } } }, _sum: { quantity: true, lineTotal: true }, orderBy: { _sum: { lineTotal: 'desc' } }, take: 5 }), [] as never),
+      this.safe('topCustomers', organizationId, () => this.prisma.order.groupBy({ by: ['customerId'], where: { organizationId, ...R.order, status: { not: 'cancelled' }, createdAt: { gte: month } }, _sum: { total: true }, _count: true, orderBy: { _sum: { total: 'desc' } }, take: 5 }), [] as never),
+      this.safe('stock', organizationId, () => this.prisma.menuItem.findMany({ where: { organizationId, ...R.menu, stockQty: { not: null } }, select: { name: true, unit: true, stockQty: true, lowStockThreshold: true, available: true } }), []),
+      this.safe('pending', organizationId, () => this.prisma.order.findMany({ where: { organizationId, ...R.order, status: 'pending', createdAt: { lt: new Date(now.getTime() - pendingMin * 60_000), gte: yesterday } }, select: { orderNumber: true, createdAt: true, total: true }, orderBy: { createdAt: 'asc' }, take: 10 }), []),
+      this.safe('unpaid', organizationId, () => this.prisma.order.aggregate({ where: { organizationId, ...R.order, createdAt: { gte: today }, status: { not: 'cancelled' }, paymentStatus: { not: 'paid' } }, _count: true, _sum: { total: true } }), { _count: 0, _sum: { total: null } } as never),
+      this.safe('handoffs', organizationId, () => this.prisma.conversation.findMany({ where: { organizationId, ...R.conv, status: 'human_handoff', inboxStatus: 'open', handoffAt: { not: null } }, select: { handoffAt: true, channel: true, handoffReason: true }, orderBy: { handoffAt: 'asc' }, take: 20 }), []),
+      this.safe('instagram', organizationId, () => this.prisma.conversation.findMany({ where: { organizationId, ...R.conv, channel: { in: ['instagram', 'instagram_comment'] }, inboxStatus: 'open', lastCustomerAt: { not: null, gte: week } }, select: { lastCustomerAt: true, channel: true, id: true }, orderBy: { lastCustomerAt: 'asc' }, take: 50 }), []),
+      this.safe('failedHour', organizationId, () => this.prisma.call.count({ where: { organizationId, ...R.call, createdAt: { gte: new Date(now.getTime() - 3_600_000) }, status: { in: ['failed', 'no_answer', 'busy'] } } }), 0),
       this.safe('overdue', organizationId, () => this.prisma.invoice.findMany({ where: { organizationId, status: { in: ['issued', 'partially_paid'] }, dueDate: { lt: now } }, select: { total: true, amountPaid: true } }), []),
-      this.safe('feedback', organizationId, () => this.prisma.order.aggregate({ where: { organizationId, feedbackAt: { gte: week }, feedbackRating: { not: null } }, _count: { feedbackRating: true }, _avg: { feedbackRating: true } }), { _count: { feedbackRating: 0 }, _avg: { feedbackRating: null } } as never),
-      this.safe('complaints', organizationId, () => this.prisma.order.count({ where: { organizationId, complaintStatus: 'open' } }), 0),
+      this.safe('feedback', organizationId, () => this.prisma.order.aggregate({ where: { organizationId, ...R.order, feedbackAt: { gte: week }, feedbackRating: { not: null } }, _count: { feedbackRating: true }, _avg: { feedbackRating: true } }), { _count: { feedbackRating: 0 }, _avg: { feedbackRating: null } } as never),
+      this.safe('complaints', organizationId, () => this.prisma.order.count({ where: { organizationId, ...R.order, complaintStatus: 'open' } }), 0),
     ]);
 
     // Instagram: a conversation is waiting when the customer wrote last (no team / AI message after it).
@@ -139,12 +165,13 @@ export class JarvisDataService {
    * own rates (zero until entered).
    */
   async usage(organizationId: string, days: number, cfg: JarvisConfig, now = new Date()) {
+    const R = await this.realOnly(organizationId);
     const from = istDayStart(now, days - 1);
     const dayOf = (d: Date) => new Date(d.getTime() + 330 * 60_000).toISOString().slice(0, 10);
     const [calls, events, sent] = await Promise.all([
-      this.safe('usageCalls', organizationId, () => this.prisma.call.findMany({ where: { organizationId, createdAt: { gte: from }, provider: 'sarvam', durationSec: { not: null } }, select: { createdAt: true, durationSec: true, outcome: true } }), []),
+      this.safe('usageCalls', organizationId, () => this.prisma.call.findMany({ where: { organizationId, ...R.call, createdAt: { gte: from }, provider: 'sarvam', durationSec: { not: null } }, select: { createdAt: true, durationSec: true, outcome: true } }), []),
       this.safe('usageEvents', organizationId, () => this.prisma.integrationEvent.findMany({ where: { organizationId, createdAt: { gte: from }, OR: [{ provider: 'openai', kind: 'chat' }, { provider: 'simli', kind: 'video' }], units: { not: null } }, select: { createdAt: true, provider: true, units: true } }), []),
-      this.safe('usageWhatsApp', organizationId, () => this.prisma.message.findMany({ where: { organizationId, createdAt: { gte: from }, role: 'assistant', conversation: { channel: 'whatsapp' } }, select: { createdAt: true } }), []),
+      this.safe('usageWhatsApp', organizationId, () => this.prisma.message.findMany({ where: { organizationId, createdAt: { gte: from }, role: 'assistant', conversation: { channel: 'whatsapp', ...R.conv } }, select: { createdAt: true } }), []),
     ]);
     type Day = { date: string; phoneMin: number; dashboardMin: number; videoMin: number; tokens: number; whatsapp: number; cost: number };
     const map = new Map<string, Day>();
@@ -183,10 +210,11 @@ export class JarvisDataService {
 
   /** "ERP" check from the platform's own data: stock to reorder, money to collect, orders to act on. */
   async erp(organizationId: string, cfg: JarvisConfig, now = new Date()) {
+    const R = await this.realOnly(organizationId);
     const s = await this.snapshot(organizationId, cfg, now);
     const [statusRows, stockValue] = await Promise.all([
-      this.safe('erpStatus', organizationId, () => this.prisma.order.groupBy({ by: ['status'], where: { organizationId, createdAt: { gte: istDayStart(now) } }, _count: true }), [] as never),
-      this.safe('erpStockValue', organizationId, () => this.prisma.menuItem.findMany({ where: { organizationId, stockQty: { not: null }, stockIsDemo: false }, select: { stockQty: true, price: true } }), []),
+      this.safe('erpStatus', organizationId, () => this.prisma.order.groupBy({ by: ['status'], where: { organizationId, ...R.order, createdAt: { gte: istDayStart(now) } }, _count: true }), [] as never),
+      this.safe('erpStockValue', organizationId, () => this.prisma.menuItem.findMany({ where: { organizationId, ...R.menu, stockQty: { not: null }, stockIsDemo: false }, select: { stockQty: true, price: true } }), []),
     ]);
     return {
       ordersByStatus: Object.fromEntries((statusRows as Array<{ status: string; _count: number }>).map((r) => [r.status, r._count])),

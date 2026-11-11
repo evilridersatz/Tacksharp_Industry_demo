@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { ErrorBanner, Skeleton, cx } from '@/components/ui';
 import { ROLE_LABEL, RoleChip, StatusPill, TaskPanel, ago, inputCls, type TaskRow } from '@/components/office';
 
@@ -29,11 +30,12 @@ function Board() {
   const params = useSearchParams();
   const router = useRouter();
   const [role, setRole] = useState('');
-  const { data, error, reload } = useApi<{ items: TaskRow[] }>(`/office/tasks${role ? `?role=${role}` : ''}`, 8_000);
+  const { data, error, reload, updatedAt } = useApi<{ items: TaskRow[] }>(`/office/tasks${role ? `?role=${role}` : ''}`, 8_000);
   const selected = params.get('task');
   const open = (id: string | null) => router.replace(id ? `/office/tasks?task=${id}` : '/office/tasks', { scroll: false });
   return (
     <>
+      <LiveStamp at={updatedAt} every="updates as agents work" />
       {selected && <TaskPanel taskId={selected} onClose={() => open(null)} onChanged={reload} />}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <label htmlFor="role" className="text-[12.5px] font-semibold text-muted">Agent</label>

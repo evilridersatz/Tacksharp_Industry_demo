@@ -14,7 +14,7 @@ export function cx(...classes: Array<string | false | null | undefined>) {
 export function Card({ className, children, ...rest }: ComponentProps<'section'>) {
   return (
     <section
-      className={cx('rounded-[var(--radius-card)] border border-line bg-white shadow-[var(--shadow-card)]', className)}
+      className={cx('min-w-0 rounded-[var(--radius-card)] border border-line bg-white shadow-[var(--shadow-card)]', className)}
       {...rest}
     >
       {children}

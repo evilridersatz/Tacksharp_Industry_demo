@@ -49,7 +49,8 @@ export function buildBusinessTools(d: ToolDeps): ToolDef[] {
       description: 'Orders still pending (not confirmed) since yesterday, oldest first, with how many minutes they have waited.',
       schema: NO_ARGS,
       async run(ctx) {
-        const rows = await prisma.order.findMany({ where: { organizationId: ctx.organizationId, status: 'pending', createdAt: { gte: istDayStart(new Date(), 1) } }, select: { id: true, orderNumber: true, channel: true, total: true, createdAt: true, customer: { select: { name: true } } }, orderBy: { createdAt: 'asc' }, take: 30 });
+        const R = await d.jarvisData.realOnly(ctx.organizationId);
+        const rows = await prisma.order.findMany({ where: { organizationId: ctx.organizationId, ...R.order, status: 'pending', createdAt: { gte: istDayStart(new Date(), 1) } }, select: { id: true, orderNumber: true, channel: true, total: true, createdAt: true, customer: { select: { name: true } } }, orderBy: { createdAt: 'asc' }, take: 30 });
         return { result: { count: rows.length, orders: rows.map((o) => ({ orderId: o.id, orderNumber: o.orderNumber, channel: o.channel, total: n(o.total), waitingMinutes: minutesSince(o.createdAt), customer: firstName(o.customer?.name) })) } };
       },
     },
@@ -58,7 +59,8 @@ export function buildBusinessTools(d: ToolDeps): ToolDef[] {
       description: 'Products that are out of stock or below their low-stock level.',
       schema: NO_ARGS,
       async run(ctx) {
-        const rows = await prisma.menuItem.findMany({ where: { organizationId: ctx.organizationId, stockQty: { not: null } }, select: { id: true, name: true, unit: true, stockQty: true, lowStockThreshold: true, available: true } });
+        const R = await d.jarvisData.realOnly(ctx.organizationId);
+        const rows = await prisma.menuItem.findMany({ where: { organizationId: ctx.organizationId, ...R.menu, stockQty: { not: null } }, select: { id: true, name: true, unit: true, stockQty: true, lowStockThreshold: true, available: true } });
         const low = rows.filter((s) => !s.available || n(s.stockQty) <= 0 || (s.lowStockThreshold !== null && n(s.stockQty) <= n(s.lowStockThreshold)));
         return { result: { tracked: rows.length, items: low.map((s) => ({ itemId: s.id, name: s.name, qty: n(s.stockQty), unit: s.unit, level: !s.available || n(s.stockQty) <= 0 ? 'out' : 'low' })) } };
       },
@@ -68,7 +70,8 @@ export function buildBusinessTools(d: ToolDeps): ToolDef[] {
       description: 'Conversations where a customer is waiting for a person (handed over by the AI), oldest first, with who is assigned.',
       schema: NO_ARGS,
       async run(ctx) {
-        const rows = await prisma.conversation.findMany({ where: { organizationId: ctx.organizationId, status: 'human_handoff', inboxStatus: 'open' }, select: { id: true, channel: true, assigneeId: true, handoffAt: true, handoffReason: true, Customer: { select: { name: true } } }, orderBy: { handoffAt: 'asc' }, take: 30 });
+        const R = await d.jarvisData.realOnly(ctx.organizationId);
+        const rows = await prisma.conversation.findMany({ where: { organizationId: ctx.organizationId, ...R.conv, status: 'human_handoff', inboxStatus: 'open' }, select: { id: true, channel: true, assigneeId: true, handoffAt: true, handoffReason: true, Customer: { select: { name: true } } }, orderBy: { handoffAt: 'asc' }, take: 30 });
         return { result: { count: rows.length, conversations: rows.map((c) => ({ conversationId: c.id, channel: c.channel, assigned: Boolean(c.assigneeId), waitingMinutes: c.handoffAt ? minutesSince(c.handoffAt) : null, reason: c.handoffReason ? untrusted(c.handoffReason, 200) : null, customer: firstName(c.Customer?.name) })) } };
       },
     },
@@ -79,8 +82,9 @@ export function buildBusinessTools(d: ToolDeps): ToolDef[] {
       async run(ctx) {
         const now = Date.now();
         const since = new Date(now - 23 * 3_600_000);
-        const recent = await prisma.conversation.findMany({ where: { organizationId: ctx.organizationId, channel: 'whatsapp', lastCustomerAt: { gte: since }, customerId: { not: null } }, select: { id: true, lastCustomerAt: true, customerId: true }, orderBy: { lastCustomerAt: 'desc' }, take: 40 });
-        const due = await prisma.customer.findMany({ where: { organizationId: ctx.organizationId, followUpAt: { lte: new Date(now) } }, select: { id: true }, take: 20 });
+        const R = await d.jarvisData.realOnly(ctx.organizationId);
+        const recent = await prisma.conversation.findMany({ where: { organizationId: ctx.organizationId, ...R.conv, channel: 'whatsapp', lastCustomerAt: { gte: since }, customerId: { not: null } }, select: { id: true, lastCustomerAt: true, customerId: true }, orderBy: { lastCustomerAt: 'desc' }, take: 40 });
+        const due = await prisma.customer.findMany({ where: { organizationId: ctx.organizationId, ...R.customer, followUpAt: { lte: new Date(now) } }, select: { id: true }, take: 20 });
         const ids = [...new Set([...recent.map((c) => c.customerId!), ...due.map((c) => c.id)])];
         const customers = ids.length ? await prisma.customer.findMany({ where: { organizationId: ctx.organizationId, id: { in: ids } }, select: { id: true, name: true, language: true, lastInboundAt: true, optedOutAt: true, doNotContact: true, followUpAt: true, stage: true, isDemo: true } }) : [];
         const out = [];
@@ -108,7 +112,8 @@ export function buildBusinessTools(d: ToolDeps): ToolDef[] {
       async run(ctx) {
         const now = new Date();
         const inv = await prisma.invoice.findMany({ where: { organizationId: ctx.organizationId, status: { in: ['issued', 'partially_paid'] }, dueDate: { lt: now } }, select: { id: true, number: true, total: true, amountPaid: true, dueDate: true }, orderBy: { dueDate: 'asc' }, take: 30 });
-        const unpaid = await prisma.order.findMany({ where: { organizationId: ctx.organizationId, createdAt: { gte: istDayStart(now) }, status: { not: 'cancelled' }, paymentStatus: { not: 'paid' } }, select: { id: true, orderNumber: true, total: true }, take: 30 });
+        const R = await d.jarvisData.realOnly(ctx.organizationId);
+        const unpaid = await prisma.order.findMany({ where: { organizationId: ctx.organizationId, ...R.order, createdAt: { gte: istDayStart(now) }, status: { not: 'cancelled' }, paymentStatus: { not: 'paid' } }, select: { id: true, orderNumber: true, total: true }, take: 30 });
         return { result: { overdueInvoices: inv.map((i) => ({ invoiceId: i.id, invoiceNumber: i.number, due: n(i.total) - n(i.amountPaid), daysLate: i.dueDate ? Math.floor((now.getTime() - i.dueDate.getTime()) / 86_400_000) : null })), unpaidOrdersToday: unpaid.map((o) => ({ orderId: o.id, orderNumber: o.orderNumber, total: n(o.total) })) } };
       },
     },

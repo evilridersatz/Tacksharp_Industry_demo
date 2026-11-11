@@ -63,7 +63,7 @@ export default function DiagnosticsPage() {
             <CardHeader title="Advanced diagnostics" subtitle="For administrators. Sanitised: no keys, tokens or customer details." />
             {!health ? <Skeleton className="mx-5 mb-5 h-48" /> : (
               <div className="grid gap-4 px-5 pb-5 text-[12.5px]">
-                <dl className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-1">
+                <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 break-words sm:grid-cols-[150px_minmax(0,1fr)]">
                   <dt className="text-muted">Overall</dt><dd className={cx('font-semibold', health.status === 'ok' ? 'text-brand-dark' : 'text-rose')}>{health.status}</dd>
                   <dt className="text-muted">Release</dt><dd className="text-ink">{health.release.id ?? 'not set'} · running since {new Date(health.release.startedAt).toLocaleString()}</dd>
                   <dt className="text-muted">Database</dt><dd className="text-ink">{health.database.ok ? `ok · ${health.database.ms} ms` : 'unavailable'}</dd>

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { AtSign, Boxes, ExternalLink, Mail } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { PageHeader } from '@/components/shell';
+import { LiveStamp } from '@/components/live-stamp';
 import { Badge, Button, ErrorBanner, Skeleton } from '@/components/ui';
 import { Stat } from '@/components/vertical-ui';
 import { SectionCard, inr, when } from '@/components/jarvis';
@@ -15,11 +16,12 @@ type Checks = {
 };
 
 export default function JarvisChecksPage() {
-  const { data, error, reload, loading } = useApi<Checks>('/jarvis/checks', 5 * 60_000);
+  const { data, error, reload, loading, updatedAt } = useApi<Checks>('/jarvis/checks', 5 * 60_000);
   const link = (href: string, label: string) => <Link href={href} className="text-[12.5px] font-semibold" style={{ color: 'var(--industry-accent)' }}>{label}</Link>;
   return (
     <>
       <PageHeader title="Mail, Instagram & ERP" crumb="Jarvis" actions={<Button onClick={reload} busy={loading}>Check again</Button>} />
+      <LiveStamp at={updatedAt} every="mail and Instagram checked every 5 minutes" />
       {error && !data && <ErrorBanner message={error} onRetry={reload} />}
       {!data ? <Skeleton className="h-96" /> : (
         <>

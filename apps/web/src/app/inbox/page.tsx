@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Compass, Hand, Inbox as InboxIcon, Lock, MessageSquare, Search, Send, StickyNote, Tag, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Bot, CheckCircle2, Compass, Hand, Inbox as InboxIcon, Lock, MessageSquare, Search, Send, StickyNote, Tag, Trash2, UserPlus } from 'lucide-react';
 import { api, useApi } from '@/lib/api';
 import type { Message } from '@/lib/types';
 import { displayName, formatPhone, timeAgo } from '@/lib/format';
@@ -76,7 +76,8 @@ export default function InboxPage() {
         {data && data.counts.aiOff > 0 && <Badge tone="amber">{data.counts.aiOff} handled by the team (AI off)</Badge>}
       </div>
       <Card className="grid min-h-[640px] grid-cols-1 overflow-hidden md:grid-cols-[320px_1fr] xl:grid-cols-[320px_1fr_300px]">
-        <div className="flex flex-col border-b border-line md:border-r md:border-b-0">
+        {/* Phones: the list, or (after a tap) one conversation with a way back. Wider screens: side by side. */}
+        <div className={cx('flex flex-col border-b border-line md:border-r md:border-b-0', selected && 'max-md:hidden')}>
           <div className="p-3">
             <label className="relative block">
               <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-faint" aria-hidden />
@@ -111,7 +112,10 @@ export default function InboxPage() {
             ))}
           </ul>
         </div>
-        {current ? <ConversationPane key={current.id} id={current.id} canReply={canReply} canManage={canManage} me={me ?? null} onChanged={reload} /> : <div className="grid place-items-center p-10 text-[13px] text-muted">Choose a conversation.</div>}
+        {selected && <button type="button" onClick={() => setSelected(null)} className="flex items-center gap-1.5 border-b border-line px-4 py-2.5 text-left text-[13px] font-semibold text-ink md:hidden"><ArrowLeft className="size-4" aria-hidden /> All conversations</button>}
+        <div className={cx('contents', !selected && 'max-md:hidden')}>
+          {current ? <ConversationPane key={current.id} id={current.id} canReply={canReply} canManage={canManage} me={me ?? null} onChanged={reload} /> : <div className="grid place-items-center p-10 text-[13px] text-muted">Choose a conversation.</div>}
+        </div>
       </Card>
     </>
   );
